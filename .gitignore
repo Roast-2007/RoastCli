@@ -1,0 +1,15 @@
+node_modules/
+dist/
+logs/
+.env*
+!.env.example
+*.local
+.roast/
+roastcli.config.json
+credentials.json
+*.pem
+*.key
+release/
+eisdir-ws/
+proto-ws/
+coverage/

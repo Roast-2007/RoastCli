@@ -1,0 +1,44 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  package:
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.21.0
+      - run: pnpm install --frozen-lockfile
+      - name: Check release version
+        run: node -e 'if ("v" + require("./package.json").version !== process.env.GITHUB_REF_NAME) process.exit(1)'
+      - run: pnpm typecheck
+      - run: pnpm test
+      - run: pnpm build
+      - run: pnpm check:package
+      - name: Pack release
+        run: |
+          mkdir release
+          npm pack --pack-destination release
+          mv release/roastcli-*.tgz release/roastcli.tgz
+          cd release
+          sha256sum roastcli.tgz > SHA256SUMS
+      - name: Publish release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if ! gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release create "$GITHUB_REF_NAME" --title "RoastCli $GITHUB_REF_NAME" --generate-notes
+          fi
+          gh release upload "$GITHUB_REF_NAME" release/roastcli.tgz release/SHA256SUMS --clobber

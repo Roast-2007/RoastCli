@@ -1,0 +1,49 @@
+import { displayWidth, graphemes } from '../core/text-width.js';
+import type { EditorState } from './input/editor.js';
+
+/** Allocate physical rows, keeping the footer and editor reachable before optional panels. */
+export function inlineLayout(rows: number, content: { tools: number; todos: number; agents: number; interaction: boolean; detail: boolean }) {
+  let left = Math.max(1, rows - 1);
+  const take = (want: number) => { const n = Math.min(left, Math.max(0, want)); left -= n; return n; };
+  const status = take(left >= 4 ? 1 : 0);
+  const interaction = content.interaction ? take(Math.min(16, left)) : 0;
+  const input = content.interaction ? 0 : take(Math.min(7, Math.max(3, Math.floor(rows / 6))));
+  const detail = content.detail ? take(left) : 0;
+  const stream = take(content.interaction || content.detail ? 0 : Math.max(1, Math.floor(left / 2)));
+  const tools = take(content.tools ? Math.min(left, rows >= 40 ? 9 : 4) : 0);
+  const todos = take(content.todos ? Math.min(5, left) : 0);
+  const agents = take(content.agents ? Math.min(5, left) : 0);
+  return { status, interaction, input, detail, stream, tools, todos, agents };
+}
+
+export function missionLayout(columns: number, rows: number, footer: number) {
+  const height = Math.max(1, rows - 1);
+  const treeWidth = columns >= 70 ? Math.min(30, Math.floor(columns * 0.24)) : 0;
+  const sideWidth = columns >= 112 ? Math.min(40, Math.floor(columns * 0.27)) : 0;
+  return { height, bodyHeight: Math.max(0, height - 1 - Math.max(1, footer)), treeWidth, sideWidth, outputWidth: Math.max(1, columns - treeWidth - sideWidth) };
+}
+
+export interface EditorRow { text: string; sourceRow: number; start: number }
+
+/** Soft wraps without changing the draft. The visible window follows the caret. */
+export function editorViewport(state: EditorState, width: number, height: number) {
+  width = Math.max(1, width);
+  height = Math.max(1, height);
+  const rows: EditorRow[] = [];
+  let caret = { x: 0, y: 0 };
+  state.lines.forEach((line, sourceRow) => {
+    let text = '';
+    let used = 0;
+    let start = 0;
+    for (const ch of graphemes(line + ' ')) {
+      const size = Math.min(width, displayWidth(ch.text));
+      if (used + size > width) { rows.push({ text, sourceRow, start }); text = ''; used = 0; start = ch.start; }
+      if (sourceRow === state.row && ch.start === state.col) caret = { x: used, y: rows.length };
+      text += displayWidth(ch.text) > width ? '?' : ch.text;
+      used += size;
+    }
+    rows.push({ text, sourceRow, start });
+  });
+  const first = Math.max(0, Math.min(caret.y - height + 1, rows.length - height));
+  return { lines: rows.slice(first, first + height), caret: { x: caret.x, y: caret.y - first }, hidden: Math.max(0, rows.length - height) };
+}

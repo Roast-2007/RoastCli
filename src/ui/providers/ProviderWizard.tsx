@@ -1,0 +1,234 @@
+import { useMemo, useRef, useState } from 'react';
+import { Box, Text, useBoxMetrics, useCursor, useInput, usePaste, useWindowSize, type DOMElement } from 'ink';
+import { resolveApiKey, reasoningEfforts, type ReasoningEffort, type RoastConfig } from '../../core/config.js';
+import { terminalText } from '../../core/terminal-text.js';
+import { displayWidth, graphemes, nextBoundary, previousBoundary, wrapDisplay } from '../../core/text-width.js';
+import { PROVIDER_PRESETS } from '../../providers/presets.js';
+import { draftFromProfile, providerOverrideWarnings, providerSettingsSource, readProviderSettings, saveProviderSettings, validateProviderDraft, type ProviderDraft, type ProviderSettings } from '../../cli/provider-settings.js';
+import { pickTheme, ThemeContext, useTheme } from '../theme.js';
+import { absoluteOrigin } from '../input/cursor.js';
+import { editorViewport } from '../layout.js';
+import { createEditor } from '../input/editor.js';
+import { TerminalContext, terminalPreferences, useGlyphs } from '../terminal.js';
+
+export interface ProviderWizardProps {
+  cwd: string;
+  onExit(saved: boolean): void;
+  ui?: RoastConfig['ui'];
+}
+
+function cleanInput(text: string): string {
+  return terminalText(text).replace(/[\n\t]/g, '');
+}
+
+/** Local-only form input: never uses the conversation history or UI store. */
+function Field({ label, value, secret, active, onChange }: { label: string; value: string; secret?: boolean; active: boolean; onChange(value: string): void }) {
+  const theme = useTheme();
+  const glyph = useGlyphs();
+  const { columns } = useWindowSize();
+  const [cursor, setCursor] = useState(value.length);
+  const inputState = useRef({ value, cursor });
+  inputState.current.value = value;
+  inputState.current.cursor = Math.min(inputState.current.cursor, value.length);
+  const ref = useRef<DOMElement>(null);
+  useBoxMetrics(ref);
+  const { setCursorPosition } = useCursor();
+  const position = Math.min(cursor, value.length);
+  const view = editorViewport({ ...createEditor(), lines: [secret ? '*'.repeat(value.length) : value], col: position }, Math.max(1, columns - 8), 1);
+  const row = view.lines[0]!;
+  const start = row.start;
+  const shown = row.text;
+  const origin = active ? absoluteOrigin(ref.current) : null;
+  if (active) setCursorPosition(origin ? { x: origin.x + 3 + displayWidth(shown.slice(0, position - start)), y: origin.y } : undefined);
+  const insert = (raw: string) => {
+    const text = cleanInput(raw);
+    const current = inputState.current;
+    current.value = current.value.slice(0, current.cursor) + text + current.value.slice(current.cursor);
+    current.cursor += text.length;
+    onChange(current.value);
+    setCursor(current.cursor);
+  };
+  usePaste(insert, { isActive: active });
+  useInput((input, key) => {
+    const current = inputState.current;
+    const move = (next: number) => { current.cursor = next; setCursor(next); };
+    const replace = (next: string, col: number) => { current.value = next; onChange(next); move(col); };
+    if (key.leftArrow) return move(previousBoundary(current.value, current.cursor));
+    if (key.rightArrow) return move(nextBoundary(current.value, current.cursor));
+    if (key.home || (key.ctrl && input === 'a')) return move(0);
+    if (key.end || (key.ctrl && input === 'e')) return move(current.value.length);
+    if (key.ctrl && input === 'u') return replace(current.value.slice(current.cursor), 0);
+    if (key.backspace) { if (current.cursor) { const before = previousBoundary(current.value, current.cursor); replace(current.value.slice(0, before) + current.value.slice(current.cursor), before); } return; }
+    if (key.delete) return replace(current.value.slice(0, current.cursor) + current.value.slice(nextBoundary(current.value, current.cursor)), current.cursor);
+    if (key.return || key.tab || key.escape || key.ctrl || key.meta || key.upArrow || key.downArrow) return;
+    if (input) insert(input);
+  }, { isActive: active });
+  return <Box flexDirection="column">
+    <Text color={active ? theme.accent : undefined} wrap="truncate-end">{label}</Text>
+    <Box ref={ref}>
+      <Text color={active ? theme.accent : undefined} wrap="truncate-end">{active ? ` ${glyph.pointer} ` : '   '}{active ? <>{shown.slice(0, position - start)}<Text inverse>{graphemes(shown.slice(position - start))[0]?.text ?? ' '}</Text>{shown.slice(nextBoundary(shown, position - start))}</> : shown.trimEnd() || '（未填写）'}</Text>
+    </Box>
+  </Box>;
+}
+
+function credentialStatus(settings: ProviderSettings, name: string): string {
+  try { resolveApiKey(settings.providers[name]!, name); return '凭据已设置'; }
+  catch { return '缺少凭据'; }
+}
+
+export function ProviderWizard(props: ProviderWizardProps) {
+  const theme = useMemo(() => pickTheme(process.env, props.ui?.theme), [props.ui?.theme]);
+  const terminal = useMemo(() => terminalPreferences(process.env, props.ui), [props.ui]);
+  return <ThemeContext.Provider value={theme}><TerminalContext.Provider value={terminal}><Wizard {...props} /></TerminalContext.Provider></ThemeContext.Provider>;
+}
+
+function Wizard({ cwd, onExit }: ProviderWizardProps) {
+  const theme = useTheme();
+  const glyph = useGlyphs();
+  const { rows, columns } = useWindowSize();
+  const compact = rows < 18;
+  const read = (): { settings: ProviderSettings; error?: string } => {
+    try { return { settings: readProviderSettings(cwd) }; }
+    catch (err) { return { settings: { providers: {}, file: providerSettingsSource(cwd).path }, error: err instanceof Error ? err.message : '无法读取配置' }; }
+  };
+  const [loaded, setLoaded] = useState(read);
+  const [step, setStep] = useState<'home' | 'preset' | 'connection' | 'credential' | 'review' | 'saved'>('home');
+  const [selection, setSelection] = useState(0);
+  const [field, setField] = useState(0);
+  const [draft, setDraftState] = useState<ProviderDraft | null>(null);
+  const draftRef = useRef(draft);
+  const setDraft = (next: ProviderDraft | null) => { draftRef.current = next; setDraftState(next); };
+  const [error, setError] = useState('');
+  const [savedMessage, setSavedMessage] = useState('');
+  const [hasSaved, setHasSaved] = useState(false);
+  const [warnings, setWarnings] = useState<string[]>([]);
+  const [offset, setOffset] = useState(0);
+  const settings = loaded.settings;
+  const names = Object.keys(settings.providers);
+  const presets = Object.values(PROVIDER_PRESETS);
+  const homeEntries = ['＋ 添加供应商', ...names.map((name) => `${name} · ${settings.default?.startsWith(`${name}:`) ? `默认 ${settings.default.slice(name.length + 1)} · ` : ''}${credentialStatus(settings, name)}`)];
+  const entries = step === 'home' ? homeEntries : presets.map((p) => p.label);
+  const go = (next: typeof step) => { setStep(next); setError(''); setField(0); setOffset(0); };
+  const update = (patch: Partial<ProviderDraft>) => { if (draftRef.current) setDraft({ ...draftRef.current, ...patch }); setError(''); };
+  const review = () => {
+    const draft = draftRef.current;
+    if (!draft) return;
+    const invalid = validateProviderDraft(draft);
+    if (invalid) return setError(invalid);
+    try { setWarnings(providerOverrideWarnings(cwd, draft.name, draft.makeDefault || !settings.default)); go('review'); }
+    catch (err) { setError(err instanceof Error ? err.message : '无法读取配置'); }
+  };
+  const gap = rows >= 8 ? 1 : 0;
+  const bodyHeight = Math.max(1, rows - 1 - 2 - (compact ? 0 : 1) - gap - 1 - (error ? Math.min(2, Math.max(1, rows - 7)) : 0));
+  const reviewText = draft ? [
+    `${settings.providers[draft.name] ? '更新已有供应商' : '添加供应商'}：${draft.name}`,
+    `协议：${draft.driver}`, `地址：${draft.baseURL}`, `模型：${draft.model}`,
+    '凭据：本地保存 API Key（已遮罩）',
+    `Reasoning effort：${draft.reasoningEffort ?? '自动（供应商默认）'}`,
+    `默认模型：${draft.makeDefault || !settings.default ? `${draft.name}:${draft.model}` : settings.default}`,
+    `保存位置：${settings.file}`,
+    '下一次启动生效。', ...warnings,
+  ] : [];
+  const pageLines = (loaded.error ? [`${loaded.error} · Enter 重试`] : step === 'review' ? reviewText : step === 'saved' ? [savedMessage, ...warnings] : []).flatMap((line) => wrapDisplay(terminalText(line), Math.max(1, columns - 2)));
+  const pageOffset = Math.min(offset, Math.max(0, pageLines.length - bodyHeight));
+
+  useInput((input, key) => {
+    const draft = draftRef.current;
+    if (key.ctrl && input === 'c') return onExit(hasSaved);
+    if (key.escape) {
+      if (step === 'home' || step === 'saved') return onExit(hasSaved);
+      if (step === 'review') return go('credential');
+      if (step === 'credential') return go('connection');
+      if (step === 'connection' && !draft?.existing) { setSelection(0); return go('preset'); }
+      setDraft(null); setSelection(0); return go('home');
+    }
+    if (pageLines.length && (key.pageDown || key.pageUp || key.downArrow || key.upArrow)) {
+      const delta = (key.pageUp || key.upArrow ? -1 : 1) * (key.pageDown || key.pageUp ? bodyHeight : 1);
+      return setOffset(Math.max(0, Math.min(pageLines.length - bodyHeight, pageOffset + delta)));
+    }
+    if (loaded.error) {
+      if (key.return) setLoaded(read());
+      return;
+    }
+    if (step === 'home' || step === 'preset') {
+      if (key.upArrow) return setSelection((s) => Math.max(0, s - 1));
+      if (key.downArrow || key.tab) return setSelection((s) => (s + 1) % entries.length);
+      if (!key.return) return;
+      if (step === 'home') {
+        if (selection === 0) { setSelection(0); return go('preset'); }
+        const name = names[selection - 1]!;
+        const editing = draftFromProfile(name, settings.providers[name]!, settings.default);
+        setDraft({ ...editing, makeDefault: editing.makeDefault || !settings.default });
+      } else {
+        const preset = presets[selection]!;
+        setDraft({ name: preset.name, driver: preset.driver, baseURL: preset.baseURL, model: preset.model, apiKey: '', makeDefault: !settings.default });
+      }
+      return go('connection');
+    }
+    if (!draft) return;
+    if (step === 'connection' || step === 'credential') {
+      const count = 3;
+      if (key.tab) return setField((f) => (f + (key.shift ? count - 1 : 1)) % count);
+      if (key.upArrow || key.downArrow) return setField((f) => (f + (key.upArrow ? count - 1 : 1)) % count);
+      if (step === 'credential' && (key.leftArrow || key.rightArrow || input === ' ') && field !== 0) {
+        if (field === 1) {
+          const efforts: (ReasoningEffort | undefined)[] = [undefined, ...reasoningEfforts(draft.driver, draft.baseURL)];
+          const index = efforts.indexOf(draft.reasoningEffort);
+          update({ reasoningEffort: efforts[(index + (key.leftArrow ? efforts.length - 1 : 1)) % efforts.length] });
+        } else if (settings.default) update({ makeDefault: !draft.makeDefault });
+        return;
+      }
+      if (!key.return) return;
+      if (step === 'connection') {
+        if (field < count - 1) return setField((f) => f + 1);
+        const invalid = validateProviderDraft(draft, false);
+        if (invalid) return setError(invalid);
+        return go('credential');
+      }
+      return review();
+    }
+    if (step === 'review' && key.return) {
+      try {
+        const result = saveProviderSettings(cwd, draft);
+        setHasSaved(true); setWarnings(result.warnings);
+        setSavedMessage(`已保存到 ${result.file}，下一次启动生效。`);
+        setDraft({ ...draft, apiKey: '' });
+        setLoaded(read()); go('saved');
+      } catch (err) { setError(err instanceof Error ? err.message : '保存失败，请重试'); }
+    } else if (step === 'saved' && key.return) {
+      setDraft(null); setSelection(0); go('home');
+    }
+  });
+
+  const visibleCount = Math.max(1, bodyHeight - 1);
+  const menuStart = Math.max(0, selection - visibleCount + 1);
+  const title = { home: '已配置供应商', preset: '1 / 4 · 选择供应商', connection: '2 / 4 · 连接与模型', credential: '3 / 4 · 配置凭据', review: '4 / 4 · 确认并保存', saved: '保存成功' }[step];
+  const note = presets.find((p) => p.name === draft?.name)?.note;
+  return <Box flexDirection="column" height={Math.max(1, rows - 1)} overflow="hidden" paddingX={1}>
+    <Box flexDirection="column" flexShrink={0}>
+    <Text bold color={theme.accent} wrap="truncate-end">ROAST · 供应商配置</Text>
+    <Text bold wrap="truncate-end">{title}</Text>
+    {!compact ? <Text dimColor wrap="truncate-end">保存位置：{settings.file}</Text> : null}
+    </Box>
+    <Box flexDirection="column" height={bodyHeight} marginTop={gap} overflow="hidden" flexShrink={0}>
+    {pageLines.length ? pageLines.slice(pageOffset, pageOffset + bodyHeight).map((line, i) => <Text key={i} color={loaded.error ? theme.danger : step === 'saved' ? theme.success : undefined} wrap="truncate-end">{line || ' '}</Text>) : null}
+    {!loaded.error && (step === 'home' || step === 'preset') ? <Box flexDirection="column" flexShrink={0}>
+      {entries.slice(menuStart, menuStart + visibleCount).map((label, index) => <Text key={index} color={menuStart + index === selection ? theme.accent : undefined} wrap="truncate-end">{menuStart + index === selection ? `${glyph.pointer} ` : '  '}{terminalText(label)}</Text>)}
+      {entries.length > visibleCount ? <Text dimColor>↑↓ 滚动 · {selection + 1} / {entries.length}</Text> : null}
+    </Box> : null}
+    {draft && step === 'connection' ? <Box flexDirection="column" flexShrink={0}>
+      {!compact ? <Text dimColor wrap="truncate-end">{draft.driver}{note ? ` · ${note}` : ''}</Text> : null}
+      {(['name', 'baseURL', 'model'] as const).map((name, index) => !compact || field === index ? <Field key={name} label={['供应商 ID（字母 / 数字 / _ / -）', 'API 基础地址', '模型 ID'][index]!} value={draft[name]} active={field === index} onChange={(value) => update({ [name]: value, ...(name === 'model' ? { reasoningEffort: draft.existing?.models?.[value]?.reasoningEffort } : {}) })} /> : null)}
+    </Box> : null}
+    {draft && step === 'credential' ? <Box flexDirection="column" flexShrink={0}>
+      {!compact || field === 0 ? <Field label={`API Key${draft.existing?.apiKeyRef ? '（留空保留已保存密钥）' : ''}`} secret value={draft.apiKey} active={field === 0} onChange={(apiKey) => update({ apiKey })} /> : null}
+      {!compact || field === 1 ? <Text color={field === 1 ? theme.accent : undefined} wrap="truncate-end">{field === 1 ? `${glyph.pointer} ` : '  '}Reasoning effort：{draft.reasoningEffort ?? '自动'} · ←→ 选择</Text> : null}
+      {!compact || field === 2 ? <Text color={field === 2 ? theme.accent : undefined} wrap="truncate-end">{field === 2 ? `${glyph.pointer} ` : '  '}设为默认模型：{draft.makeDefault || !settings.default ? '是' : '否'} · {settings.default ? '←→ 切换' : '首个配置自动设为默认'}</Text> : null}
+      {!compact ? <Text dimColor>密钥以本地明文保存在用户目录 credentials.json，不写入配置或会话记录。推理强度按模型保存，需服务端支持。</Text> : null}
+    </Box> : null}
+    </Box>
+    {error ? <Box flexDirection="column" flexShrink={0}>{wrapDisplay(terminalText(error), Math.max(1, columns - 2)).slice(0, Math.min(2, Math.max(1, rows - 7))).map((line, i) => <Text key={i} color={theme.danger} wrap="truncate-end">{line}</Text>)}</Box> : null}
+    <Box flexGrow={1} flexShrink={0} />
+    <Box height={1} flexShrink={0}><Text dimColor wrap="truncate-end">{step === 'review' ? 'Enter 保存 · Esc 修改' : step === 'saved' ? 'Enter 继续 · Esc 完成' : step === 'credential' ? 'Tab / ↑↓ 字段 · Enter 确认 · Esc 返回' : step === 'connection' ? compact ? `Tab 字段 ${field + 1}/3 · Enter 下一步 · Esc 返回` : 'Tab / Shift+Tab 字段 · Enter 下一步 · Esc 返回' : '↑↓ 选择 · Enter 确认 · Esc 返回'}{pageLines.length > bodyHeight ? ` · PgUp/PgDn ${pageOffset + 1}/${pageLines.length}` : ''}</Text></Box>
+  </Box>;
+}
