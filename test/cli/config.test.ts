@@ -18,7 +18,8 @@ function cli(args: string[], input?: string) {
   return { result, home };
 }
 
-describe('config CLI entrypoint', () => {
+// A case can start two tsx processes (15s each); allow cold starts on Windows CI.
+describe('config CLI entrypoint', { timeout: 35_000 }, () => {
   it('advertises the wizard without needing config or credentials', () => {
     const { result } = cli(['--help']);
     expect(result.status).toBe(0);
