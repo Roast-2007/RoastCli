@@ -2,7 +2,7 @@
  * 蜂群 + worktree 端到端：worker 在独立 worktree 中写文件（主工作区不受影响），report 后由 Queen merge_worktree 合并；
  * worker 按绝对路径改原仓库被守卫拒绝；只读角色共享工作区；收尾时删除无改动的 worktree。
  */
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -49,6 +49,32 @@ const toolResultOf = (provider: RoutedProvider, agent: string, index: number) =>
   JSON.stringify(provider.requests.filter((r) => r.agent === agent)[index]?.req.messages.at(-1));
 
 describe('swarm worktree isolation', () => {
+  it('lets the user approve a waiting worker shell command and keeps its changes in the worktree', async () => {
+    const ws = gitRepo();
+    const providers = new ProviderRegistry();
+    const provider = new RoutedProvider({
+      main: [toolCallScript('s', 'spawn_agent', { role: 'worker', task: 'write an isolated file' }), toolCallScript('a', 'await_agents', {}), textScript('done')],
+      w1: [toolCallScript('b', 'bash', { command: 'printf approved > approved.txt' }), toolCallScript('r', 'report', { status: 'done', summary: 'approved' }), textScript('done')],
+    });
+    providers.register('p', provider);
+    const session = await createSession({ cwd: ws.dir, config, providers, permissionMode: 'yolo' });
+    session.broker.onRequest(() => {});
+    const running = (async () => { for await (const _ of session.loop.run('start')); })();
+    try {
+      await vi.waitFor(() => expect(session.broker.pending()).toHaveLength(1), { timeout: 10_000 });
+      const request = session.broker.pending()[0]!;
+      expect(request).toMatchObject({ kind: 'permission', agentId: 'w1', forced: true });
+      expect(session.swarm.info('w1')).toMatchObject({ state: 'waiting', waitingFor: '等待用户授权' });
+      expect(existsSync(path.join(ws.dir, 'approved.txt'))).toBe(false);
+      session.broker.respond(request.id, { kind: 'permission', decision: 'allow' });
+      await running; await session.swarm.whenIdle();
+      expect(toolResultOf(provider, 'w1', 1)).not.toContain('执行被拒绝');
+      expect(readFileSync(path.join(session.swarm.info('w1')!.worktree!, 'approved.txt'), 'utf8')).toBe('approved');
+      expect(existsSync(path.join(ws.dir, 'approved.txt'))).toBe(false);
+      expect(session.swarm.info('w1')?.waitingFor).toBeUndefined();
+    } finally { await session.shutdown(); await running; }
+  }, 30_000);
+
   it('requires explicit shell approval in a worktree even in yolo mode', async () => {
     const ws = gitRepo();
     const command = `cd "${ws.dir.replaceAll('\\', '/')}" && printf escaped > escaped.txt`;

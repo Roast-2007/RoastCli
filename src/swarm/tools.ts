@@ -9,7 +9,6 @@ import { defineTool, textResult, toolErrorResult, type PreExecuteHook, type Tool
 import type { Supervisor, WaitResult } from './supervisor.js';
 import { parseAddress, READ_ONLY_ROLES, type AgentRole, type Report } from './types.js';
 import { ISOLATION_MODES } from './isolation.js';
-import { isReadOnlyCommand, isVerificationCommand, parseCommand } from '../tools/permissions/bash-parse.js';
 
 export const SWARM_KEY = 'swarm';
 
@@ -229,7 +228,7 @@ export const agentsStatusTool = defineTool({
   async execute(_args, ctx): Promise<ToolResult> {
     const s = access(ctx);
     if (!s) return toolErrorResult('agents_status', NO_SWARM);
-    const lines = s.supervisor.tree().map((a) => `${'  '.repeat(a.depth)}${a.id} [${a.role}] ${a.state}：${a.brief.slice(0, 60)}${a.report ? ` → ${a.report.status}` : ''}`);
+    const lines = s.supervisor.tree().map((a) => `${'  '.repeat(a.depth)}${a.id} [${a.role}] ${a.state}${a.waitingFor ? `（${a.waitingFor}）` : ''}：${a.brief.slice(0, 60)}${a.report ? ` → ${a.report.status}` : ''}`);
     return textResult(lines.join('\n'));
   },
 });
@@ -270,20 +269,10 @@ export const SWARM_TOOLS = [
   taskTool,
 ];
 
-/** 只读角色执行的 bash 是否只是"读 + 验证"（如 cd 到候选 worktree 后运行测试） */
-function isVerificationOnly(tool: { name: string }, args: unknown): boolean {
-  const command = (args as { command?: unknown } | null)?.command;
-  if (tool.name !== 'bash' || typeof command !== 'string') return false;
-  const parsed = parseCommand(command);
-  // cd 只在这里放行（切到候选 worktree 再验证）；它不在全局只读列表里，权限引擎仍会对含 cd 的复合命令询问
-  const isCd = (s: string) => /^cd(\s|$)/.test(s.trim());
-  return !parsed.hasSubshell && !parsed.writesFiles && parsed.segments.length > 0 && parsed.segments.every((s) => isCd(s) || isReadOnlyCommand(s) || isVerificationCommand(s));
-}
-
-/** 只读角色（scout / critic / judge）不能执行改动工作区的工具；运行测试 / 类型检查 / lint 这类验证命令除外 */
+/** Direct edits stay blocked; shell commands use the shared permission engine and user approval. */
 export function roleGuardHook(role: AgentRole): PreExecuteHook {
   return (tool, args) =>
-    READ_ONLY_ROLES.has(role) && isMutating(tool, args) && !isVerificationOnly(tool, args)
+    READ_ONLY_ROLES.has(role) && tool.name !== 'bash' && isMutating(tool, args)
       ? { action: 'deny', reason: `你的角色（${role}）是只读的，不能执行会修改工作区的操作（运行测试、类型检查、lint 等验证命令除外）；请把建议写进报告` }
       : { action: 'allow' };
 }

@@ -50,7 +50,7 @@ export function InteractionCard({ request, onRespond, maxHeight = 16 }: Props) {
   const firstOption = Math.max(0, selected - optionsHeight + 1);
   const color = request.kind === 'permission' ? request.forced ? theme.danger : theme.warn : theme.info;
   return <Box flexDirection="column" borderStyle={border ? ascii ? 'classic' : 'round' : undefined} borderColor={color} paddingX={border ? 1 : 0} flexShrink={0}>
-    <Text bold color={color} wrap="truncate-end">{question ? '需要你的回答' : request.forced ? `${glyph.warning} 高危操作需要确认` : '需要你的授权'}{request.agentId !== 'main' ? `（agent ${request.agentId}）` : ''}</Text>
+    <Text bold color={color} wrap="truncate-end">{question ? '需要你的回答' : request.forced ? `${glyph.warning} ${request.reason.startsWith('高危操作') ? '高危操作' : '操作'}需要确认` : '需要你的授权'}{request.agentId !== 'main' ? `（agent ${request.agentId}）` : ''}</Text>
     {detail.slice(start, start + detailHeight).map((line, i) => <Text key={i} wrap="truncate-end">{line || ' '}</Text>)}
     {options.slice(firstOption, firstOption + optionsHeight).map((option, i) => <Text key={i} color={firstOption + i === selected ? theme.accent : undefined} wrap="truncate-end">{firstOption + i === selected ? `${glyph.pointer} ` : '  '}{question ? `${firstOption + i + 1} ` : ''}{terminalText(option)}</Text>)}
     {question ? <InputBox active placeholder="按数字选择，或输入回答后回车" initialHistory={[]} deps={{ commands: [], files: () => [] }} maxHeight={inputHeight} onStateChange={(s) => setDraft(textOf(s))} onSubmit={(answer) => onRespond({ kind: 'question', answer })} /> : null}

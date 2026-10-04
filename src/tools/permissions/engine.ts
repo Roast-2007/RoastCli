@@ -12,7 +12,7 @@
  */
 import path from 'node:path';
 import { isPathInside } from '../../core/paths.js';
-import { dangerReason, isReadOnlyCommand, parseCommand } from './bash-parse.js';
+import { dangerReason, isReadOnlyCommand, isReadOnlyRoleCommand, parseCommand } from './bash-parse.js';
 import { commandMatches, matchesRule, parseRule, suggestRule, type PermissionRequest, type Rule } from './rules.js';
 
 export type { PermissionRequest } from './rules.js';
@@ -107,6 +107,9 @@ export class PermissionEngine {
     }
     const danger = this.dangerOf(req);
     if (danger) return { behavior: 'ask', reason: `高危操作：${danger}`, forced: true };
+    if (req.readOnlyRole && req.kind === 'execute' && (req.tool !== 'bash' || !req.target || !isReadOnlyRoleCommand(req.target))) {
+      return { behavior: 'ask', forced: true, reason: `只读角色 ${req.readOnlyRole}：无法确认这条命令是否只读取或验证，需要用户批准本次执行` };
+    }
     if (req.executionRoot && req.kind === 'execute') {
       return { behavior: 'ask', forced: true, reason: `此 agent 的工作区是 ${req.executionRoot}；shell / 外部执行工具能越过目录边界，需要明确批准本次命令` };
     }

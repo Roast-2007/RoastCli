@@ -49,7 +49,9 @@ export function createUiController(session: Session, store: UiStore, opts: { exi
   if (session.resumedFrom && store.getState().agents['main']!.items.length === 0) store.restore('main', session.initialEvents);
 
   store.setMeta({ mode: session.permissions.mode, contextPercent: session.contextStats().percent, swarm: session.swarm.tree(), interactions: session.broker.pending() });
-  offs.push(session.broker.onRequest((req) => store.setMeta((m) => ({ interactions: [...m.interactions, req] }))));
+  const refreshInteractions = () => store.setMeta({ interactions: session.broker.pending() });
+  offs.push(session.broker.onRequest(refreshInteractions));
+  offs.push(session.broker.onChange(refreshInteractions));
   offs.push(session.permissions.onModeChange((mode) => { store.setMeta({ mode }); toast(`权限模式：${mode}`); }));
   offs.push(session.onAgentEvent((id, ev) => store.pushEvent(id, ev)));
   offs.push(
@@ -161,9 +163,7 @@ export function createUiController(session: Session, store: UiStore, opts: { exi
       if (running) abort?.abort();
     },
     respond(req, response) {
-      session.broker.respond(req.id, response);
-      store.setMeta((m) => ({ interactions: m.interactions.filter((r) => r.id !== req.id) }));
-      toast('已提交回答', 'success');
+      if (session.broker.respond(req.id, response)) toast('已提交回答', 'success');
     },
     cycleMode() {
       session.permissions.cycleMode();

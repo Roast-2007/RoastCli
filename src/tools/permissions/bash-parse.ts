@@ -92,6 +92,12 @@ function startsWithWord(cmd: string, prefix: string): boolean {
 export function isReadOnlyCommand(segment: string): boolean {
   const cmd = segment.trim().replace(/\s+/g, ' ');
   if (/^git (diff|log|show)\b/.test(cmd) && /\s["']?--output(?:["']?(?:\s|=|$))/.test(cmd)) return false;
+  if (startsWithWord(cmd, 'git ls-files')) return true;
+  if (startsWithWord(cmd, 'git stash list')) return !/\s["']?--output(?:["']?(?:\s|=|$))/.test(cmd);
+  if (startsWithWord(cmd, 'git branch')) return /^git branch(?: (?:-[avr]+|--(?:all|remotes|list|verbose|show-current|no-color)))*$/.test(cmd);
+  if (/^git tag(?: (?:-l|--list|--sort(?:=| )\S+|--format(?:=| )\S+))*$/.test(cmd)) return true;
+  if (startsWithWord(cmd, 'sort')) return !/(?:^|\s)["']?(?:-o\S*|--output)(?:["']?(?:\s|=|$))/.test(cmd);
+  if (startsWithWord(cmd, 'od')) return true;
   if (startsWithWord(cmd, 'find')) return !/\s-(delete|exec|execdir|ok|fprint)\b/.test(cmd);
   return READ_ONLY_PREFIXES.some((p) => startsWithWord(cmd, p));
 }
@@ -114,6 +120,14 @@ const VERIFY_WRITES = /(?:^|\s)["']?(?:-o\S*|-u|--(?:fix\S*|write|update\S*|outp
 export function isVerificationCommand(segment: string): boolean {
   const cmd = segment.trim().replace(/\s+/g, ' ');
   return VERIFY_PATTERNS.some((p) => p.test(cmd)) && !VERIFY_WRITES.test(cmd) && !/--noEmit(?:=|\s+)false\b/.test(cmd);
+}
+
+/** Read-only roles may inspect or verify; cd still goes through the normal permission check. */
+export function isReadOnlyRoleCommand(command: string): boolean {
+  const parsed = parseCommand(command);
+  return !parsed.hasSubshell && !parsed.writesFiles && parsed.segments.length > 0 && parsed.segments.every(
+    (segment) => /^cd(\s|$)/.test(segment.trim()) || isReadOnlyCommand(segment) || isVerificationCommand(segment),
+  );
 }
 
 const DANGER_PATTERNS: [RegExp, string][] = [

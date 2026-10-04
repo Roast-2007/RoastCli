@@ -18,6 +18,7 @@ export interface PermissionHookOptions {
 }
 
 export const EXECUTION_ROOT_KEY = 'permissions:execution-root';
+export const READ_ONLY_ROLE_KEY = 'permissions:read-only-role';
 
 export function permissionRequestOf(tool: ToolDefinition, args: unknown, ctx: ToolContext): PermissionRequest {
   let kind = tool.permission?.kind ?? (tool.isReadOnly ? 'read' : 'execute');
@@ -41,6 +42,7 @@ export function permissionRequestOf(tool: ToolDefinition, args: unknown, ctx: To
     ...(ctx.callId ? { callId: ctx.callId } : {}),
     args,
     ...(ctx.services.get<string>(EXECUTION_ROOT_KEY) ? { executionRoot: ctx.services.get<string>(EXECUTION_ROOT_KEY)! } : {}),
+    ...(ctx.services.get<string>(READ_ONLY_ROLE_KEY) ? { readOnlyRole: ctx.services.get<string>(READ_ONLY_ROLE_KEY)! } : {}),
   };
 }
 

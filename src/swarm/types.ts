@@ -40,6 +40,8 @@ export interface AgentInfo {
   role: AgentRole;
   depth: number;
   state: AgentState;
+  /** A pending user interaction, visible to Queen and both TUI screens. */
+  waitingFor?: string;
   brief: string;
   model: string;
   startedAt: number;

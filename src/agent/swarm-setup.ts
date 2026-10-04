@@ -11,14 +11,14 @@ import { ContextController } from '../context/controller.js';
 import { CONTEXT_ACCESS_KEY } from '../context/recall-tool.js';
 import { BROKER_KEY, FS_STATE_KEY, FileStateStore, MapToolServices, PERMISSIONS_KEY, type ToolRegistry } from '../tools/index.js';
 import type { PermissionEngine } from '../tools/permissions/engine.js';
-import { EXECUTION_ROOT_KEY } from '../tools/permissions/hook.js';
+import { EXECUTION_ROOT_KEY, READ_ONLY_ROLE_KEY } from '../tools/permissions/hook.js';
 import type { PostExecuteHook, PreExecuteHook, ToolServices } from '../tools/tool.js';
 import { Supervisor } from '../swarm/supervisor.js';
 import { roleGuardHook, SWARM_KEY } from '../swarm/tools.js';
 import { LeaseManager, leaseHook } from '../swarm/lease.js';
 import { worktreeGuardHook } from '../swarm/isolation.js';
 import { WorktreeManager } from '../swarm/worktree.js';
-import type { AgentRole } from '../swarm/types.js';
+import { READ_ONLY_ROLES, type AgentRole } from '../swarm/types.js';
 import type { RunLogWriter } from '../session/log-writer.js';
 import { composeBoundary } from './boundary.js';
 import { AgentRuntime } from './runtime.js';
@@ -88,6 +88,7 @@ export function setupSwarm(input: SwarmSetupInput): SwarmSetup {
     },
     createRuntime({ id, role, log, services, boundary, modelRef, cwd, worktree }) {
       if (worktree) services.set(EXECUTION_ROOT_KEY, worktree.root);
+      if (READ_ONLY_ROLES.has(role)) services.set(READ_ONLY_ROLE_KEY, role);
       const ctl = new ContextController({ window: input.windowFor(modelRef), config: input.config.context, overhead: input.overhead });
       const rt = new AgentRuntime({
         agentId: id,
@@ -111,5 +112,13 @@ export function setupSwarm(input: SwarmSetupInput): SwarmSetup {
     },
   });
   supervisor.registerRoot('main', `${input.mainRef.provider}:${input.mainRef.model}`);
+  const offInteractions = input.broker.onChange(() => {
+    const requests = input.broker.pending();
+    for (const agent of supervisor.tree()) {
+      const request = requests.find((r) => r.agentId === agent.id);
+      supervisor.setInteractionWaiting(agent.id, request ? request.kind === 'permission' ? '等待用户授权' : '等待用户回答' : undefined);
+    }
+  });
+  input.signal.addEventListener('abort', offInteractions, { once: true });
   return { supervisor, leaseHook: lease };
 }

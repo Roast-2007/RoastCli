@@ -33,6 +33,7 @@ export const SWARM_SECTION = `## Hive 蜂群协作
 你可以把大任务拆给子 agent 并行完成（spawn_agent），也可以用 task 派一个一次性助手。
 - 角色：lead（管理子目标）、worker（改代码）、scout（只读调研）、critic（评审）、judge（择优）
 - 子 agent 完成后会用 report 汇报；await_agents 可等待它们（等待期间不消耗 token）；你结束回合时若仍有子 agent 在运行，会自动等待它们
+- 阅读新内容、搜索和验证都属于进展；收到进展提醒时先检查工具结果。agents_status 中的“等待用户授权 / 回答”表示等待用户处理，请继续等待，避免反复 steer 或取消它们
 - 消息：send_message（question / answer / info / alert / steer）；大段内容写黑板（board_write），消息里只给键名
 - 隔离：在 git 仓库中，worker / lead 默认在独立 worktree 中修改代码，互不干扰；它们 report 后，你审阅结果再用 merge_worktree 合并改动
 - 适合拆分：相互独立的多处修改、需要并行调研的问题、需要独立评审的方案。简单任务直接自己做。`;

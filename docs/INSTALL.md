@@ -7,13 +7,13 @@
 Windows、macOS 和 Linux 通用，不需要克隆代码或安装 pnpm：
 
 ```sh
-npm install -g https://github.com/Roast-2007/RoastCli/releases/latest/download/roastcli.tgz
+npm install -g --prefer-online https://github.com/Roast-2007/RoastCli/releases/latest/download/roastcli.tgz
 ```
 
 安装包来自本项目的 GitHub Release。当前尚未发布到 npm registry，因此请使用完整链接，而非 `npm install -g roastcli`。也可锁定版本：
 
 ```sh
-npm install -g https://github.com/Roast-2007/RoastCli/releases/download/v0.1.1/roastcli.tgz
+npm install -g https://github.com/Roast-2007/RoastCli/releases/download/v0.1.2/roastcli.tgz
 ```
 
 ## 安装脚本
@@ -48,7 +48,7 @@ roast
 
 ## 更新和卸载
 
-更新：重新执行上面的安装命令。
+更新：退出正在运行的 RoastCli，重新执行上面的安装命令或安装脚本，再用 `roast --version` 核对版本。`--prefer-online` 会检查远端包，避免一直使用旧的缓存。安装会保留配置、API Key 和会话记录。
 
 ```sh
 npm uninstall -g roastcli
@@ -63,7 +63,7 @@ npm uninstall -g roastcli
 - **macOS / Linux 的 EACCES**：将 npm 的安装位置设为用户目录后重试：
 
 ```sh
-npm install -g --prefix "$HOME/.local" https://github.com/Roast-2007/RoastCli/releases/latest/download/roastcli.tgz
+npm install -g --prefer-online --prefix "$HOME/.local" https://github.com/Roast-2007/RoastCli/releases/latest/download/roastcli.tgz
 export PATH="$HOME/.local/bin:$PATH"
 ```
 

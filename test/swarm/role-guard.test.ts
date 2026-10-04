@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isVerificationCommand } from '../../src/tools/permissions/bash-parse.js';
+import { isReadOnlyRoleCommand, isVerificationCommand } from '../../src/tools/permissions/bash-parse.js';
 import { roleGuardHook } from '../../src/swarm/tools.js';
 import { bashTool, writeTool } from '../../src/tools/index.js';
 import { makeCtx } from '../tools/helpers.js';
@@ -39,22 +39,39 @@ describe('roleGuardHook', () => {
     expect(await judge(bashTool, { command: 'git diff && pnpm typecheck' }, ctx)).toEqual({ action: 'allow' });
   });
 
-  it('still denies edits, writes via redirects and non-verification commands', async () => {
+  it('denies direct edits and delegates shell execution to the permission engine', async () => {
     expect((await judge(writeTool, { path: 'a.ts', content: 'x' }, ctx)).action).toBe('deny');
-    expect((await judge(bashTool, { command: 'pnpm test > out.txt' }, ctx)).action).toBe('deny');
-    expect((await judge(bashTool, { command: 'pnpm test && rm -rf src' }, ctx)).action).toBe('deny');
-    expect((await judge(bashTool, { command: 'pnpm install' }, ctx)).action).toBe('deny');
+    for (const command of ['pnpm test > out.txt', 'pnpm test && rm -rf src', 'pnpm install']) {
+      expect(isReadOnlyRoleCommand(command)).toBe(false);
+      expect((await judge(bashTool, { command }, ctx)).action).toBe('allow');
+    }
   });
 
-  it('denies output flags on otherwise read-only Git commands', async () => {
+  it('requires approval for output flags on otherwise read-only Git commands', async () => {
     for (const command of ['git diff --output=src/a.ts', 'git log --output src/a.ts', 'git show "--output=src/a.ts"']) {
-      expect((await judge(bashTool, { command }, ctx)).action, command).toBe('deny');
+      expect(isReadOnlyRoleCommand(command), command).toBe(false);
     }
     expect((await judge(bashTool, { command: 'git diff -u' }, ctx)).action).toBe('allow');
   });
 
   it('does not restrict writer roles', async () => {
     expect(await roleGuardHook('worker')(bashTool, { command: 'pnpm install' }, ctx)).toEqual({ action: 'allow' });
+  });
+});
+
+describe('research shell classification', () => {
+  it('recognizes listings and read-only pipelines from a research task', () => {
+    for (const command of [
+      'cd /project && git ls-files src | cat',
+      'cd /project && git branch -a && git stash list; git status --short | head -20; git log --all --oneline | wc -l',
+      'cd /project && wc -l src/*.ts 2>/dev/null | sort -rn | head -40',
+      'git tag', 'git tag -l', 'tail -c 300 README.md | od -c | tail -5',
+    ]) expect(isReadOnlyRoleCommand(command), command).toBe(true);
+  });
+  it('keeps writes, arbitrary xargs and tag creation out of automatic read-only execution', () => {
+    for (const command of ['sort -o src/out.txt src/a.txt', 'sort --output=out.txt a.txt', 'git tag v1', 'git tag -d v1', 'git branch feature', 'git branch -D feature', 'git stash list --output=out.txt', 'find src | xargs rm', 'node -e "process.exit(0)"']) {
+      expect(isReadOnlyRoleCommand(command), command).toBe(false);
+    }
   });
 });
 

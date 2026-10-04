@@ -12,7 +12,7 @@
 需要 [Node.js 22+](https://nodejs.org/)（包含 npm），一条命令安装：
 
 ```sh
-npm install -g https://github.com/Roast-2007/RoastCli/releases/latest/download/roastcli.tgz
+npm install -g --prefer-online https://github.com/Roast-2007/RoastCli/releases/latest/download/roastcli.tgz
 ```
 
 Windows PowerShell 也可使用：

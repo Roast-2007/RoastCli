@@ -9,7 +9,7 @@ function Install-RoastCli {
     }
     $packageUrl = 'https://github.com/Roast-2007/RoastCli/releases/latest/download/roastcli.tgz'
     Write-Host '正在安装 RoastCli…'
-    & npm.cmd install --global $packageUrl
+    & npm.cmd install --global --prefer-online $packageUrl
     if ($LASTEXITCODE -ne 0) { throw '安装失败，请检查上面的 npm 错误信息。' }
     Write-Host '安装完成。运行 roast config 配置 API Key，然后运行 roast。'
 }

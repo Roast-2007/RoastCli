@@ -17,6 +17,8 @@ class Tty extends EventEmitter {
   isTTY = true; writable = true; chunks: string[] = [];
   constructor(public columns: number, public rows: number) { super(); }
   write(text: string) { this.chunks.push(text); return true; }
+  // Standard Ink rendering writes a whole frame per chunk; cursor-only writes are empty.
+  frames() { return this.chunks.map((chunk) => stripVTControlCharacters(chunk).trimEnd()).filter(Boolean).map((frame) => frame.split('\n')); }
 }
 class Input extends PassThrough { isTTY = true; setRawMode() {} ref() {} unref() {} }
 afterEach(() => vi.useRealTimers());
@@ -54,13 +56,16 @@ describe('real Ink terminal constraints', () => {
     store.setMeta({ inputSeed: { key: 1, text: Array.from({ length: 100 }, () => '中文👩‍💻'.repeat(40)).join('\n') } });
     const tty = new Tty(columns, rows);
     const stdin = new Input();
-    const options = { stdout: tty as unknown as NodeJS.WriteStream, stdin: stdin as unknown as NodeJS.ReadStream, interactive: true, patchConsole: false, exitOnCtrlC: false };
+    const options = { stdout: tty as unknown as NodeJS.WriteStream, stdin: stdin as unknown as NodeJS.ReadStream, interactive: true, patchConsole: false, exitOnCtrlC: false, incrementalRendering: false };
     let instance = render(<App session={session} store={store} controller={controller} printedUpTo={0} />, options);
     try {
       await instance.waitUntilRenderFlush();
-      const frame = stripVTControlCharacters(tty.chunks.join('')).trimEnd().split('\n');
-      expect(frame.length).toBeLessThan(rows);
-      expect(frame.every((line) => displayWidth(line) <= columns)).toBe(true);
+      const frames = tty.frames();
+      expect(frames.length).toBeGreaterThan(0);
+      for (const frame of frames) {
+        expect(frame.length).toBeLessThan(rows);
+        expect(frame.every((line) => displayWidth(line) <= columns)).toBe(true);
+      }
       expect(tty.chunks.join('')).not.toContain('\u001b[2J');
       store.setMeta({ interactions: [{ id: 'p', agentId: 'main', kind: 'permission', tool: 'bash', title: 'bash huge', detail: 'content '.repeat(500), reason: 'reason', forced: true }] });
       await instance.waitUntilRenderFlush();

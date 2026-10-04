@@ -133,7 +133,7 @@ export function AgentsPanel({ agents, activity, maxHeight = 11 }: { agents: Agen
         <Text key={a.id} wrap="truncate-end">
           {'  '.repeat(Math.max(0, a.depth - 1))}
           <Text color={color(a.state)}>{ascii ? a.state === 'paused' ? '||' : '*' : AGENT_ICON[a.state]}</Text> <Text bold>{a.id}</Text> <Text dimColor>[{a.role}]</Text>{' '}
-          <Text color={theme.tool}>{a.state === 'running' ? activity(a.id) : a.report ? a.report.status : a.state}</Text>{' '}
+          <Text color={theme.tool}>{a.waitingFor ?? (a.state === 'running' ? activity(a.id) : a.report ? a.report.status : a.state)}</Text>{' '}
           <Text dimColor>{a.brief.replace(/\s+/g, ' ').slice(0, 40)}</Text>
         </Text>
       ))}

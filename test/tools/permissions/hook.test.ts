@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { InteractionBroker } from '../../../src/core/interaction.js';
 import { executeTool } from '../../../src/tools/executor.js';
 import { PermissionEngine } from '../../../src/tools/permissions/engine.js';
-import { EXECUTION_ROOT_KEY, permissionHook } from '../../../src/tools/permissions/hook.js';
+import { EXECUTION_ROOT_KEY, READ_ONLY_ROLE_KEY, permissionHook } from '../../../src/tools/permissions/hook.js';
 import { defineTool, textResult } from '../../../src/tools/tool.js';
 import { makeCtx, textOf } from '../helpers.js';
 
@@ -26,6 +26,26 @@ function setup(mode: 'default' | 'yolo' = 'default') {
 }
 
 describe('permissionHook', () => {
+  it('asks about unfamiliar read-only-role commands even in yolo and never remembers that exception', async () => {
+    const { engine, hooks, broker, grants } = setup('yolo');
+    engine.grant('bash', 'session');
+    const ctx = makeCtx('/project');
+    ctx.services.set(READ_ONLY_ROLE_KEY, 'scout');
+    const requests: string[] = [];
+    broker.onRequest((request) => {
+      if (request.kind !== 'permission') throw new Error('Expected permission');
+      expect(request.forced).toBe(true);
+      expect(request.reason).toContain('只读角色 scout');
+      requests.push(request.tool);
+      broker.respond(request.id, { kind: 'permission', decision: requests.length === 1 ? 'allow' : 'deny', remember: 'session' });
+    });
+    expect(textOf(await executeTool(runTool, { command: 'node -e "console.log(1)"' }, ctx, hooks))).toContain('ran node');
+    expect((await executeTool(runTool, { command: 'node -e "console.log(1)"' }, ctx, hooks)).isError).toBe(true);
+    expect(requests).toHaveLength(2);
+    expect(grants).toEqual([]);
+    expect((await executeTool(runTool, { command: 'npm publish' }, ctx, hooks)).isError).toBe(true);
+    expect(requests).toHaveLength(2);
+  });
   it('worktree execution needs approval even with yolo and allow; a one-time approval is never remembered', async () => {
     const { engine, hooks, broker, grants } = setup('yolo');
     engine.grant('bash', 'session');
@@ -92,6 +112,19 @@ describe('permissionHook', () => {
 });
 
 describe('InteractionBroker', () => {
+  it('notifies on cancellation without turning a headless run into an interactive one', async () => {
+    const broker = new InteractionBroker();
+    const snapshots: number[] = [];
+    broker.onChange(() => snapshots.push(broker.pending().length));
+    const controller = new AbortController();
+    expect(await broker.request({ kind: 'question', agentId: 's1', question: 'headless' }, controller.signal)).toEqual({ kind: 'unavailable' });
+    expect(broker.interactive).toBe(false);
+    broker.onRequest(() => {});
+    const request = broker.request({ kind: 'question', agentId: 's1', question: 'interactive' }, controller.signal);
+    controller.abort();
+    await expect(request).rejects.toMatchObject({ code: 'ABORTED' });
+    expect(snapshots).toEqual([1, 0]);
+  });
   it('pending 列表与 respond', async () => {
     const broker = new InteractionBroker();
     const seen: string[] = [];

@@ -64,6 +64,8 @@ Windows 上 bash 工具优先使用 Git Bash（`C:\Program Files\Git\bin\bash.ex
 
 界面按终端行数分配输入、工具与审批面板，长输入软换行且光标始终可见。动画共用一个计时器，事件约 30Hz 合批；`NO_COLOR` 使用 mono 主题，`TERM=dumb` 自动使用 ASCII 装饰并停止动画。也可设置 `ROAST_ASCII=1`、`ROAST_REDUCED_MOTION=1`，或配置 `ui.ascii: true`、`ui.motion: "reduced"`。`/theme ember|aurora|daylight|mono` 即时切换；`ROAST_THEME` 优先。
 
+只读调研可用 `/swarm research <目标>`。scout / critic / judge 可以阅读、搜索和验证；无法确认是否只读的 shell 命令会显示审批卡片及 agent 名称，可批准本次执行或拒绝，不能记住为永久例外。等待期间 agent 标为“等待用户授权”，取消后审批卡片会移除。新读取及验证结果算作进展，长调研不会因为没有修改文件而触发停滞提醒；默认连续 12 个已完成步骤没有新结果才提醒 Queen 检查。配置 deny 和 plan 模式的拒绝仍生效；非交互 `-p` 模式没有审批界面，无法确认的操作会明确返回拒绝结果。
+
 ## 配置
 
 运行 `roast config`（会话内使用 `/provider`）打开终端向导。支持 DeepSeek、通义千问、智谱、Kimi / Moonshot、Kimi Code、豆包、腾讯混元、硅基流动、OpenAI、Claude、Gemini、OpenRouter，以及自定义 OpenAI 兼容 / Anthropic 端点。地址和模型均可编辑，豆包需填写控制台实际模型或 Endpoint ID，Gemini 使用 OpenAI 兼容接口。预设模型是建议，请按账号实际可用模型调整。

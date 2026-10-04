@@ -158,7 +158,7 @@ describe('Hive 防失控', () => {
       enqueue(e);
     };
     await drain(s, '派个人找东西');
-    expect(alerts.some((a) => a.includes('w1') && a.includes('没有实质进展'))).toBe(true);
+    expect(alerts.some((a) => a.includes('w1') && a.includes('没有新增工具结果'))).toBe(true);
     await s.shutdown();
   }, 30_000);
 });

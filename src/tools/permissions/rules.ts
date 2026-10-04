@@ -13,6 +13,8 @@ export type PermissionKind = 'read' | 'edit' | 'execute' | 'network' | 'interact
 export interface PermissionRequest {
   /** 宿主提供的 worktree 执行边界；不来自模型参数。 */
   executionRoot?: string;
+  /** Host-assigned role: unfamiliar shell commands require a one-time user approval. */
+  readOnlyRole?: string;
   tool: string;
   kind: PermissionKind;
   /** bash：命令；路径类：绝对路径；web_fetch：URL */

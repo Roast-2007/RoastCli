@@ -82,7 +82,7 @@ function Deck({ session, store, controller, onExit }: MissionControlProps) {
     }
   }, { isActive: card === undefined });
   const asciiState = { queued: '.', running: '*', waiting: 'o', paused: '||', done: '+', failed: 'x', cancelled: '-' };
-  const treeLines: Line[] = agents.map((a, i) => ({ text: `${i === index ? glyph.pointer : ' '} ${'  '.repeat(a.depth)}${ascii ? asciiState[a.state] : STATE_ICON[a.state]} ${a.id} [${a.role}]${a.worktree ? ` ${glyph.branch}` : ''}${a.report ? ` ${a.report.status}` : ''}`, tone: i === index ? 'accent' : a.state === 'done' ? 'ok' : a.state === 'failed' ? 'error' : 'text' }));
+  const treeLines: Line[] = agents.map((a, i) => ({ text: `${i === index ? glyph.pointer : ' '} ${'  '.repeat(a.depth)}${ascii ? asciiState[a.state] : STATE_ICON[a.state]} ${a.id} [${a.role}]${a.waitingFor ? ` ${a.waitingFor}` : ''}${a.worktree ? ` ${glyph.branch}` : ''}${a.report ? ` ${a.report.status}` : ''}`, tone: i === index ? 'accent' : a.state === 'done' ? 'ok' : a.state === 'failed' ? 'error' : 'text' }));
   const treeStart = Math.max(0, index - visible + 1);
   const timeline = ui.meta.messages.map((message) => messageLine(message, ascii));
   const board = session.swarm.board.list('/').map((m): Line => ({ text: `${m.key} v${m.version} · ${m.author}`, tone: 'muted' }));

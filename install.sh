@@ -13,5 +13,5 @@ fi
 
 package_url='https://github.com/Roast-2007/RoastCli/releases/latest/download/roastcli.tgz'
 printf '%s\n' 'Installing RoastCli…'
-npm install --global "$package_url"
+npm install --global --prefer-online "$package_url"
 printf '%s\n' 'Installed. Run roast config to set your API key, then run roast.'

@@ -19,6 +19,7 @@ import { ROLE_INFO, roleCard } from './roles.js';
 import type { Address, AgentInfo, AgentRole, Envelope, Report } from './types.js';
 import { formatMerge, reportWorktreeNote, wantsWorktree, worktreeNote, type IsolationMode, type WorktreeProvider } from './isolation.js';
 import type { Worktree } from './worktree.js';
+import { ProgressWatchdog } from './watchdog.js';
 
 export interface CreateRuntimeInput {
   id: string;
@@ -90,9 +91,6 @@ async function settleWithin(p: Promise<unknown>, ms: number): Promise<void> {
     clearTimeout(timer);
   }
 }
-/** 视为"实质进展"的工具 */
-const PROGRESS_TOOLS: ReadonlySet<string> = new Set(['edit', 'multi_edit', 'write', 'board_write', 'report', 'spawn_agent', 'send_message']);
-
 export class Supervisor {
   readonly bus: MessageBus;
   readonly board: Blackboard;
@@ -271,26 +269,24 @@ export class Supervisor {
     let timer: ReturnType<typeof setTimeout> | undefined;
     let lastText = '';
     let lastReason = 'completed';
-    let idleSteps = 0;
-    let alerted = false;
+    let offWatchdog: (() => void) | undefined;
     const limit = this.deps.maxAgentMs ?? 60 * 60_000;
     try {
       const started = await this.start(rec, modelRef);
       log = started.log;
       const { runtime, note } = started;
       rec.runtime = runtime;
+      const watchdog = new ProgressWatchdog(() => this.watchdogSteps);
+      offWatchdog = runtime.committer?.onCommit((event) => {
+        const alert = watchdog.observe(event);
+        if (!alert || !rec.info.parentId || rec.controller.signal.aborted || rec.info.report) return;
+        this.deliver(rec.info.parentId, this.systemEnvelope(id, rec.info.parentId, 'alert', `${id} 需要检查进展`,
+          `${id} 已连续 ${alert.steps} 个已完成步骤没有新增工具结果或产出。${alert.denied ? '其中有操作被拒绝，请先检查权限拒绝原因。' : '请检查是否重复相同操作或遇到工具错误。'}可用 agents_status 查看状态，再 send_message 给它 steer，或让它 report 当前结论。`));
+      });
       runtime.setPaused(rec.info.state === 'paused');
       timer = setTimeout(() => this.cancelSubtree(id, `运行超过 ${Math.round(limit / 60_000)} 分钟`), limit);
       for await (const ev of runtime.run(prompt + note, rec.controller.signal)) {
         this.deps.onAgentEvent?.(id, ev);
-        if (ev.type === 'tool-call-end' && !ev.isError && PROGRESS_TOOLS.has(ev.name)) idleSteps = 0;
-        if (ev.type === 'usage' && ++idleSteps >= this.watchdogSteps && !alerted && rec.info.parentId) {
-          alerted = true;
-          this.deliver(
-            rec.info.parentId,
-            this.systemEnvelope(id, rec.info.parentId, 'alert', `${id} 可能卡住了`, `${id} 已连续 ${idleSteps} 步没有实质进展（没有修改文件、写黑板或报告）。可以 send_message 给它 steer，或让它先 report 当前结论。`),
-          );
-        }
         if (ev.type === 'text-delta') lastText += ev.text;
         else if (ev.type === 'tool-call-start' || ev.type === 'turn-start') lastText = '';
         else if (ev.type === 'turn-end') lastReason = ev.reason;
@@ -299,6 +295,7 @@ export class Supervisor {
       lastReason = 'error';
       lastText = err instanceof Error ? err.message : String(err);
     } finally {
+      offWatchdog?.();
       clearTimeout(timer);
       await log?.close().catch((err: unknown) => { lastReason = 'error'; lastText = err instanceof Error ? err.message : String(err); });
       const cancelled = rec.controller.signal.aborted;
@@ -307,7 +304,8 @@ export class Supervisor {
         this.report(id, { agentId: id, status, summary: lastText.trim() || '（没有输出）', refs: [] });
       }
       const state: AgentInfo['state'] = cancelled ? 'cancelled' : rec.info.report?.status === 'failed' || lastReason === 'error' ? 'failed' : 'done';
-      rec.info = { ...rec.info, state, endedAt: this.now() };
+      const { waitingFor: _waiting, ...info } = rec.info;
+      rec.info = { ...info, state, endedAt: this.now() };
       this.deps.onAgentEnd?.(id);
       this.deps.onChange?.();
     }
@@ -440,9 +438,18 @@ export class Supervisor {
     const rec = this.recs.get(id);
     if (!rec?.info.parentId || !LIVE.has(rec.info.state)) return false;
     rec.runtime?.setPaused(paused);
-    rec.info = { ...rec.info, state: paused ? 'paused' : 'running' };
+    rec.info = { ...rec.info, state: paused ? 'paused' : rec.info.waitingFor ? 'waiting' : 'running' };
     this.deps.onChange?.();
     return true;
+  }
+
+  /** User approval is a wait, not stalled execution. */
+  setInteractionWaiting(id: string, reason?: string): void {
+    const rec = this.recs.get(id);
+    if (!rec || !LIVE.has(rec.info.state) || rec.info.waitingFor === reason) return;
+    const { waitingFor: _previous, ...info } = rec.info;
+    rec.info = { ...info, state: info.state === 'paused' ? 'paused' : reason ? 'waiting' : 'running', ...(reason ? { waitingFor: reason } : {}) };
+    this.deps.onChange?.();
   }
 
   /** 子 agent 的边界钩子：step 前投递 inbox；想结束时若仍有活跃子 agent 则等待（不耗 token） */

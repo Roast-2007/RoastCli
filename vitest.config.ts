@@ -4,6 +4,8 @@ export default defineConfig({
   test: {
     include: ['test/**/*.test.{ts,tsx}'],
     setupFiles: ['test/setup.ts'],
+    // Git and shell integration tests launch external processes; keep file concurrency bounded.
+    maxWorkers: 4,
     coverage: {
       provider: 'v8',
       include: ['src/**/*.{ts,tsx}'],

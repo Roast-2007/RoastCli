@@ -18,7 +18,7 @@ export type InteractionRequestBody =
       detail?: string;
       reason: string;
       suggestedRule?: string;
-      /** 高危强制询问：不提供"始终允许" */
+      /** 每次必须明确授权：不提供"始终允许" */
       forced?: boolean;
     }
   | { kind: 'question'; agentId: string; question: string; options?: string[] };
@@ -40,11 +40,22 @@ interface Pending {
 
 export class InteractionBroker {
   private readonly listeners = new Set<Listener>();
+  private readonly changeListeners = new Set<() => void>();
   private readonly waiting = new Map<string, Pending>();
 
   onRequest(listener: Listener): () => void {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
+  }
+
+  /** Lifecycle observers do not themselves provide an interactive approval interface. */
+  onChange(listener: () => void): () => void {
+    this.changeListeners.add(listener);
+    return () => this.changeListeners.delete(listener);
+  }
+
+  private changed(): void {
+    for (const listener of this.changeListeners) listener();
   }
 
   get interactive(): boolean {
@@ -62,6 +73,7 @@ export class InteractionBroker {
     return new Promise<InteractionResponse>((resolve, reject) => {
       const onAbort = () => {
         this.waiting.delete(req.id);
+        this.changed();
         reject(new RoastError('ABORTED', '等待用户响应时被中断'));
       };
       signal.addEventListener('abort', onAbort, { once: true });
@@ -72,6 +84,7 @@ export class InteractionBroker {
           resolve(r);
         },
       });
+      this.changed();
       for (const l of this.listeners) l(req);
     });
   }
@@ -80,6 +93,7 @@ export class InteractionBroker {
     const p = this.waiting.get(id);
     if (!p) return false;
     this.waiting.delete(id);
+    this.changed();
     p.resolve(response);
     return true;
   }
