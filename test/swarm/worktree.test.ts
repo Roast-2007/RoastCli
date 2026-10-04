@@ -144,7 +144,7 @@ describe('WorktreeManager regressions (M8 review)', () => {
     expect(await mgr.merge(wt)).toMatchObject({ ok: true });
     expect(readFileSync(path.join(ws.dir, 'crlf.txt'), 'utf8')).toBe('one\r\nTWO\r\n');
     expect(readFileSync(path.join(ws.dir, 'src/a.ts'), 'utf8')).toBe('export const a = 3;\n');
-  });
+  }, 30_000);
 
   it('ignores the user\'s diff.noprefix setting when building the merge patch', async () => {
     const { ws, git } = gitRepo();

@@ -12,6 +12,7 @@
  */
 import { readFileSync } from 'node:fs';
 import { Command } from 'commander';
+import { VERSION } from '../core/version.js';
 import { asRoastError, RoastError } from '../core/errors.js';
 import { createSession, type Session } from '../agent/session.js';
 import { deriveMessages, loadRunLog } from '../session/projection.js';
@@ -246,7 +247,7 @@ async function main(): Promise<void> {
   program
     .name('roast')
     .description('roast —— coding CLI（agent loop + 可插拔 provider）')
-    .version('0.1.0')
+    .version(VERSION)
     .option('-m, --model <provider:model>', '覆盖 config.default 的模型引用');
 
   program

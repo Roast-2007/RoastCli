@@ -13,7 +13,7 @@ npm install -g https://github.com/Roast-2007/RoastCli/releases/latest/download/r
 安装包来自本项目的 GitHub Release。当前尚未发布到 npm registry，因此请使用完整链接，而非 `npm install -g roastcli`。也可锁定版本：
 
 ```sh
-npm install -g https://github.com/Roast-2007/RoastCli/releases/download/v0.1.0/roastcli.tgz
+npm install -g https://github.com/Roast-2007/RoastCli/releases/download/v0.1.1/roastcli.tgz
 ```
 
 ## 安装脚本

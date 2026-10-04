@@ -3,7 +3,8 @@ import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 
 // Inspect npm's actual publish list; never read or print local credential values.
-const npmArgs = ['pack', '--dry-run', '--json', '--ignore-scripts'];
+// npm 10 can run prepare during a dry run; keep lifecycle output away from JSON.
+const npmArgs = ['pack', '--dry-run', '--json', '--ignore-scripts', '--foreground-scripts=false'];
 const output = process.platform === 'win32'
   ? execFileSync('cmd.exe', ['/d', '/s', '/c', 'npm.cmd', ...npmArgs], { encoding: 'utf8', windowsHide: true })
   : execFileSync('npm', npmArgs, { encoding: 'utf8' });

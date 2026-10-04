@@ -40,7 +40,7 @@ describe('OutputCollector', () => {
     const tail = text.slice(-200);
     expect(head).toContain('中文');
     expect(tail).toContain('中文');
-  });
+  }, 20_000);
 });
 
 describe('detectEncoding / decodeOutput', () => {

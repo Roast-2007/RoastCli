@@ -10,6 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { roastHome, type ProviderProfile, type RoastConfig } from '../../src/core/config.js';
 import { saveCredential } from '../../src/core/credentials.js';
 import { RoastError } from '../../src/core/errors.js';
+import { VERSION } from '../../src/core/version.js';
 import { userMessage, type StreamChunk } from '../../src/core/types.js';
 import { OpenAICompatAdapter } from '../../src/providers/openai-compat/adapter.js';
 import { AnthropicAdapter } from '../../src/providers/anthropic/adapter.js';
@@ -83,7 +84,7 @@ describe('OpenAICompatAdapter.stream', () => {
     const kimiRequest = JSON.parse(String(fetchMock.mock.calls[0]![1].body));
     expect(kimiRequest.reasoning_effort).toBe('max');
     expect(kimiRequest.messages[1].reasoning_content).toBe('current thinking');
-    expect(fetchMock.mock.calls[0]![1].headers).toHaveProperty('user-agent', 'RoastCli/0.1.0');
+    expect(fetchMock.mock.calls[0]![1].headers).toHaveProperty('user-agent', `RoastCli/${VERSION}`);
     const claude = new AnthropicAdapter({ ...anthropicProfile, models: { m: { reasoningEffort: 'low' } } }, 'claude');
     await collectAll(claude.stream({ model: 'm', messages: [userMessage('hi')] }));
     expect(JSON.parse(String(fetchMock.mock.calls[1]![1].body)).output_config).toEqual({ effort: 'low' });

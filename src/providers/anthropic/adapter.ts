@@ -8,6 +8,7 @@
  * 请求体构建见 request.ts（纯函数，含 thinking 签名回放）。
  */
 import type { GenerateOptions, StreamChunk } from '../../core/types.js';
+import { VERSION } from '../../core/version.js';
 import { resolveApiKey, type ProviderProfile } from '../../core/config.js';
 import { RoastError, asRoastError, httpErrorCode, isRetryableCode, parseRetryAfter } from '../../core/errors.js';
 
@@ -83,7 +84,7 @@ export class AnthropicAdapter implements ProviderAdapter {
         headers: {
           'content-type': 'application/json',
           'x-api-key': apiKey,
-          'user-agent': 'RoastCli/0.1.0',
+          'user-agent': `RoastCli/${VERSION}`,
           'anthropic-version': ANTHROPIC_VERSION,
           ...this.options.headers,
         },

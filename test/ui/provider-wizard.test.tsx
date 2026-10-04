@@ -41,7 +41,8 @@ describe('ProviderWizard', () => {
     expect(frames.join('\n')).not.toContain('sk-wizard-secret');
     await keys(stdin, enter);
     expect(lastFrame()).toContain('保存成功');
-    expect(lastFrame()).toContain('下一次启动生效');
+    // Long temporary paths can wrap the message differently on macOS.
+    expect(lastFrame()!.replace(/\s+/g, '')).toContain('下一次启动生效');
     const config = loadConfig(workspace.dir)!;
     expect(config.default).toBe('deepseek:deepseek-chat');
     expect(resolveApiKey(config.providers['deepseek']!, 'deepseek')).toBe('sk-wizard-secret');

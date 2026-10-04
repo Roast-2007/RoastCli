@@ -7,6 +7,7 @@
  * SERVER 错误终结；外部 abort → finish 'aborted'。任何路径恰好产出一个 finish chunk。
  */
 import type { GenerateOptions, StreamChunk } from '../../core/types.js';
+import { VERSION } from '../../core/version.js';
 import { resolveApiKey, type ProviderProfile } from '../../core/config.js';
 import { RoastError, asRoastError, httpErrorCode, isRetryableCode, parseRetryAfter } from '../../core/errors.js';
 
@@ -80,7 +81,7 @@ export class OpenAICompatAdapter implements ProviderAdapter {
         method: 'POST',
         headers: {
           'content-type': 'application/json',
-          'user-agent': 'RoastCli/0.1.0',
+          'user-agent': `RoastCli/${VERSION}`,
           authorization: `Bearer ${apiKey}`,
           ...this.options.headers,
         },
