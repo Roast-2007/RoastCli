@@ -29,3 +29,13 @@ jobs:
       - run: pnpm test
       - run: pnpm build
       - run: pnpm check:package
+      - name: Smoke test global installation
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/roastcli-package"
+          npm pack --pack-destination "$RUNNER_TEMP/roastcli-package"
+          npm install --global --no-audit --no-fund --prefix "$RUNNER_TEMP/roastcli-install" "$RUNNER_TEMP/roastcli-package"/roastcli-*.tgz
+          export PATH="$RUNNER_TEMP/roastcli-install/bin:$RUNNER_TEMP/roastcli-install:$PATH"
+          test "$(roast --version)" = "$(node -p 'require("./package.json").version')"
+          roast --help
+          roast config --help
