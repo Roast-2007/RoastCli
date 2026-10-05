@@ -1,63 +1,53 @@
 import { useState } from 'react';
-import { Box, Text, useInput } from 'ink';
+import { useInput } from 'ink';
 import type { Session } from '../../agent/session.js';
 import type { UiStore, OverlayKind } from '../store/store.js';
 import type { UiController } from '../controller.js';
 import { COMMANDS, KEYS_HELP } from '../commands.js';
 import { formatContextStats } from '../format-context.js';
-import { useTheme } from '../theme.js';
-import { useTerminal, useGlyphs } from '../terminal.js';
-import { terminalText } from '../../core/terminal-text.js';
 import { listRuns } from '../../cli/logs.js';
 import { logsRootOf } from '../../agent/session.js';
 import { canonicalPath } from '../../core/paths.js';
 import { CommandPanel } from './CommandPanel.js';
+import { MessagePanel } from './MessagePanel.js';
+import { SelectPanel } from './SelectPanel.js';
 
-export function Overlay({ kind, session, store, controller, height }: { kind: OverlayKind; session: Session; store: UiStore; controller: UiController; height: number }) {
-  if (!['help', 'rewind', 'context', 'sessions'].includes(kind)) return <CommandPanel kind={kind} session={session} store={store} controller={controller} height={height} />;
-  return <LegacyOverlay kind={kind} session={session} store={store} controller={controller} height={height} />;
+type Props = { kind: OverlayKind; session: Session; store: UiStore; controller: UiController; height: number };
+
+export function Overlay(props: Props) {
+  if (props.kind === 'help') return <HelpPanel {...props} />;
+  if (props.kind === 'context') return <ContextPanel {...props} />;
+  if (props.kind === 'rewind' || props.kind === 'sessions') return <HistoryPanel {...props} />;
+  return <CommandPanel {...props} />;
 }
 
-function LegacyOverlay({ kind, session, store, controller, height }: { kind: OverlayKind; session: Session; store: UiStore; controller: UiController; height: number }) {
-  const theme = useTheme();
-  const { ascii } = useTerminal();
-  const glyph = useGlyphs();
-  const [selected, setSelected] = useState(0);
-  const [confirm, setConfirm] = useState(false);
+function HelpPanel({ store, height }: Props) {
   const close = () => store.setMeta({ overlay: null });
-  const turns = session.listTurns().slice().reverse();
+  useInput((input) => { if (input === '?') close(); });
+  return <MessagePanel title="帮助 · ROAST" text={`${KEYS_HELP}\n\n命令：\n${COMMANDS.map((c) => `/${c.name}${c.args ? ` ${c.args}` : ''}\n  ${c.description}`).join('\n\n')}`} height={height} onClose={close} />;
+}
+
+function ContextPanel({ session, store, controller, height }: Props) {
+  const [manage, setManage] = useState(false), [item, setItem] = useState<string | null>(null);
   const stats = session.contextStats();
-  const runs = kind === 'sessions' ? listRuns(logsRootOf(session.config, session.log.header.cwd), 100).filter((r) => canonicalPath(r.cwd) === canonicalPath(session.log.header.cwd) && r.runId !== session.log.header.runId).sort((a, b) => b.mtimeMs - a.mtimeMs) : [];
-  const entries = kind === 'help' ? [...KEYS_HELP.split('\n'), '', ...COMMANDS.map((c) => `/${c.name} ${c.args ?? ''}  ${c.description}`)] : kind === 'rewind' ? turns.map((t) => `${t.turn}. ${t.text}`) : kind === 'sessions' ? runs.map((r) => `${r.runId} · ${r.provider}:${r.model} · ${new Date(r.mtimeMs).toLocaleString()}`) : formatContextStats(stats).split('\n');
-  const border = height >= 6;
-  const count = Math.max(1, height - (border ? 2 : 0) - 2);
-  const index = Math.min(selected, Math.max(0, entries.length - 1));
-  const first = Math.max(0, index - count + 1);
-  useInput((input, key) => {
-    if (key.escape || (key.ctrl && input === 'c') || input === '?') { if (confirm) setConfirm(false); else close(); return; }
-    if (key.upArrow || input === 'k') { setConfirm(false); return setSelected(Math.max(0, index - 1)); }
-    if (key.downArrow || input === 'j') { setConfirm(false); return setSelected(Math.min(entries.length - 1, index + 1)); }
-    if (key.pageUp) return setSelected(Math.max(0, index - count));
-    if (key.pageDown) return setSelected(Math.min(entries.length - 1, index + count));
-    if (key.home) return setSelected(0);
-    if (key.end) return setSelected(Math.max(0, entries.length - 1));
-    if (key.return && kind === 'help') {
-      const command = COMMANDS[index - KEYS_HELP.split('\n').length - 1];
-      if (command) { close(); controller.runCommand(`/${command.name}`); }
-    }
-    if (key.return && kind === 'rewind' && turns[index]) {
-      if (!confirm) return setConfirm(true);
-      close(); controller.runCommand(`/rewind ${turns[index]!.turn}`);
-    }
-    if (key.return && kind === 'sessions' && runs[index]) { close(); controller.resumeSession(runs[index]!.logPath); }
-    if (kind === 'context' && ['p', 'u', 'd'].includes(input)) {
-      const item = stats.largest.find((entry) => entries[index]?.includes(entry.id));
-      if (item) controller.runCommand(`/context ${input === 'p' ? 'pin' : input === 'u' ? 'unpin' : 'drop'} ${item.id}`);
-    }
-  });
-  return <Box flexDirection="column" borderStyle={border ? ascii ? 'classic' : 'round' : undefined} borderColor={theme.accent} paddingX={border ? 1 : 0} height={height} overflow="hidden" flexShrink={0}>
-    <Text bold color={theme.accent} wrap="truncate-end">{kind === 'help' ? '帮助 · ROAST' : kind === 'rewind' ? '可回退的轮次 · 文件 + 对话' : kind === 'sessions' ? '恢复会话 · 最近活动优先' : '上下文 · Context'}</Text>
-    {entries.length ? entries.slice(first, first + count).map((line, i) => <Text key={i} wrap="truncate-end" color={first + i === index ? theme.accent2 : undefined}>{(kind === 'rewind' || kind === 'sessions') && first + i === index ? `${glyph.pointer} ` : '  '}{terminalText(line)}</Text>) : <Text dimColor>{kind === 'sessions' ? '没有其他历史会话' : '还没有可回退的轮次'}</Text>}
-    <Text color={confirm ? theme.warn : theme.muted} wrap="truncate-end">{confirm ? `再按 Enter 回退至第 ${turns[index]?.turn} 轮开始前；Esc 取消` : `↑↓ 选择 · PgUp/PgDn 翻页${kind === 'rewind' ? ' · Enter 回退' : kind === 'help' ? ' · Enter 打开命令' : kind === 'context' ? ' · p 钉住 / u 取消 / d 折叠' : ''} · Esc 关闭`}</Text>
-  </Box>;
+  const close = () => store.setMeta({ overlay: null });
+  useInput((input) => { if (!manage && input === 'm' && stats.largest.length) setManage(true); });
+  if (!manage) return <MessagePanel title={`上下文 · Context${stats.largest.length ? ' · m 管理工具结果' : ''}`} text={formatContextStats(stats)} height={height} onClose={close} />;
+  const selected = stats.largest.find((entry) => entry.id === item);
+  if (selected) return <SelectPanel key={selected.id} title={`上下文 · ${selected.id}`} height={height} entries={[
+    { id: selected.pinned ? 'unpin' : 'pin', label: selected.pinned ? '取消钉住' : '钉住工具结果' },
+    { id: 'drop', label: '折叠工具结果（仍可 recall）' },
+  ]} onClose={() => setItem(null)} onSelect={(entry) => { controller.runCommand(`/context ${entry.id} ${selected.id}`); setItem(null); }} />;
+  return <SelectPanel key="tools" title="上下文 · 管理工具结果" height={height} entries={stats.largest.map((entry) => ({ id: entry.id, label: `${entry.id} · ${entry.name} · ${entry.tokens} tokens${entry.pinned ? ' · 已钉住' : entry.elided ? ' · 已折叠' : ''}` }))} onClose={() => setManage(false)} onSelect={(entry) => setItem(entry.id)} />;
+}
+
+function HistoryPanel({ kind, session, store, controller, height }: Props) {
+  const [turn, setTurn] = useState<number | null>(null);
+  const close = () => store.setMeta({ overlay: null });
+  if (kind === 'rewind') {
+    if (turn !== null) return <SelectPanel key="confirm" title={`回退至第 ${turn} 轮开始前？`} message="恢复文件与对话；回退后的轮次仍保存在日志中" height={height} entries={[{ id: 'confirm', label: `确认回退至第 ${turn} 轮` }, { id: 'back', label: '返回轮次列表' }]} onClose={() => setTurn(null)} onSelect={(entry) => { if (entry.id === 'back') return setTurn(null); close(); controller.runCommand(`/rewind ${turn}`); }} />;
+    return <SelectPanel key="turns" title="可回退的轮次 · 文件 + 对话" height={height} message={session.listTurns().length ? undefined : '还没有可回退的轮次'} entries={session.listTurns().slice().reverse().map((t) => ({ id: String(t.turn), label: `${t.turn}. ${t.text}` }))} onClose={close} onSelect={(entry) => setTurn(Number(entry.id))} />;
+  }
+  const runs = listRuns(logsRootOf(session.config, session.log.header.cwd), 100).filter((r) => canonicalPath(r.cwd) === canonicalPath(session.log.header.cwd) && r.runId !== session.log.header.runId).sort((a, b) => b.mtimeMs - a.mtimeMs);
+  return <SelectPanel title="恢复会话 · 最近活动优先" height={height} message={runs.length ? undefined : '没有其他历史会话'} entries={runs.map((r) => ({ id: r.logPath, label: `${r.runId} · ${r.provider}:${r.model} · ${new Date(r.mtimeMs).toLocaleString()}` }))} onClose={close} onSelect={(entry) => { close(); controller.resumeSession(entry.id); }} />;
 }

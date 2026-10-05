@@ -74,7 +74,7 @@ export function messageLine(e: Envelope, ascii = false): Line {
  * 返回实际可见的行与修正后的 offset（不会滚出顶部）。
  */
 export function windowLines(lines: Line[], height: number, offset: number): { shown: Line[]; offset: number } {
-  const h = Math.max(1, height);
+  const h = Math.max(0, height);
   const maxOffset = Math.max(0, lines.length - h);
   const o = Math.min(Math.max(0, offset), maxOffset);
   return { shown: lines.slice(Math.max(0, lines.length - h - o), lines.length - o), offset: o };

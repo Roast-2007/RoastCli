@@ -16,6 +16,21 @@ export function inlineLayout(rows: number, content: { tools: number; todos: numb
   return { status, interaction, input, detail, stream, tools, todos, agents };
 }
 
+/** Fullscreen keeps one spare terminal row so Windows never scrolls a painted frame. */
+export function fullscreenLayout(rows: number, content: { interaction: boolean; detail: boolean; todos: boolean; agents: boolean }) {
+  const height = Math.max(1, rows - 1);
+  const header = height >= 11 ? 2 : height >= 5 ? 1 : 0;
+  const status = height >= 3 ? 1 : 0;
+  let left = height - header - status;
+  const input = Math.min(Math.max(1, left - 1), content.interaction ? 16 : Math.max(1, Math.min(7, Math.floor(rows / 6))));
+  left -= input;
+  const take = (want: number) => { const n = Math.max(0, Math.min(Math.max(0, left - 1), want)); left -= n; return n; };
+  const hint = take(height >= 11 ? 1 : 0);
+  const todos = !content.interaction && !content.detail && content.todos ? take(rows >= 32 ? 4 : rows >= 20 ? 2 : 0) : 0;
+  const agents = !content.interaction && !content.detail && content.agents ? take(rows >= 32 ? 4 : rows >= 20 ? 2 : 0) : 0;
+  return { height, header, status, input, hint, todos, agents, body: Math.max(0, left) };
+}
+
 export function missionLayout(columns: number, rows: number, footer: number) {
   const height = Math.max(1, rows - 1);
   const treeWidth = columns >= 70 ? Math.min(30, Math.floor(columns * 0.24)) : 0;

@@ -26,6 +26,7 @@ import { inlineLayout } from './layout.js';
 import { TerminalContext, terminalPreferences, useGlyphs } from './terminal.js';
 import { Overlay } from './components/Overlay.js';
 import { terminalText } from '../core/terminal-text.js';
+import { FullScreen } from './FullScreen.js';
 
 function clipTail(text: string, maxLines: number): string {
   const lines = text.split('\n');
@@ -94,6 +95,10 @@ function Thinking({ label }: { label: string }) {
 
 export interface AppProps {
   session: Session;
+  /** Fixed-height alternate-screen workspace; inline remains available to embedders. */
+  fullScreen?: boolean;
+  /** Play once on first interactive mount, never on screen handoffs. */
+  startup?: boolean;
   /** 外部创建的 store / 控制器（CLI 用，跨屏幕切换保留）；缺省时组件内部创建（测试用） */
   store?: UiStore;
   controller?: UiController;
@@ -106,7 +111,7 @@ export interface AppProps {
 }
 
 export function App(props: AppProps) {
-  return <Shell {...props} />;
+  return props.fullScreen ? <FullScreen {...props} /> : <Shell {...props} />;
 }
 
 /** 两次 Esc 的判定间隔 */

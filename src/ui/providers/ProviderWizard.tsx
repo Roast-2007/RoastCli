@@ -12,6 +12,8 @@ import { absoluteOrigin } from '../input/cursor.js';
 import { editorViewport } from '../layout.js';
 import { createEditor } from '../input/editor.js';
 import { TerminalContext, terminalPreferences, useGlyphs } from '../terminal.js';
+import { useScroll } from '../scroll.js';
+import { motionColor, useEntrance } from '../motion.js';
 
 export interface ProviderWizardProps {
   cwd: string;
@@ -24,7 +26,7 @@ function cleanInput(text: string): string {
 }
 
 /** Local-only form input: never uses the conversation history or UI store. */
-export function Field({ label, value, secret, active, onChange }: { label: string; value: string; secret?: boolean; active: boolean; onChange(value: string): void }) {
+export function Field({ label, value, secret, active, onChange, showLabel = true, acceptInput }: { label: string; value: string; secret?: boolean; active: boolean; onChange(value: string): void; showLabel?: boolean; acceptInput?(): boolean }) {
   const theme = useTheme();
   const glyph = useGlyphs();
   const { columns } = useWindowSize();
@@ -43,6 +45,7 @@ export function Field({ label, value, secret, active, onChange }: { label: strin
   const origin = active ? absoluteOrigin(ref.current) : null;
   if (active) setCursorPosition(origin ? { x: origin.x + 3 + displayWidth(shown.slice(0, position - start)), y: origin.y } : undefined);
   const insert = (raw: string) => {
+    if (acceptInput?.() === false) return;
     const text = cleanInput(raw);
     const current = inputState.current;
     current.value = current.value.slice(0, current.cursor) + text + current.value.slice(current.cursor);
@@ -52,6 +55,7 @@ export function Field({ label, value, secret, active, onChange }: { label: strin
   };
   usePaste(insert, { isActive: active });
   useInput((input, key) => {
+    if (acceptInput?.() === false) return;
     const current = inputState.current;
     const move = (next: number) => { current.cursor = next; setCursor(next); };
     const replace = (next: string, col: number) => { current.value = next; onChange(next); move(col); };
@@ -66,7 +70,7 @@ export function Field({ label, value, secret, active, onChange }: { label: strin
     if (input) insert(input);
   }, { isActive: active });
   return <Box flexDirection="column">
-    <Text color={active ? theme.accent : undefined} wrap="truncate-end">{label}</Text>
+    {showLabel ? <Text color={active ? theme.accent : undefined} wrap="truncate-end">{label}</Text> : null}
     <Box ref={ref}>
       <Text color={active ? theme.accent : undefined} wrap="truncate-end">{active ? ` ${glyph.pointer} ` : '   '}{active ? <>{shown.slice(0, position - start)}<Text inverse>{graphemes(shown.slice(position - start))[0]?.text ?? ' '}</Text>{shown.slice(nextBoundary(shown, position - start))}</> : shown.trimEnd() || '（未填写）'}</Text>
     </Box>
@@ -97,7 +101,9 @@ function Wizard({ cwd, onExit }: ProviderWizardProps) {
   const [loaded, setLoaded] = useState(read);
   const [step, setStep] = useState<'home' | 'preset' | 'connection' | 'credential' | 'models' | 'review' | 'saved'>('home');
   const stepRef = useRef(step); stepRef.current = step;
-  const [selection, setSelection] = useState(0);
+  const [selection, setSelectionState] = useState(0);
+  const selectionRef = useRef(selection);
+  const setSelection = (next: number | ((value: number) => number)) => { selectionRef.current = typeof next === 'function' ? next(selectionRef.current) : next; setSelectionState(selectionRef.current); };
   const [field, setFieldState] = useState(0);
   const fieldRef = useRef(field); fieldRef.current = field;
   const setField = (value: number | ((current: number) => number)) => {
@@ -111,7 +117,6 @@ function Wizard({ cwd, onExit }: ProviderWizardProps) {
   const [savedMessage, setSavedMessage] = useState('');
   const [hasSaved, setHasSaved] = useState(false);
   const [warnings, setWarnings] = useState<string[]>([]);
-  const [offset, setOffset] = useState(0);
   const [remoteModels, setRemoteModels] = useState<CatalogModel[]>([]);
   const [modelMessage, setModelMessage] = useState('');
   const [refresh, setRefresh] = useState(0);
@@ -120,7 +125,7 @@ function Wizard({ cwd, onExit }: ProviderWizardProps) {
   const presets = Object.values(PROVIDER_PRESETS);
   const homeEntries = ['＋ 添加供应商', ...names.map((name) => `${name} · ${settings.default?.startsWith(`${name}:`) ? `默认 ${settings.default.slice(name.length + 1)} · ` : ''}${credentialStatus(settings, name)}`)];
   const entries = step === 'home' ? homeEntries : presets.map((p) => p.label);
-  const go = (next: typeof step) => { stepRef.current = next; setStep(next); setError(''); setField(0); setOffset(0); };
+  const go = (next: typeof step) => { stepRef.current = next; setStep(next); setError(''); setField(0); pageScroll.move(0); };
   const update = (patch: Partial<ProviderDraft>) => { if (draftRef.current) setDraft({ ...draftRef.current, ...patch }); setError(''); };
   const openModels = () => {
     const current = draftRef.current;
@@ -166,11 +171,13 @@ function Wizard({ cwd, onExit }: ProviderWizardProps) {
     '下一次启动生效。', ...warnings,
   ] : [];
   const pageLines = (loaded.error ? [`${loaded.error} · Enter 重试`] : step === 'review' ? reviewText : step === 'saved' ? [savedMessage, ...warnings] : []).flatMap((line) => wrapDisplay(terminalText(line), Math.max(1, columns - 2)));
-  const pageOffset = Math.min(offset, Math.max(0, pageLines.length - bodyHeight));
+  const pageScroll = useScroll(pageLines.length, bodyHeight), pageOffset = pageScroll.start;
+  const accent = motionColor(theme.border, theme.accent, useEntrance(step));
 
   useInput((input, key) => {
     const step = stepRef.current;
     const field = fieldRef.current;
+    const selection = selectionRef.current;
     if (step === 'models') return;
     const draft = draftRef.current;
     if (key.ctrl && input === 'c') return onExit(hasSaved);
@@ -181,10 +188,7 @@ function Wizard({ cwd, onExit }: ProviderWizardProps) {
       if (step === 'connection' && !draft?.existing) { setSelection(0); return go('preset'); }
       setDraft(null); setSelection(0); return go('home');
     }
-    if (pageLines.length && (key.pageDown || key.pageUp || key.downArrow || key.upArrow)) {
-      const delta = (key.pageUp || key.upArrow ? -1 : 1) * (key.pageDown || key.pageUp ? bodyHeight : 1);
-      return setOffset(Math.max(0, Math.min(pageLines.length - bodyHeight, pageOffset + delta)));
-    }
+    if (pageLines.length && pageScroll.onKey(input, key)) return;
     if (loaded.error) {
       if (key.return) setLoaded(read());
       return;
@@ -259,7 +263,7 @@ function Wizard({ cwd, onExit }: ProviderWizardProps) {
   }
   return <Box flexDirection="column" height={Math.max(1, rows - 1)} overflow="hidden" paddingX={1}>
     <Box flexDirection="column" flexShrink={0}>
-    <Text bold color={theme.accent} wrap="truncate-end">ROAST · 供应商配置</Text>
+    <Text bold color={accent} wrap="truncate-end">ROAST · 供应商配置</Text>
     <Text bold wrap="truncate-end">{title}</Text>
     {!compact ? <Text dimColor wrap="truncate-end">保存位置：{settings.file}</Text> : null}
     </Box>
@@ -283,6 +287,6 @@ function Wizard({ cwd, onExit }: ProviderWizardProps) {
     </Box>
     {error ? <Box flexDirection="column" flexShrink={0}>{wrapDisplay(terminalText(error), Math.max(1, columns - 2)).slice(0, Math.min(2, Math.max(1, rows - 7))).map((line, i) => <Text key={i} color={theme.danger} wrap="truncate-end">{line}</Text>)}</Box> : null}
     <Box flexGrow={1} flexShrink={0} />
-    <Box height={1} flexShrink={0}><Text dimColor wrap="truncate-end">{step === 'review' ? 'Enter 保存 · Ctrl+L 模型列表 · Esc 修改' : step === 'saved' ? 'Enter 继续 · Esc 完成' : step === 'credential' ? 'Tab 字段 · Enter 确认 · Ctrl+L 模型列表 · Esc 返回' : step === 'connection' ? compact ? `Tab 字段 ${field + 1}/3 · Enter 下一步 · Esc 返回` : 'Tab / Shift+Tab 字段 · Enter 下一步 · Esc 返回' : '↑↓ 选择 · Enter 确认 · Esc 返回'}{pageLines.length > bodyHeight ? ` · PgUp/PgDn ${pageOffset + 1}/${pageLines.length}` : ''}</Text></Box>
+    <Box height={1} flexShrink={0}><Text dimColor wrap="truncate-end">{step === 'review' ? 'Enter 保存 · Ctrl+L 模型列表 · Esc 修改' : step === 'saved' ? 'Enter 继续 · Esc 完成' : step === 'credential' ? 'Tab 字段 · Enter 确认 · Ctrl+L 模型列表 · Esc 返回' : step === 'connection' ? compact ? `Tab 字段 ${field + 1}/3 · Enter 下一步 · Esc 返回` : 'Tab / Shift+Tab 字段 · Enter 下一步 · Esc 返回' : '↑↓ 选择 · Enter 确认 · Esc 返回'}{pageLines.length > bodyHeight ? ` · ↑↓ 滚动 ${pageOffset + 1}/${pageLines.length}` : ''}</Text></Box>
   </Box>;
 }

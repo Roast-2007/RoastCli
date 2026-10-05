@@ -47,7 +47,8 @@ Windows 上 bash 工具优先使用 Git Bash（`C:\Program Files\Git\bin\bash.ex
 |---|---|
 | Enter / Shift+Enter、Ctrl+J、行尾 `\` | 发送 / 换行 |
 | Esc / Ctrl+C | 中断当前回合（空闲时连按两次 Esc 打开回退列表，Ctrl+C 退出） |
-| Ctrl+O | 查看最近工具的完整输出；PgUp/PgDn 翻页，Home/End 到首尾 |
+| Ctrl+O | 查看最近工具的完整输出；↑↓ 按行滚动，Home/End 到首尾，Ctrl+O / Esc 返回 |
+| Shift+↑↓ / PgUp | 进入连续阅读；↑↓ 滚动，Home 到顶部，End / Enter / Esc 返回输入 |
 | Shift+Tab | 切换权限模式 default → acceptEdits → plan → yolo |
 | Ctrl+G | 进入 / 退出全屏 Mission Control |
 | Tab / ↑↓ | 补全命令或 `@文件` / 选择补全项；`/` 或命令前缀可直接 Enter 打开选中命令 |
@@ -58,15 +59,17 @@ Windows 上 bash 工具优先使用 Git Bash（`C:\Program Files\Git\bin\bash.ex
 
 **斜杠命令**：`/help /provider`（别名 `/config`）、`/clear /resume [runId] /context [pin|unpin|drop <id>] /compact [关注点] /rewind [N] /mode /model [provider:model] [effort|auto] /cost /todo /init /swarm [模板] <目标> /agents /board [key] /theme [名称] /skills /memory [关键词] /mcp /logs /exit`。`/hive` 是 `/swarm` 的别名，`/hive models` 打开角色模型配置。另外，每个 skill 都可以用 `/技能名 参数` 直接调用。
 
-不带参数的查看、选择与配置命令打开交互面板，↑↓ / PgUp/PgDn 选择，Enter 确认，Esc 返回；帮助页也可 Enter 打开选中的命令。`/model` 自动获取供应商列表，直接输入搜索，Ctrl+R 刷新；选定模型后再选择 effort。失败、接口不支持 `/models` 或项目连接未信任时保留已配置模型并提示原因，可选择“手动输入自定义模型”。模型与 effort 在主会话和子 agent 空闲时即时切换，写入会话日志并在恢复时保留；不改全局默认模型，费用按各次实际使用的模型累计。也可直接 `/model custom:model-a high` 或 `/model custom:model-a auto`。
+交互启动默认全屏，展示可跳过的 ROAST 字符动画；输入框与状态栏固定在底部。长回答和计划用 Shift+↑↓ / PgUp 进入连续阅读，↑↓ / j/k 逐行滚动，Home 到顶部，End / Enter / Esc 返回输入。阅读期间新输出保留当前视口，返回输入后继续跟随最新内容。
+
+不带参数的选择与配置命令打开菜单，↑↓ 选择、Enter 确认、Esc 返回；/help、费用、日志与正文面板直接阅读，↑↓ 按行滚动，Home/End 到两端。/help 的 Enter 只返回对话，不执行命令。/context 默认阅读统计，按 m 管理工具结果，只选择实际可钉住或折叠的条目。`/model` 自动获取供应商列表，直接输入搜索，Ctrl+R 刷新；选定模型后再选择 effort。失败、接口不支持 `/models` 或项目连接未信任时保留已配置模型并提示原因，可选择“手动输入自定义模型”。模型与 effort 在主会话和子 agent 空闲时即时切换，写入会话日志并在恢复时保留；不改全局默认模型，费用按各次实际使用的模型累计。也可直接 `/model custom:model-a high` 或 `/model custom:model-a auto`。
 
 `/clear` 清空显示并保留上下文与草稿，`/resume` 打开最近活动优先的会话菜单。回退菜单用 ↑↓ 选择、两次 Enter 确认。`/skills` 选择技能并输入参数，`/board` 阅读完整值，`/agents` 查看任务与报告、暂停 / 恢复、发送指示或确认取消子树，`/swarm` 选择策略后输入目标。
 
-**Mission Control**（Ctrl+G）：宽终端展示 agent 树、输出、消息和黑板；窄终端自动改为两栏或单栏。`j/k` 选择 agent，`Tab` / `1–4` 查看输出、消息正文、黑板内容、上下文，`b/f` 或 PgUp/PgDn 翻页、`G` 回到底部，`m` 给主会话或子 agent 发指示，`p` 暂停 / 恢复，`x` 两次确认取消子树，`q` / `Esc` 返回。暂停在步骤边界生效，执行中的工具会正常收尾。
+**Mission Control**（Ctrl+G）：宽终端展示 agent 树、输出、消息和黑板；窄终端自动改为两栏或单栏。`j/k` 在输出视图选择 agent（其他视图按行滚动），`Tab` / `1–4` 查看输出、消息正文、黑板内容、上下文，`↑↓` 连续滚动正文，`b/f` 或 PgUp/PgDn 快速滚动、Home 到顶部、`G` / End 回到底部，`m` 给主会话或子 agent 发指示，`p` 暂停 / 恢复，`x` 两次确认取消子树，`q` / `Esc` 返回。暂停在步骤边界生效，执行中的工具会正常收尾。
 
-界面按终端行数分配输入、工具与审批面板，长输入软换行且光标始终可见。动画共用一个计时器，事件约 30Hz 合批；`NO_COLOR` 使用 mono 主题，`TERM=dumb` 自动使用 ASCII 装饰并停止动画。也可设置 `ROAST_ASCII=1`、`ROAST_REDUCED_MOTION=1`，或配置 `ui.ascii: true`、`ui.motion: "reduced"`。`/theme` 用菜单即时选择并保存 ember / aurora / daylight / mono；`ROAST_THEME` 优先。终端滚动历史中的已打印内容保留原配色。
+界面按终端行数分配输入、工具与审批面板，长输入软换行且光标始终可见。运行状态动画共用计时器，面板颜色过渡在约 224ms 后停止，启动动画约 704ms；事件约 30Hz 合批。`NO_COLOR` 使用 mono 主题，`TERM=dumb` 自动使用 ASCII 装饰并停止动画。也可设置 `ROAST_ASCII=1`、`ROAST_REDUCED_MOTION=1`，或配置 `ui.ascii: true`、`ui.motion: "reduced"`（直接进入工作区）。`/theme` 用菜单即时选择并保存 ember / aurora / daylight / mono；`ROAST_THEME` 优先；全屏对话历史随主题一起更新。
 
-Markdown 在常规终端左右留 2 列空白，窄屏自动缩减；段落、标题和顶层列表项之间增加空行，代码保持原有缩进，引用支持行内样式。可配置 `ui.markdown: { "padding": 2, "spacing": 1 }`；padding 范围 0–8，spacing 范围 0–2。流式活动区使用紧凑间距，已定稿内容使用设置的间距。
+Markdown 在常规终端左右留 2 列空白，窄屏自动缩减；段落与标题之间增加空行，代码保持原有缩进，引用支持行内样式。可配置 `ui.markdown: { "padding": 2, "spacing": 1 }`；padding 范围 0–8，spacing 范围 0–2。全屏视口的流式文本和已定稿文本使用一致的间距，便于连续阅读。
 
 只读调研可用 `/swarm research <目标>`。scout / critic / judge 可以阅读、搜索和验证；无法确认是否只读的 shell 命令会显示审批卡片及 agent 名称，可批准本次执行或拒绝，不能记住为永久例外。等待期间 agent 标为“等待用户授权”，取消后审批卡片会移除。新读取及验证结果算作进展，长调研不会因为没有修改文件而触发停滞提醒；默认连续 12 个已完成步骤没有新结果才提醒 Queen 检查。配置 deny 和 plan 模式的拒绝仍生效；非交互 `-p` 模式没有审批界面，无法确认的操作会明确返回拒绝结果。
 

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Box, Text, useInput } from 'ink';
 import type { Session } from '../../agent/session.js';
 import { reasoningEfforts, type ReasoningEffort } from '../../core/config.js';
@@ -21,6 +21,7 @@ export function ModelPanel({ session, store, height, hive = false }: { session: 
   const [chosen, setChosen] = useState<CatalogModel | null>(null);
   const [manual, setManual] = useState(false);
   const [manualValue, setManualValue] = useState(`${session.providerName}:`);
+  const manualRef = useRef(manualValue); manualRef.current = manualValue;
   const [error, setError] = useState('');
   const close = () => store.setMeta({ overlay: null });
   useEffect(() => {
@@ -51,6 +52,7 @@ export function ModelPanel({ session, store, height, hive = false }: { session: 
     if (key.escape) { setManual(false); setError(''); return; }
     if (key.ctrl && input === 'c') return close();
     if (key.return) {
+      const manualValue = manualRef.current;
       const index = manualValue.indexOf(':');
       const provider = manualValue.slice(0, index), id = manualValue.slice(index + 1);
       if (index < 1 || !session.config.providers[provider] || !id || /\s/.test(id)) return setError('填写已配置的 provider:model');
@@ -58,10 +60,9 @@ export function ModelPanel({ session, store, height, hive = false }: { session: 
     }
   }, { isActive: manual });
   if (manual) return <Box flexDirection="column" height={height} overflow="hidden" paddingX={1}>
-    <Text bold color={theme.accent}>手动添加模型 · provider:model</Text>
-    <Field label="模型引用" value={manualValue} active onChange={setManualValue} />
-    {error ? <Text color={theme.danger} wrap="truncate-end">{error}</Text> : null}
-    <Text dimColor wrap="truncate-end">Enter 选择推理强度 · Esc 返回</Text>
+    {height >= 4 ? <Text bold color={theme.accent} wrap="truncate-end">手动添加模型 · provider:model</Text> : null}
+    <Field label="模型引用" showLabel={height >= 3} value={manualValue} active onChange={(value) => { manualRef.current = value; setManualValue(value); }} />
+    {height >= 2 ? <Text color={error ? theme.danger : theme.muted} wrap="truncate-end">{error || 'Enter 选择推理强度 · Esc 返回'}</Text> : null}
   </Box>;
   if (hive && !role) return <SelectPanel key="roles" title="Hive · 各角色模型" height={height} onClose={close} entries={Object.entries(ROLE_INFO).filter(([name]) => name !== 'queen').map(([name, info]) => ({ id: name, label: `${name} · ${info.name} → ${session.config.swarm.models?.[name as AgentRole] ?? 'inherit'} / ${session.config.swarm.efforts?.[name as AgentRole] ?? '自动'}` }))} message="Queen 使用 /model；已运行的子代理保留原设置" onSelect={(entry) => setRole(entry.id as AgentRole)} />;
   if (chosen) {

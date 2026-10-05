@@ -26,6 +26,8 @@ interface Props {
   onSubmit(text: string, raw: string): void;
   maxHeight?: number;
   onHelp?(): void;
+  /** Read synchronously when a screen or focus changes between two input events. */
+  acceptInput?(input?: string): boolean;
 }
 
 type Action = EditorAction | { type: 'replace'; state: EditorState };
@@ -34,16 +36,20 @@ function reducer(s: EditorState, a: Action): EditorState {
   return a.type === 'replace' ? a.state : editorReducer(s, a);
 }
 
-export function InputBox({ active, placeholder, initialHistory, initialText, initialState, onStateChange, deps, onSubmit, maxHeight = 9, onHelp }: Props) {
+export function InputBox({ active, placeholder, initialHistory, initialText, initialState, onStateChange, deps, onSubmit, maxHeight = 9, onHelp, acceptInput }: Props) {
   const theme = useTheme();
   const { ascii } = useTerminal();
   const glyph = useGlyphs();
   const { columns } = useWindowSize();
-  const [state, dispatch] = useReducer(reducer, initialHistory, (h) =>
+  const [state, renderAction] = useReducer(reducer, initialHistory, (h) =>
     initialState ?? (initialText ? editorReducer(createEditor(h), { type: 'set', text: initialText }) : createEditor(h)),
   );
+  const editorRef = useRef(state); editorRef.current = state;
+  const dispatch = (action: Action) => { editorRef.current = reducer(editorRef.current, action); onStateChange?.(editorRef.current); renderAction(action); };
   useLayoutEffect(() => { onStateChange?.(state); }, [state, onStateChange]);
-  const [selected, setSelected] = useState(0);
+  const [selected, renderSelected] = useState(0);
+  const selectedRef = useRef(selected);
+  const setSelected = (value: number | ((current: number) => number)) => { selectedRef.current = typeof value === 'function' ? value(selectedRef.current) : value; renderSelected(selectedRef.current); };
   const [search, setSearch] = useState<string | null>(null);
   const [searchIndex, setSearchIndex] = useState(0);
   const matches = search === null ? [] : [...state.history].reverse().filter((h) => h.toLowerCase().includes(search.toLowerCase()));
@@ -62,9 +68,14 @@ export function InputBox({ active, placeholder, initialHistory, initialText, ini
   const origin = active ? absoluteOrigin(boxRef.current) : null;
   if (active) setCursorPosition(origin ? { x: origin.x + (border ? 4 : 2) + viewport.caret.x, y: origin.y + (border ? 1 : 0) + viewport.caret.y } : undefined);
 
-  usePaste((text) => dispatch({ type: 'paste', text }), { isActive: active });
+  usePaste((text) => { if (acceptInput?.() !== false) dispatch({ type: 'paste', text }); }, { isActive: active });
   useInput(
     (input, key) => {
+      if (acceptInput?.(input) === false) return;
+      if (key.pageUp || key.pageDown || ((key.shift || key.ctrl) && (key.upArrow || key.downArrow))) return;
+      const state = editorRef.current;
+      const hints = search === null ? suggestions(state, deps) : [];
+      const chosen = Math.min(selectedRef.current, Math.max(0, hints.length - 1));
       if (key.ctrl && input === 'r') {
         if (search === null) { setSearch(''); setSearchIndex(0); }
         else setSearchIndex((n) => n + 1);

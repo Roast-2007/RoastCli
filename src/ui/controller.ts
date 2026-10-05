@@ -2,7 +2,7 @@
  * UI 控制器：界面行为的唯一实现（与 React 组件树解耦）。
  * - 驱动主会话 turn、处理输入（/命令、!shell、#记忆、插话排队）、中断
  * - 订阅 broker / 权限模式 / 蜂群树 / 消息总线 / 子 agent 事件，写入 store
- * inline App 与 Mission Control 都只是 store 的视图，切换屏幕（卸载重挂）不影响进行中的 turn。
+ * 对话与 Mission Control 共用一个全屏渲染器；切换视图不影响进行中的 turn。
  */
 import type { Session } from '../agent/session.js';
 import type { InteractionRequest, InteractionResponse } from '../core/interaction.js';

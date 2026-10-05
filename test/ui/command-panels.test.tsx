@@ -35,6 +35,11 @@ function screen(kind: 'theme' | 'model' | 'hive-models' | 'mode' | 'init' | 'boa
   return { ...render(<CommandPanel kind={kind} session={session} store={store} controller={controller} height={8} />), store, controller };
 }
 describe('interactive command panels', () => {
+  it('keeps multiline labels and messages on one row so the footer remains reachable', async () => {
+    const view = render(<SelectPanel title="Title\nextra" height={8} message="message\nmore" entries={[{ id: 'a', label: 'first\nsecond\nthird' }, { id: 'b', label: 'last' }]} onSelect={() => {}} onClose={() => {}} />);
+    await tick(); expect(view.lastFrame()).toContain('first second third'); expect(view.lastFrame()).toContain('Esc 返回');
+    expect(view.lastFrame()!.split('\n').length).toBeLessThanOrEqual(8);
+  });
   it('preserves rapid search and arrow input before React renders the next frame', async () => {
     const onSelect = vi.fn();
     const view = render(<SelectPanel title="Fast input" height={8} searchable entries={['auto', 'none', 'minimal', 'low'].map((id) => ({ id, label: id }))} onSelect={onSelect} onClose={() => {}} />);

@@ -54,6 +54,17 @@ describe('InteractionCard：权限', () => {
 describe('InteractionCard：提问', () => {
   const question: InteractionRequest = { id: 'q1', kind: 'question', agentId: 'main', question: '用哪个方案？', options: ['A 方案', 'B 方案'] };
 
+  it('shows the question and editor on a two-row card and responds once to rapid input', async () => {
+    const onRespond = vi.fn();
+    const screen = render(<InteractionCard request={{ ...question, options: [] }} maxHeight={2} onRespond={onRespond} />);
+    try {
+      await tick(); expect(screen.lastFrame()).toContain('用哪个方案');
+      expect(screen.lastFrame()!.split('\n').length).toBeLessThanOrEqual(2);
+      for (const key of ['自', '定义', '\r', '\r']) screen.stdin.write(key);
+      expect(onRespond).toHaveBeenCalledExactlyOnceWith({ kind: 'question', answer: '自定义' });
+    } finally { screen.unmount(); }
+  });
+
   it('数字键选择选项', async () => {
     const onRespond = vi.fn();
     const { stdin } = render(<InteractionCard request={question} onRespond={onRespond} />);

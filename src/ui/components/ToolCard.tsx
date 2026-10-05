@@ -3,7 +3,6 @@
  * 写类工具附带 diff，bash 运行中显示实时输出尾部，失败显示错误预览。
  */
 import { Box, Text, useInput, useWindowSize } from 'ink';
-import { useState } from 'react';
 import type { DiffMeta } from '../../tools/file-ops.js';
 import type { ToolView } from '../store/reducer.js';
 import { useTheme } from '../theme.js';
@@ -11,6 +10,8 @@ import { useTerminal, useGlyphs } from '../terminal.js';
 import { useSpinner } from './useSpinner.js';
 import { terminalText } from '../../core/terminal-text.js';
 import { wrapDisplay } from '../../core/text-width.js';
+import { panelLayout, useScroll } from '../scroll.js';
+import { motionColor, useEntrance } from '../motion.js';
 
 const MAX_DIFF_LINES = 24;
 const LIVE_LINES = 6;
@@ -103,34 +104,31 @@ function StatusIcon({ status }: { status: ToolView['status'] }) {
 }
 
 /** Ctrl+O：最近一个工具的完整输出（活动区内显示，高度受限以免触发整屏重绘） */
-export function ToolDetail({ tool, maxLines, active = false }: { tool: ToolView | undefined; maxLines: number; active?: boolean }) {
+export function ToolDetail({ tool, maxLines, active = false, width }: { tool: ToolView | undefined; maxLines: number; active?: boolean; width?: number }) {
   const theme = useTheme();
   const { ascii } = useTerminal();
   const { columns } = useWindowSize();
-  const [offset, setOffset] = useState(0);
-  const lines = wrapDisplay(terminalText(tool?.output ?? tool?.preview ?? ''), Math.max(1, columns - 4));
-  const count = Math.max(1, maxLines - 4);
-  const start = Math.min(offset, Math.max(0, lines.length - count));
+  const layout = panelLayout(maxLines, width ?? columns), { count, border } = layout;
+  const lines = wrapDisplay(terminalText(tool?.output ?? tool?.preview ?? ''), layout.width);
+  const scroll = useScroll(lines.length, count), { start } = scroll;
+  const accent = motionColor(theme.border, theme.accent, useEntrance(tool?.callId));
   useInput((input, key) => {
-    if (key.pageUp || key.upArrow) setOffset(Math.max(0, start - count));
-    if (key.pageDown || key.downArrow) setOffset(Math.min(lines.length - count, start + count));
-    if (key.home) setOffset(0);
-    if (key.end) setOffset(Math.max(0, lines.length - count));
+    scroll.onKey(input, key);
   }, { isActive: active });
   if (!tool) return <Text dimColor>还没有工具输出（Ctrl+O 关闭）</Text>;
   const shown = lines.slice(start, start + count);
   return (
-    <Box flexDirection="column" borderStyle={ascii ? 'classic' : 'single'} borderColor={theme.border} paddingX={1}>
-      <Text wrap="truncate-end">
-        <Text color={theme.tool} bold>{terminalText(tool.name)}</Text> <Text>{terminalText(argSummary(tool.name, tool.args))}</Text>
+    <Box height={Math.max(1, maxLines)} flexShrink={0} overflow="hidden" flexDirection="column" borderStyle={border ? ascii ? 'classic' : 'round' : undefined} borderColor={accent} paddingX={border ? 1 : 0}>
+      {layout.header ? <Text wrap="truncate-end">
+        <Text color={theme.tool} bold>{terminalText(tool.name)}</Text> <Text>{terminalText(argSummary(tool.name, tool.args)).replace(/\s+/g, ' ')}</Text>
         <Text dimColor>  · Ctrl+O 关闭</Text>
-      </Text>
-      {shown.map((l, i) => (
+      </Text> : null}
+      <Box height={count} flexShrink={0} flexDirection="column">{shown.map((l, i) => (
         <Text key={i} color={tool.status === 'error' ? theme.danger : undefined} wrap="truncate-end">
           {l || ' '}
         </Text>
-      ))}
-      <Text dimColor wrap="truncate-end">{start + 1}–{start + shown.length}/{lines.length} 行 · PgUp/PgDn 翻页 · Home/End</Text>
+      ))}</Box>
+      {layout.footer ? <Text dimColor wrap="truncate-end">↑↓ 滚动 · {start + 1}–{start + shown.length}/{lines.length} 行 · Ctrl+O 关闭</Text> : null}
     </Box>
   );
 }
@@ -144,7 +142,7 @@ export function ToolCard({ tool, maxHeight }: { tool: ToolView; maxHeight?: numb
   return (
     <Box flexDirection="column">
       <Text wrap="truncate-end">
-        <StatusIcon status={tool.status} /> <Text color={theme.tool} bold>{terminalText(tool.name)}</Text> <Text>{terminalText(argSummary(tool.name, tool.args))}</Text>
+        <StatusIcon status={tool.status} /> <Text color={theme.tool} bold>{terminalText(tool.name)}</Text> <Text>{terminalText(argSummary(tool.name, tool.args)).replace(/\s+/g, ' ')}</Text>
         <Text color={theme.success}>{stat}</Text>
         {tool.status !== 'running' ? <Text dimColor> {duration(tool.durationMs)}</Text> : null}
         {tool.status === 'interrupted' ? <Text color={theme.warn}> 已中断</Text> : null}

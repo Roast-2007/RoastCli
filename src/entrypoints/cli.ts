@@ -176,7 +176,7 @@ async function runChat(opts: ChatOptions): Promise<void> {
     process.stderr.write(savedWorktreesText((await session.shutdown()).worktrees));
     process.exit(controller.signal.aborted && code === 0 ? 130 : code);
   }
-  // inline 对话 ⇄ Mission Control（Ctrl+G）的屏幕管理；退出时中断进行中的 turn 并等它收尾再关日志
+  // 全屏对话 ⇄ Mission Control（Ctrl+G）；退出时中断进行中的 turn 并等它收尾再关日志
   const { runInteractive } = await import('../ui/screens.js');
   await runInteractive(session, initialPrompt ? { initialPrompt } : {});
 }

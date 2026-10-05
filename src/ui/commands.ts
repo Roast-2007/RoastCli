@@ -40,6 +40,7 @@ export const KEYS_HELP = [
   '  Enter 发送 · Shift+Enter / Ctrl+J / 行尾 \\ 换行 · ↑↓ 选择 · Tab 补全 · Ctrl+R 搜索历史',
   '  ? / F1 帮助 · Esc 中断（空闲时连按两次：回退菜单）· Ctrl+C 中断 / 退出',
   '  Shift+Tab 切换权限模式 · Ctrl+O 最近工具的完整输出 · Ctrl+G Mission Control',
+  '  Shift+↑↓ / PgUp 进入连续阅读 · ↑↓ 滚动 · Home 顶部 · End / Enter / Esc 返回输入',
   '  前缀：/ 命令 · @ 文件 · ! shell · # 记忆',
 ].join('\n');
 

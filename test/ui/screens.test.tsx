@@ -19,7 +19,7 @@ vi.mock('ink', async (original) => ({
     let exit!: () => void;
     const exited = new Promise<void>((resolve) => { exit = resolve; });
     const instance: Instance = {
-      rerender: vi.fn(), cleanup: vi.fn(),
+      rerender: (element) => { fake.lifecycle.push(`rerender:${id}`); fake.rendered.push({ element: element as ReactElement, options, instance }); }, cleanup: vi.fn(),
       clear: () => { fake.lifecycle.push(`clear:${id}`); },
       unmount: () => { fake.lifecycle.push(`unmount:${id}`); exit(); },
       waitUntilRenderFlush: async () => { fake.lifecycle.push(`flush:${id}`); },
@@ -36,7 +36,7 @@ const tick = () => new Promise((resolve) => setTimeout(resolve, 20));
 beforeEach(() => { fake.rendered = []; fake.lifecycle = []; });
 
 describe('screen lifecycle', () => {
-  it('restores the old display after a failed resume without printing its history again', async () => {
+  it('restores the whole fullscreen history after a failed resume', async () => {
     const providers = new ProviderRegistry(); providers.register('p', new ScriptedProvider([]));
     const session = await createSession({ cwd: tempWorkspace().dir, config, providers });
     const running = runInteractive(session);
@@ -47,7 +47,8 @@ describe('screen lifecycle', () => {
     const returned = fake.rendered.at(-1)!.element as ReactElement<AppProps>;
     expect(returned.type).toBe(App);
     expect(returned.props.session).toBe(session);
-    expect(returned.props.printedUpTo).toBe(1);
+    expect(returned.props.printedUpTo).toBeUndefined();
+    expect(fake.rendered.every((r) => r.instance === fake.rendered[0]!.instance)).toBe(true);
     expect(returned.props.store!.getState().agents.main!.items.at(-1)).toMatchObject({ kind: 'notice', text: expect.stringContaining('damaged log') });
     fake.rendered.at(-1)!.instance.unmount(); await running;
   });
@@ -87,17 +88,20 @@ describe('screen lifecycle', () => {
     expect(restored.props.store).not.toBe(app.props.store);
     fake.rendered.at(-1)!.instance.unmount(); await running;
   });
-  it('serializes repeated mission switches, clears old activity, preserves new items and keeps one draft', async () => {
+  it('reuses one alternate buffer across mission switches and preserves history and draft', async () => {
     const providers = new ProviderRegistry(); providers.register('p', new ScriptedProvider([]));
     const session = await createSession({ cwd: tempWorkspace().dir, config, providers });
     const running = runInteractive(session);
     const app = fake.rendered[0]!.element as ReactElement<AppProps>;
     expect(app.type).toBe(App);
+    expect(app.props.fullScreen).toBe(true);
+    expect(app.props.startup).toBe(true);
+    expect(fake.rendered[0]!.options['alternateScreen']).toBe(true);
     app.props.store!.addNotice('main', 'before-switch');
     app.props.onMissionControl!(); app.props.onMissionControl!();
     await tick();
     expect(fake.rendered).toHaveLength(2);
-    expect(fake.lifecycle.slice(0, 5)).toEqual(['mount:0', 'flush:0', 'clear:0', 'unmount:0', 'mount:1']);
+    expect(fake.lifecycle).toEqual(['mount:0', 'rerender:0']);
     const mission = fake.rendered[1]!.element as ReactElement<MissionControlProps>;
     expect(mission.type).toBe(MissionControl);
     app.props.store!.addNotice('main', 'while-in-mission');
@@ -105,10 +109,12 @@ describe('screen lifecycle', () => {
     await tick();
     expect(fake.rendered).toHaveLength(3);
     const returned = fake.rendered[2]!.element as ReactElement<AppProps>;
-    expect(returned.props.printedUpTo).toBe(1);
+    expect(returned.props.printedUpTo).toBeUndefined();
+    expect(returned.props.startup).toBe(false);
     expect(returned.props.store!.getState().agents['main']!.items).toHaveLength(2);
     expect(returned.props.inputDraft).toBe(app.props.inputDraft);
-    expect(fake.lifecycle).not.toContain('clear:1');
+    expect(fake.rendered.every((r) => r.instance === fake.rendered[0]!.instance)).toBe(true);
+    expect(fake.lifecycle.some((entry) => entry.startsWith('clear:') || entry.startsWith('unmount:'))).toBe(false);
     for (let i = 0; i < 3; i++) {
       const inline = fake.rendered.at(-1)!.element as ReactElement<AppProps>;
       inline.props.onMissionControl!(); await tick();

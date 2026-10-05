@@ -11,6 +11,7 @@ import { useSpinner } from './useSpinner.js';
 import { displayWidth, truncateDisplay } from '../../core/text-width.js';
 import { terminalText } from '../../core/terminal-text.js';
 import { useTerminal, useGlyphs } from '../terminal.js';
+import { VERSION } from '../../core/version.js';
 
 const LOGO = 'R O A S T';
 
@@ -27,7 +28,7 @@ export function Banner({ model, cwd, resumed, warnings }: { model: string; cwd: 
             {c.ch}
           </Text>
         ))}
-        <Text dimColor>  v0.1 · {truncateDisplay(model, Math.max(0, columns - 23))}</Text>
+        <Text dimColor>  v{VERSION} · {truncateDisplay(model, Math.max(0, columns - 23 - VERSION.length))}</Text>
       </Text>
       <Text dimColor wrap="truncate-middle">{terminalText(cwd)}</Text>
       {resumed ? <Text color={theme.info}>{ascii ? '>' : '↺'} {resumed}</Text> : null}
@@ -134,7 +135,7 @@ export function AgentsPanel({ agents, activity, maxHeight = 11 }: { agents: Agen
           {'  '.repeat(Math.max(0, a.depth - 1))}
           <Text color={color(a.state)}>{ascii ? a.state === 'paused' ? '||' : '*' : AGENT_ICON[a.state]}</Text> <Text bold>{a.id}</Text> <Text dimColor>[{a.role}]</Text>{' '}
           <Text color={theme.tool}>{a.waitingFor ?? (a.state === 'running' ? activity(a.id) : a.report ? a.report.status : a.state)}</Text>{' '}
-          <Text dimColor>{a.brief.replace(/\s+/g, ' ').slice(0, 40)}</Text>
+          <Text dimColor>{terminalText(a.brief).replace(/\s+/g, ' ').slice(0, 40)}</Text>
         </Text>
       ))}
     </Box>

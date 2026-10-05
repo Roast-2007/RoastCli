@@ -1,11 +1,10 @@
 /**
- * 交互模式的屏幕管理：inline 对话 ⇄ 全屏 Mission Control。
- * store 与控制器在组件树之外创建，切换时卸载/重挂 Ink 实例不影响进行中的 turn：
- * - 进入全屏：等最后一帧刷出 → 卸载 inline → 以 alternateScreen 渲染 Mission Control
- * - 返回：卸载全屏（终端恢复主屏幕）→ 重挂 inline，Static 只输出水位线之后的新条目（不重复打印历史）
+ * One alternate-screen renderer for the whole interactive workspace.
+ * Screen changes replace its React tree without leaving/re-entering the terminal buffer.
+ * The controller, conversation history and editor draft survive every handoff.
  */
-import { createElement } from 'react';
-import { Text, render, useInput, type Instance } from 'ink';
+import { createElement, type ReactNode } from 'react';
+import { Box, Text, render, useInput, useWindowSize, type Instance } from 'ink';
 import type { Session } from '../agent/session.js';
 import { App } from './App.js';
 import { MissionControl } from './mission/MissionControl.js';
@@ -18,11 +17,12 @@ import type { EditorState } from './input/editor.js';
 
 /** Clear while Ink still knows the activity height/caret, before losing its renderer state. */
 export async function releaseScreen(instance: Instance, inline: boolean, onFlushed?: () => void): Promise<void> {
+  const exited = instance.waitUntilExit();
   await instance.waitUntilRenderFlush();
   onFlushed?.();
   if (inline) instance.clear();
   instance.unmount();
-  await instance.waitUntilExit().catch(() => {});
+  await exited.catch(() => {});
 }
 
 export async function runProviderWizard(cwd: string): Promise<boolean> {
@@ -51,6 +51,7 @@ export async function runInteractive(session: Session, opts: { initialPrompt?: s
   let store = createUiStore();
   let instance: Instance | null = null;
   const activeInstance = () => instance;
+  let instanceExit: Promise<unknown> = Promise.resolve();
   let switching = false;
   let switchTask: Promise<void> = Promise.resolve();
   let quitRequested = false;
@@ -63,79 +64,68 @@ export async function runInteractive(session: Session, opts: { initialPrompt?: s
   let currentScreen: 'inline' | 'mission' | 'providers' = 'inline';
   let printedUpTo: number | undefined;
   let initialPrompt = opts.initialPrompt;
+  let firstMount = true;
 
   const watch = (inst: Instance) => {
-    void inst.waitUntilExit().then(
-      () => (switching || instance !== inst ? undefined : resolveQuit()),
-      () => (switching || instance !== inst ? undefined : resolveQuit()),
+    instanceExit = inst.waitUntilExit();
+    void instanceExit.then(
+      () => (instance !== inst ? undefined : resolveQuit()),
+      () => (instance !== inst ? undefined : resolveQuit()),
     );
   };
 
+  const show = (element: ReactNode) => {
+    if (instance) instance.rerender(element);
+    else {
+      instance = render(element, { exitOnCtrlC: false, alternateScreen: true, maxFps: 30, incrementalRendering: true, kittyKeyboard: { mode: 'auto' } });
+      watch(instance);
+    }
+  };
+
   const mountInline = () => {
-    instance = render(
-      createElement(App, {
+    show(createElement(App, {
+        key: printedUpTo ?? 0,
         session,
         store,
         controller,
         inputDraft,
+        fullScreen: true,
+        startup: firstMount,
         ...(initialPrompt ? { initialPrompt } : {}),
         ...(printedUpTo !== undefined ? { printedUpTo } : {}),
         onMissionControl: () => requestSwitch('mission'),
-      }),
-      { exitOnCtrlC: false, maxFps: 30, incrementalRendering: true, kittyKeyboard: { mode: 'auto' } },
-    );
+      }));
+    firstMount = false;
     initialPrompt = undefined;
-    watch(instance);
   };
 
   const mountMission = () => {
-    instance = render(createElement(MissionControl, { session, store, controller, onExit: () => requestSwitch('inline') }), {
-      exitOnCtrlC: false,
-      alternateScreen: true,
-      incrementalRendering: true,
-      maxFps: 30,
-      kittyKeyboard: { mode: 'auto' },
-    });
-    watch(instance);
+    show(createElement(MissionControl, { session, store, controller, onExit: () => requestSwitch('inline') }));
   };
 
   const mountProviders = () => {
-    instance = render(createElement(ProviderWizard, { cwd: session.log.header.cwd, ui: { ...session.config.ui, ...(store.getState().meta.theme ? { theme: store.getState().meta.theme } : {}) }, onExit: (saved: boolean) => {
+    show(createElement(ProviderWizard, { cwd: session.log.header.cwd, ui: { ...session.config.ui, ...(store.getState().meta.theme ? { theme: store.getState().meta.theme } : {}) }, onExit: (saved: boolean) => {
       if (saved) store.addNotice('main', '供应商配置已保存，下一次启动生效', 'success');
       requestSwitch('inline');
-    } }), { exitOnCtrlC: false, alternateScreen: true, kittyKeyboard: { mode: 'auto' } });
-    watch(instance);
+    } }));
   };
 
   function requestSwitch(screen: typeof currentScreen, clear = false): void {
-    if (!switching) switchTask = switchTo(screen, clear);
+    if (!switching && !quitRequested) switchTo(screen, clear);
   }
 
-  async function switchTo(screen: typeof currentScreen, clear = false): Promise<void> {
+  function switchTo(screen: typeof currentScreen, clear = false): void {
     if (!instance || switching || (screen === currentScreen && !clear)) return;
     switching = true;
     try {
       store.flush();
-      await releaseScreen(instance, currentScreen === 'inline', () => {
-        if (currentScreen === 'inline') {
-          const items = store.getState().agents['main']?.items ?? [];
-          printedUpTo = items.length ? items[items.length - 1]!.id : 0;
-        }
-      });
-      instance = null;
-      if (quitRequested) return;
-      if (clear) process.stdout.write('\u001b[2J\u001b[H');
-      store.flush();
+      if (clear) printedUpTo = store.getState().agents.main!.items.at(-1)?.id ?? 0;
       currentScreen = screen;
       controller.setScreen(screen);
       if (screen === 'mission') mountMission();
       else if (screen === 'providers') mountProviders();
       else mountInline();
     } catch (err) {
-      // Report the error after restoring the primary screen, without leaving an orphan renderer.
-      instance?.unmount();
-      await instance?.waitUntilExit().catch(() => {});
-      instance = null;
       store.addNotice('main', `界面切换失败：${err instanceof Error ? err.message : String(err)}`, 'error');
       currentScreen = 'inline';
       controller.setScreen('inline');
@@ -151,14 +141,10 @@ export async function runInteractive(session: Session, opts: { initialPrompt?: s
     let candidate: Session | undefined;
     try {
       store.flush();
-      await releaseScreen(instance, currentScreen === 'inline', () => {
-        if (currentScreen === 'inline') printedUpTo = store.getState().agents['main']!.items.at(-1)?.id ?? 0;
-      });
-      instance = render(createElement(SessionLoading, { onExit: requestExit }), { exitOnCtrlC: false, maxFps: 30 });
+      show(createElement(SessionLoading, { onExit: requestExit }));
       const next = await session.resume(logPath);
       candidate = next;
       if (quitRequested) { await next.shutdown(); return; }
-      await releaseScreen(instance, true);
       controller.dispose();
       const retained = await session.shutdown().catch(() => ({ worktrees: [] as string[] }));
       process.stderr.write(savedWorktreesText(retained.worktrees));
@@ -172,8 +158,6 @@ export async function runInteractive(session: Session, opts: { initialPrompt?: s
       mountInline();
     } catch (err) {
       if (candidate && candidate !== session) await candidate.shutdown().catch(() => {});
-      instance?.unmount(); await instance?.waitUntilExit().catch(() => {});
-      instance = null;
       store.addNotice('main', `恢复会话失败：${err instanceof Error ? err.message : String(err)}`, 'error');
       if (!quitRequested) {
         currentScreen = 'inline'; controller.setScreen('inline'); mountInline();
@@ -187,7 +171,9 @@ export async function runInteractive(session: Session, opts: { initialPrompt?: s
   } finally {
     quitRequested = true;
     await switchTask;
-    activeInstance()?.unmount();
+    const active = activeInstance();
+    active?.unmount();
+    await instanceExit.catch(() => {});
     instance = null;
     controller.interrupt();
     await controller.whenIdle();
@@ -197,6 +183,7 @@ export async function runInteractive(session: Session, opts: { initialPrompt?: s
 }
 
 function SessionLoading({ onExit }: { onExit(): void }) {
+  const { rows, columns } = useWindowSize();
   useInput((input, key) => { if (key.escape || (key.ctrl && input === 'c')) onExit(); });
-  return createElement(Text, { dimColor: true }, '正在恢复会话… · Esc / Ctrl+C 退出');
+  return createElement(Box, { height: Math.max(1, rows - 1), width: columns, overflow: 'hidden', alignItems: 'center', justifyContent: 'center' }, createElement(Text, { dimColor: true, wrap: 'truncate-end' }, '正在恢复会话… · Esc / Ctrl+C 退出'));
 }

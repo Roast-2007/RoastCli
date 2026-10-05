@@ -7,6 +7,16 @@ const tick = () => new Promise((r) => setTimeout(r, 30));
 const deps = { commands: [{ name: 'context', description: '上下文占用' }], files: () => [] };
 
 describe('InputBox', () => {
+  it('accumulates typing, completion arrows and Enter before the next paint', async () => {
+    const submit = vi.fn();
+    const screen = render(<InputBox active placeholder="" initialHistory={[]} deps={{ ...deps, commands: [{ name: 'theme', description: 'theme' }, { name: 'model', description: 'model' }] }} onSubmit={submit} />);
+    try {
+      await tick(); for (const key of ['你', '好', '\r']) screen.stdin.write(key);
+      expect(submit).toHaveBeenLastCalledWith('你好', '你好');
+      await tick(); for (const key of ['/', '\x1b[B', '\r']) screen.stdin.write(key);
+      expect(submit).toHaveBeenLastCalledWith('/model', '/model');
+    } finally { screen.unmount(); }
+  });
   it('opens the selected command with Enter without requiring a typed command name', async () => {
     const submit = vi.fn();
     const screen = render(<InputBox active placeholder="" initialHistory={[]} deps={{ ...deps, commands: [{ name: 'theme', description: 'theme' }, { name: 'model', description: 'models' }] }} onSubmit={submit} />);
