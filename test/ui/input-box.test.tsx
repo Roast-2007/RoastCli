@@ -7,6 +7,12 @@ const tick = () => new Promise((r) => setTimeout(r, 30));
 const deps = { commands: [{ name: 'context', description: '上下文占用' }], files: () => [] };
 
 describe('InputBox', () => {
+  it('opens the selected command with Enter without requiring a typed command name', async () => {
+    const submit = vi.fn();
+    const screen = render(<InputBox active placeholder="" initialHistory={[]} deps={{ ...deps, commands: [{ name: 'theme', description: 'theme' }, { name: 'model', description: 'models' }] }} onSubmit={submit} />);
+    await tick(); screen.stdin.write('/'); await tick(); screen.stdin.write('\x1b[B'); await tick(); screen.stdin.write('\r'); await tick();
+    expect(submit).toHaveBeenCalledWith('/model', '/model'); screen.unmount();
+  });
   it('selects a completion with arrows, and reverse search keeps the draft until accepted', async () => {
     const submit = vi.fn();
     const screen = render(<InputBox active placeholder="" initialHistory={['old auth question', 'recent auth question']} initialText="draft" deps={{ ...deps, commands: [{ name: 'context', description: 'ctx' }, { name: 'cost', description: 'usage' }] }} onSubmit={submit} />);

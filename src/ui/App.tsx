@@ -34,7 +34,7 @@ function clipTail(text: string, maxLines: number): string {
 
 type StaticEntry = { id: number; kind: 'banner' } | DisplayItem;
 
-function Item({ item, session }: { item: StaticEntry; session: Session }) {
+function Item({ item, session, columns }: { item: StaticEntry; session: Session; columns: number }) {
   const theme = useTheme();
   const glyph = useGlyphs();
   const toneIcon = { info: glyph.info, warn: glyph.warning, error: glyph.error, success: glyph.ok };
@@ -59,7 +59,7 @@ function Item({ item, session }: { item: StaticEntry; session: Session }) {
         </Box>
       );
     case 'markdown':
-      return <Markdown text={item.text} />;
+      return <Markdown text={item.text} preferences={session.config.ui?.markdown} columns={columns} />;
     case 'reasoning':
       return (
         <Text dimColor italic>
@@ -149,7 +149,7 @@ function useShellKeys(opts: { controller: UiController; exit(): void; active: bo
 
 function Shell({ session, store: externalStore, controller: externalController, initialPrompt, printedUpTo, onMissionControl, inputDraft }: AppProps) {
   const { exit } = useApp();
-  const { rows } = useWindowSize();
+  const { rows, columns } = useWindowSize();
   const cwd = session.log.header.cwd;
   const localDraft = useRef<{ seed?: number; state?: EditorState }>({});
   const draft = inputDraft ?? localDraft.current;
@@ -208,12 +208,12 @@ function Shell({ session, store: externalStore, controller: externalController, 
 
   return (
     <ThemeContext.Provider value={theme}><TerminalContext.Provider value={terminal}><Box flexDirection="column">
-      <Static items={staticItems}>{(item) => <Item key={item.id} item={item} session={session} />}</Static>
+      <Static items={staticItems}>{(item) => <Item key={item.id} item={item} session={session} columns={columns} />}</Static>
       <Box flexDirection="column" maxHeight={Math.max(1, rows - 1)} overflow="hidden">
       {meta.overlay && !card ? <Overlay key={meta.overlay} kind={meta.overlay} session={session} store={store} controller={controller} height={Math.max(1, rows - 2)} /> : <>
       {layout.stream > 0 && (view.running || view.pending || view.reasoning) ? <Box flexDirection="column" maxHeight={layout.stream} overflow="hidden" flexShrink={0}>
         {view.reasoning ? <Thinking label={`思考中… ${view.reasoning.length} 字`} /> : null}
-        {view.pending ? <Markdown text={clipTail(view.pending, Math.max(1, layout.stream - 3))} /> : null}
+        {view.pending ? <Markdown text={clipTail(view.pending, Math.max(1, layout.stream - 3))} preferences={session.config.ui?.markdown} compact columns={columns} /> : null}
         {view.running && !view.pending && !view.reasoning && view.tools.length === 0 ? <Thinking label="思考中…" /> : null}
       </Box> : null}
       {layout.tools > 0 ? <Box flexDirection="column" maxHeight={layout.tools} overflow="hidden" flexShrink={0}>

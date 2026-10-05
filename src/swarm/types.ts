@@ -44,6 +44,7 @@ export interface AgentInfo {
   waitingFor?: string;
   brief: string;
   model: string;
+  reasoningEffort?: import('../core/config.js').ReasoningEffort | null;
   startedAt: number;
   endedAt?: number;
   report?: Report;

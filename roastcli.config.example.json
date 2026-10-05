@@ -26,9 +26,23 @@
       "models": {
         "kimi-for-coding": { "contextWindow": 1048576, "reasoningEffort": "high", "reasoningReplay": "field" }
       }
+    },
+    "local": {
+      "driver": "openai-compat",
+      "baseURL": "http://localhost:1234/v1",
+      "auth": "none",
+      "models": {
+        "local-model-a": { "contextWindow": 32768 },
+        "local-model-b": { "reasoningEfforts": ["low", "high"] }
+      }
     }
   },
   "default": "deepseek:deepseek-chat",
   "maxSteps": 50,
-  "logsDir": "logs"
+  "logsDir": "logs",
+  "ui": { "theme": "ember", "markdown": { "padding": 2, "spacing": 1 } },
+  "swarm": {
+    "models": { "worker": "deepseek:deepseek-chat", "scout": "inherit" },
+    "efforts": { "worker": null }
+  }
 }

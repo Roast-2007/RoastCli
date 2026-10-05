@@ -10,7 +10,7 @@ import type { PermissionMode } from '../../tools/permissions/engine.js';
 import type { AgentInfo, Envelope } from '../../swarm/types.js';
 
 /** 与具体 agent 无关的界面状态（控制器写入，inline 与 Mission Control 共用） */
-export type OverlayKind = 'help' | 'rewind' | 'context' | 'sessions';
+export type OverlayKind = 'help' | 'rewind' | 'context' | 'sessions' | 'theme' | 'mode' | 'model' | 'hive-models' | 'swarm' | 'skills' | 'board' | 'cost' | 'todo' | 'mcp' | 'logs' | 'memory' | 'compact' | 'init' | 'agents';
 export interface UiMeta {
   interactions: InteractionRequest[];
   mode: PermissionMode;

@@ -1,10 +1,12 @@
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Box, Text, useBoxMetrics, useCursor, useInput, usePaste, useWindowSize, type DOMElement } from 'ink';
 import { resolveApiKey, reasoningEfforts, type ReasoningEffort, type RoastConfig } from '../../core/config.js';
 import { terminalText } from '../../core/terminal-text.js';
 import { displayWidth, graphemes, nextBoundary, previousBoundary, wrapDisplay } from '../../core/text-width.js';
 import { PROVIDER_PRESETS } from '../../providers/presets.js';
-import { draftFromProfile, providerOverrideWarnings, providerSettingsSource, readProviderSettings, saveProviderSettings, validateProviderDraft, type ProviderDraft, type ProviderSettings } from '../../cli/provider-settings.js';
+import { draftFromProfile, draftModelIds, providerOverrideWarnings, providerSettingsSource, readProviderSettings, saveProviderSettings, validateProviderDraft, type ProviderDraft, type ProviderSettings } from '../../cli/provider-settings.js';
+import { discoverModels, type CatalogModel } from '../../providers/models.js';
+import { SelectPanel } from '../components/SelectPanel.js';
 import { pickTheme, ThemeContext, useTheme } from '../theme.js';
 import { absoluteOrigin } from '../input/cursor.js';
 import { editorViewport } from '../layout.js';
@@ -22,7 +24,7 @@ function cleanInput(text: string): string {
 }
 
 /** Local-only form input: never uses the conversation history or UI store. */
-function Field({ label, value, secret, active, onChange }: { label: string; value: string; secret?: boolean; active: boolean; onChange(value: string): void }) {
+export function Field({ label, value, secret, active, onChange }: { label: string; value: string; secret?: boolean; active: boolean; onChange(value: string): void }) {
   const theme = useTheme();
   const glyph = useGlyphs();
   const { columns } = useWindowSize();
@@ -72,6 +74,7 @@ function Field({ label, value, secret, active, onChange }: { label: string; valu
 }
 
 function credentialStatus(settings: ProviderSettings, name: string): string {
+  if (settings.providers[name]?.auth === 'none') return '无需密钥';
   try { resolveApiKey(settings.providers[name]!, name); return '凭据已设置'; }
   catch { return '缺少凭据'; }
 }
@@ -92,7 +95,7 @@ function Wizard({ cwd, onExit }: ProviderWizardProps) {
     catch (err) { return { settings: { providers: {}, file: providerSettingsSource(cwd).path }, error: err instanceof Error ? err.message : '无法读取配置' }; }
   };
   const [loaded, setLoaded] = useState(read);
-  const [step, setStep] = useState<'home' | 'preset' | 'connection' | 'credential' | 'review' | 'saved'>('home');
+  const [step, setStep] = useState<'home' | 'preset' | 'connection' | 'credential' | 'models' | 'review' | 'saved'>('home');
   const [selection, setSelection] = useState(0);
   const [field, setField] = useState(0);
   const [draft, setDraftState] = useState<ProviderDraft | null>(null);
@@ -103,6 +106,9 @@ function Wizard({ cwd, onExit }: ProviderWizardProps) {
   const [hasSaved, setHasSaved] = useState(false);
   const [warnings, setWarnings] = useState<string[]>([]);
   const [offset, setOffset] = useState(0);
+  const [remoteModels, setRemoteModels] = useState<CatalogModel[]>([]);
+  const [modelMessage, setModelMessage] = useState('');
+  const [refresh, setRefresh] = useState(0);
   const settings = loaded.settings;
   const names = Object.keys(settings.providers);
   const presets = Object.values(PROVIDER_PRESETS);
@@ -110,6 +116,30 @@ function Wizard({ cwd, onExit }: ProviderWizardProps) {
   const entries = step === 'home' ? homeEntries : presets.map((p) => p.label);
   const go = (next: typeof step) => { setStep(next); setError(''); setField(0); setOffset(0); };
   const update = (patch: Partial<ProviderDraft>) => { if (draftRef.current) setDraft({ ...draftRef.current, ...patch }); setError(''); };
+  const openModels = () => {
+    const current = draftRef.current;
+    if (!current) return;
+    const invalid = validateProviderDraft({ ...current, model: current.model || 'discovery' });
+    if (invalid) return setError(invalid);
+    go('models');
+  };
+  useEffect(() => {
+    if (step !== 'models' || !draftRef.current) return;
+    const current = draftRef.current;
+    const abort = new AbortController();
+    const profile = { ...current.existing, driver: current.driver, baseURL: current.baseURL, auth: current.auth };
+    setModelMessage('自动获取模型列表…已配置模型仍可选择');
+    setRemoteModels(Object.entries(current.existing?.models ?? {}).map(([id, meta]) => ({ id, meta, provider: current.name, ref: `${current.name}:${id}`, source: 'configured' })));
+    void discoverModels(profile, current.name, { ...(current.apiKey.trim() ? { apiKey: current.apiKey.trim() } : {}), signal: abort.signal }).then((models) => {
+      if (abort.signal.aborted) return;
+      const configured = Object.entries(profile.models ?? {}).map(([id, meta]) => ({ id, meta, provider: current.name, ref: `${current.name}:${id}`, source: 'configured' as const }));
+      setRemoteModels([...new Map([...configured, ...models].map((model) => [model.id, model])).values()]);
+      setModelMessage(`已获取 ${models.length} 个模型 · Enter 勾选多个模型`);
+      const live = draftRef.current;
+      if (live) update({ modelMeta: Object.fromEntries(models.map((model) => [model.id, model.meta])) });
+    }).catch((err) => { if (!abort.signal.aborted) setModelMessage(`${err instanceof Error ? err.message : '获取失败'}；Esc 返回手填模型`); });
+    return () => abort.abort();
+  }, [step, refresh]);
   const review = () => {
     const draft = draftRef.current;
     if (!draft) return;
@@ -123,9 +153,9 @@ function Wizard({ cwd, onExit }: ProviderWizardProps) {
   const reviewText = draft ? [
     `${settings.providers[draft.name] ? '更新已有供应商' : '添加供应商'}：${draft.name}`,
     `协议：${draft.driver}`, `地址：${draft.baseURL}`, `模型：${draft.model}`,
-    '凭据：本地保存 API Key（已遮罩）',
+    draft.auth === 'none' ? '认证：无密钥' : '凭据：本地保存 API Key（已遮罩）',
     `Reasoning effort：${draft.reasoningEffort ?? '自动（供应商默认）'}`,
-    `默认模型：${draft.makeDefault || !settings.default ? `${draft.name}:${draft.model}` : settings.default}`,
+    `默认模型：${draft.makeDefault || !settings.default ? `${draft.name}:${draftModelIds(draft)[0]}` : settings.default}`,
     `保存位置：${settings.file}`,
     '下一次启动生效。', ...warnings,
   ] : [];
@@ -133,6 +163,7 @@ function Wizard({ cwd, onExit }: ProviderWizardProps) {
   const pageOffset = Math.min(offset, Math.max(0, pageLines.length - bodyHeight));
 
   useInput((input, key) => {
+    if (step === 'models') return;
     const draft = draftRef.current;
     if (key.ctrl && input === 'c') return onExit(hasSaved);
     if (key.escape) {
@@ -161,30 +192,35 @@ function Wizard({ cwd, onExit }: ProviderWizardProps) {
         setDraft({ ...editing, makeDefault: editing.makeDefault || !settings.default });
       } else {
         const preset = presets[selection]!;
-        setDraft({ name: preset.name, driver: preset.driver, baseURL: preset.baseURL, model: preset.model, apiKey: '', makeDefault: !settings.default });
+        let name = preset.name;
+        for (let suffix = 2; settings.providers[name]; suffix++) name = `${preset.name}-${suffix}`;
+        setDraft({ name, driver: preset.driver, baseURL: preset.baseURL, model: preset.model, apiKey: '', makeDefault: !settings.default });
       }
       return go('connection');
     }
     if (!draft) return;
+    if (key.ctrl && input === 'l' && (step === 'credential' || step === 'review')) return openModels();
     if (step === 'connection' || step === 'credential') {
-      const count = 3;
+      const count = step === 'credential' ? 4 : 3;
       if (key.tab) return setField((f) => (f + (key.shift ? count - 1 : 1)) % count);
       if (key.upArrow || key.downArrow) return setField((f) => (f + (key.upArrow ? count - 1 : 1)) % count);
       if (step === 'credential' && (key.leftArrow || key.rightArrow || input === ' ') && field !== 0) {
         if (field === 1) {
-          const efforts: (ReasoningEffort | undefined)[] = [undefined, ...reasoningEfforts(draft.driver, draft.baseURL)];
+          const efforts: (ReasoningEffort | undefined)[] = [undefined, ...reasoningEfforts(draft.driver, draft.baseURL, draft.existing?.models?.[draftModelIds(draft)[0]!] ?? draft.modelMeta?.[draftModelIds(draft)[0]!])];
           const index = efforts.indexOf(draft.reasoningEffort);
           update({ reasoningEffort: efforts[(index + (key.leftArrow ? efforts.length - 1 : 1)) % efforts.length] });
-        } else if (settings.default) update({ makeDefault: !draft.makeDefault });
+        } else if (field === 2 && settings.default) update({ makeDefault: !draft.makeDefault });
+        else if (field === 3) update({ auth: draft.auth === 'none' ? 'api-key' : 'none' });
         return;
       }
       if (!key.return) return;
       if (step === 'connection') {
         if (field < count - 1) return setField((f) => f + 1);
-        const invalid = validateProviderDraft(draft, false);
+        const invalid = validateProviderDraft({ ...draft, model: draft.model || 'discovery' }, false);
         if (invalid) return setError(invalid);
         return go('credential');
       }
+      if (!draft.model.trim()) return openModels();
       return review();
     }
     if (step === 'review' && key.return) {
@@ -202,8 +238,16 @@ function Wizard({ cwd, onExit }: ProviderWizardProps) {
 
   const visibleCount = Math.max(1, bodyHeight - 1);
   const menuStart = Math.max(0, selection - visibleCount + 1);
-  const title = { home: '已配置供应商', preset: '1 / 4 · 选择供应商', connection: '2 / 4 · 连接与模型', credential: '3 / 4 · 配置凭据', review: '4 / 4 · 确认并保存', saved: '保存成功' }[step];
+  const title = { home: '已配置供应商', preset: '1 / 4 · 选择供应商', connection: '2 / 4 · 连接与模型', credential: '3 / 4 · 配置凭据', models: '自动获取模型', review: '4 / 4 · 确认并保存', saved: '保存成功' }[step];
   const note = presets.find((p) => p.name === draft?.name)?.note;
+  if (step === 'models' && draft) {
+    const ids = draftModelIds(draft);
+    return <SelectPanel title="模型列表 · 可选择多个模型" height={Math.max(1, rows - 1)} searchable message={modelMessage} onClose={() => go('credential')} onRefresh={() => setRefresh((value) => value + 1)} entries={[{ id: ':done', label: `完成选择 · ${ids.length} 个模型（首个为默认）` }, ...remoteModels.map((model) => ({ id: model.id, label: `${ids.includes(model.id) ? '[x]' : '[ ]'} ${model.id}${model.meta.name ? ` · ${model.meta.name}` : ''}` }))]} onSelect={(entry) => {
+      if (entry.id === ':done') { if (!ids.length) throw new Error('请先选择模型，或 Esc 返回手动输入'); return go('credential'); }
+      const next = ids.includes(entry.id) ? ids.filter((id) => id !== entry.id) : [...ids, entry.id];
+      update({ model: next.join(', '), reasoningEffort: draft.existing?.models?.[next[0]!]?.reasoningEffort ?? draft.modelMeta?.[next[0]!]?.reasoningEffort });
+    }} />;
+  }
   return <Box flexDirection="column" height={Math.max(1, rows - 1)} overflow="hidden" paddingX={1}>
     <Box flexDirection="column" flexShrink={0}>
     <Text bold color={theme.accent} wrap="truncate-end">ROAST · 供应商配置</Text>
@@ -218,17 +262,18 @@ function Wizard({ cwd, onExit }: ProviderWizardProps) {
     </Box> : null}
     {draft && step === 'connection' ? <Box flexDirection="column" flexShrink={0}>
       {!compact ? <Text dimColor wrap="truncate-end">{draft.driver}{note ? ` · ${note}` : ''}</Text> : null}
-      {(['name', 'baseURL', 'model'] as const).map((name, index) => !compact || field === index ? <Field key={name} label={['供应商 ID（字母 / 数字 / _ / -）', 'API 基础地址', '模型 ID'][index]!} value={draft[name]} active={field === index} onChange={(value) => update({ [name]: value, ...(name === 'model' ? { reasoningEffort: draft.existing?.models?.[value]?.reasoningEffort } : {}) })} /> : null)}
+      {(['name', 'baseURL', 'model'] as const).map((name, index) => !compact || field === index ? <Field key={name} label={['供应商 ID（字母 / 数字 / _ / -）', 'API 基础地址', '模型 ID（逗号分隔；留空自动获取）'][index]!} value={draft[name]} active={field === index} onChange={(value) => update({ [name]: value, ...(name === 'model' ? { reasoningEffort: draft.existing?.models?.[value]?.reasoningEffort } : {}) })} /> : null)}
     </Box> : null}
     {draft && step === 'credential' ? <Box flexDirection="column" flexShrink={0}>
       {!compact || field === 0 ? <Field label={`API Key${draft.existing?.apiKeyRef ? '（留空保留已保存密钥）' : ''}`} secret value={draft.apiKey} active={field === 0} onChange={(apiKey) => update({ apiKey })} /> : null}
       {!compact || field === 1 ? <Text color={field === 1 ? theme.accent : undefined} wrap="truncate-end">{field === 1 ? `${glyph.pointer} ` : '  '}Reasoning effort：{draft.reasoningEffort ?? '自动'} · ←→ 选择</Text> : null}
       {!compact || field === 2 ? <Text color={field === 2 ? theme.accent : undefined} wrap="truncate-end">{field === 2 ? `${glyph.pointer} ` : '  '}设为默认模型：{draft.makeDefault || !settings.default ? '是' : '否'} · {settings.default ? '←→ 切换' : '首个配置自动设为默认'}</Text> : null}
+      {!compact || field === 3 ? <Text color={field === 3 ? theme.accent : undefined} wrap="truncate-end">{field === 3 ? `${glyph.pointer} ` : '  '}认证：{draft.auth === 'none' ? '无密钥（本地接口）' : 'API Key'} · ←→ 切换</Text> : null}
       {!compact ? <Text dimColor>密钥以本地明文保存在用户目录 credentials.json，不写入配置或会话记录。推理强度按模型保存，需服务端支持。</Text> : null}
     </Box> : null}
     </Box>
     {error ? <Box flexDirection="column" flexShrink={0}>{wrapDisplay(terminalText(error), Math.max(1, columns - 2)).slice(0, Math.min(2, Math.max(1, rows - 7))).map((line, i) => <Text key={i} color={theme.danger} wrap="truncate-end">{line}</Text>)}</Box> : null}
     <Box flexGrow={1} flexShrink={0} />
-    <Box height={1} flexShrink={0}><Text dimColor wrap="truncate-end">{step === 'review' ? 'Enter 保存 · Esc 修改' : step === 'saved' ? 'Enter 继续 · Esc 完成' : step === 'credential' ? 'Tab / ↑↓ 字段 · Enter 确认 · Esc 返回' : step === 'connection' ? compact ? `Tab 字段 ${field + 1}/3 · Enter 下一步 · Esc 返回` : 'Tab / Shift+Tab 字段 · Enter 下一步 · Esc 返回' : '↑↓ 选择 · Enter 确认 · Esc 返回'}{pageLines.length > bodyHeight ? ` · PgUp/PgDn ${pageOffset + 1}/${pageLines.length}` : ''}</Text></Box>
+    <Box height={1} flexShrink={0}><Text dimColor wrap="truncate-end">{step === 'review' ? 'Enter 保存 · Ctrl+L 模型列表 · Esc 修改' : step === 'saved' ? 'Enter 继续 · Esc 完成' : step === 'credential' ? 'Tab 字段 · Enter 确认 · Ctrl+L 模型列表 · Esc 返回' : step === 'connection' ? compact ? `Tab 字段 ${field + 1}/3 · Enter 下一步 · Esc 返回` : 'Tab / Shift+Tab 字段 · Enter 下一步 · Esc 返回' : '↑↓ 选择 · Enter 确认 · Esc 返回'}{pageLines.length > bodyHeight ? ` · PgUp/PgDn ${pageOffset + 1}/${pageLines.length}` : ''}</Text></Box>
   </Box>;
 }

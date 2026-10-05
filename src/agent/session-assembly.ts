@@ -2,7 +2,9 @@
  * 会话装配的各个步骤（由 createSession 编排）：
  * 核心（services / 权限 / system prompt / 扩展 / 钩子）→ 上下文引擎 → 蜂群 → 主运行时 → 对外 API。
  */
-import { isProjectTrusted, roastHome, trustState, untrustedProviderOverrides, parseModelRef, type ModelRef, type RoastConfig } from '../core/config.js';
+import { isProjectTrusted, roastHome, trustState, untrustedProviderOverrides, parseModelRef, reasoningEfforts, type ReasoningEffort, type ModelRef, type RoastConfig } from '../core/config.js';
+import { ModelDiscovery } from '../providers/models.js';
+import { saveConfigPatch } from '../cli/provider-settings.js';
 import { RoastError } from '../core/errors.js';
 import { UsageCost } from '../core/usage-cost.js';
 import type { ProviderRegistry } from '../providers/adapter.js';
@@ -171,6 +173,17 @@ function startupWarnings(cwd: string, core: Core, mcp: McpSetup): string[] {
 
 function sessionApi(p: ApiParts): Session {
   const { input, core, loop, swarm, listeners } = p;
+  const validateModel = (value: string, effort?: ReasoningEffort | null) => {
+    const next = parseModelRef(value.includes(':') ? value : `${input.ref.provider}:${value}`);
+    const profile = input.config.providers[next.provider];
+    if (!profile) throw new RoastError('CONFIG', `未配置 provider ${next.provider}`);
+    if (!isProjectTrusted(input.cwd) && untrustedProviderOverrides(input.cwd).includes(next.provider)) throw new RoastError('UNTRUSTED_CONFIG', '该 provider 的项目连接信息尚未信任，请运行 roast trust');
+    input.providers.get(next);
+    if (!next.model.trim() || /[\s\x00-\x1f\x7f]/.test(next.model)) throw new RoastError('CONFIG', '无效的模型 ID');
+    if (effort != null && !reasoningEfforts(profile.driver, profile.baseURL, profile.models?.[next.model]).includes(effort)) throw new RoastError('CONFIG', '该模型不支持所选 reasoning effort');
+    return { ...next, ...(effort !== undefined ? { reasoningEffort: effort } : {}) };
+  };
+  const discovery = new ModelDiscovery(input.config, (provider) => { validateModel(`${provider}:discovery`); });
   const usageCost = new UsageCost({ provider: input.opened.log.header.provider, model: input.opened.log.header.model }, input.config);
   for (const event of input.opened.events) usageCost.observe(event);
   usageCost.setModel(input.ref);
@@ -187,19 +200,30 @@ function sessionApi(p: ApiParts): Session {
     initialEvents: input.opened.events,
     get providerName() { return input.ref.provider; },
     get model() { return input.ref.model; },
+    get reasoningEffort() { return input.ref.reasoningEffort === undefined ? input.config.providers[input.ref.provider]?.models?.[input.ref.model]?.reasoningEffort : input.ref.reasoningEffort; },
+    listModels: (opts) => discovery.list(opts),
+    setSwarmModel(role, value, effort) {
+      if (role === 'queen') throw new RoastError('CONFIG', 'Queen 使用主会话模型，请用 /model 修改');
+      const validated = value === 'inherit' ? undefined : validateModel(value, effort);
+      const ref = validated ? `${validated.provider}:${validated.model}` : 'inherit';
+      saveConfigPatch(input.cwd, { swarm: { models: { [role]: ref }, efforts: { [role]: effort ?? null } } });
+      input.config.swarm.models = { ...input.config.swarm.models, [role]: ref };
+      input.config.swarm.efforts = { ...input.config.swarm.efforts, [role]: effort ?? null };
+      listeners.swarm.forEach((listener) => listener());
+    },
     resume: input.resume,
     cost: () => usageCost.value(),
-    switchModel(value) {
+    switchModel(value, effort) {
       if (loop.busy || swarm.tree().some((a) => a.parentId && ['queued', 'running', 'waiting', 'paused'].includes(a.state))) throw new RoastError('INVALID_REQUEST', '请等主会话和子 agent 空闲后切换模型');
-      const next = parseModelRef(value.includes(':') ? value : `${input.ref.provider}:${value}`);
-      if (!input.config.providers[next.provider]) throw new RoastError('CONFIG', `未配置 provider ${next.provider}`);
-      if (!isProjectTrusted(input.cwd) && untrustedProviderOverrides(input.cwd).includes(next.provider)) throw new RoastError('UNTRUSTED_CONFIG', '该 provider 的项目连接信息尚未信任，请运行 roast trust');
+      const next = validateModel(value, effort);
       const adapter = input.providers.get(next);
+      delete input.ref.reasoningEffort;
       Object.assign(input.ref, next);
       p.contextCtl.setWindow(adapter.resolveModel?.(next.model)?.contextWindow ?? input.config.providers[next.provider]?.models?.[next.model]?.contextWindow ?? DEFAULT_CONTEXT_WINDOW);
-      loop.committer.commit({ type: 'model/change', at: new Date().toISOString(), provider: next.provider, model: next.model });
+      loop.committer.commit({ type: 'model/change', at: new Date().toISOString(), ...next });
       loop.committer.flush();
       swarm.setRootModel(`${next.provider}:${next.model}`);
+      listeners.swarm.forEach((listener) => listener());
     },
     instructions: core.instructions,
     skills: core.ext.skills,

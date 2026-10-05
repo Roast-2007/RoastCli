@@ -50,19 +50,23 @@ Windows 上 bash 工具优先使用 Git Bash（`C:\Program Files\Git\bin\bash.ex
 | Ctrl+O | 查看最近工具的完整输出；PgUp/PgDn 翻页，Home/End 到首尾 |
 | Shift+Tab | 切换权限模式 default → acceptEdits → plan → yolo |
 | Ctrl+G | 进入 / 退出全屏 Mission Control |
-| Tab / ↑↓ | 补全命令或 `@文件` / 选择补全项 |
+| Tab / ↑↓ | 补全命令或 `@文件` / 选择补全项；`/` 或命令前缀可直接 Enter 打开选中命令 |
 | ↑ / ↓、Ctrl+R | 浏览输入历史 / 反向搜索；再次 Ctrl+R 切换匹配，Enter 载入，Esc 返回草稿 |
 | 空输入时 `?` / F1 | 打开可滚动帮助，Esc 关闭并保留草稿 |
 
 **输入前缀**：`/` 命令，`@路径` 引用文件，`!命令` 直接执行 shell（结果不发给模型），`#内容` 记到 ROAST.md。agent 运行时输入的内容会排队，在下一步送达，不需要先中断。
 
-**斜杠命令**：`/help /provider`（别名 `/config`）、`/clear /resume [runId] /context [pin|unpin|drop <id>] /compact [关注点] /rewind [N] /mode /model [provider:model] /cost /todo /init /swarm [模板] <目标> /agents /board [key] /theme [名称] /skills /memory [关键词] /mcp /logs /exit`。另外，每个 skill 都可以用 `/技能名 参数` 直接调用。
+**斜杠命令**：`/help /provider`（别名 `/config`）、`/clear /resume [runId] /context [pin|unpin|drop <id>] /compact [关注点] /rewind [N] /mode /model [provider:model] [effort|auto] /cost /todo /init /swarm [模板] <目标> /agents /board [key] /theme [名称] /skills /memory [关键词] /mcp /logs /exit`。`/hive` 是 `/swarm` 的别名，`/hive models` 打开角色模型配置。另外，每个 skill 都可以用 `/技能名 参数` 直接调用。
 
-`/model` 在主会话和子 agent 空闲时即时切换；历史与工具列表保持，费用按各次实际使用的模型累计。`/clear` 清空显示并保留上下文与草稿，`/resume` 打开最近活动优先的会话菜单。回退菜单用 ↑↓ 选择、两次 Enter 确认。
+不带参数的查看、选择与配置命令打开交互面板，↑↓ / PgUp/PgDn 选择，Enter 确认，Esc 返回；帮助页也可 Enter 打开选中的命令。`/model` 自动获取供应商列表，直接输入搜索，Ctrl+R 刷新；选定模型后再选择 effort。失败、接口不支持 `/models` 或项目连接未信任时保留已配置模型并提示原因，可选择“手动输入自定义模型”。模型与 effort 在主会话和子 agent 空闲时即时切换，写入会话日志并在恢复时保留；不改全局默认模型，费用按各次实际使用的模型累计。也可直接 `/model custom:model-a high` 或 `/model custom:model-a auto`。
+
+`/clear` 清空显示并保留上下文与草稿，`/resume` 打开最近活动优先的会话菜单。回退菜单用 ↑↓ 选择、两次 Enter 确认。`/skills` 选择技能并输入参数，`/board` 阅读完整值，`/agents` 查看任务与报告、暂停 / 恢复、发送指示或确认取消子树，`/swarm` 选择策略后输入目标。
 
 **Mission Control**（Ctrl+G）：宽终端展示 agent 树、输出、消息和黑板；窄终端自动改为两栏或单栏。`j/k` 选择 agent，`Tab` / `1–4` 查看输出、消息正文、黑板内容、上下文，`b/f` 或 PgUp/PgDn 翻页、`G` 回到底部，`m` 给主会话或子 agent 发指示，`p` 暂停 / 恢复，`x` 两次确认取消子树，`q` / `Esc` 返回。暂停在步骤边界生效，执行中的工具会正常收尾。
 
-界面按终端行数分配输入、工具与审批面板，长输入软换行且光标始终可见。动画共用一个计时器，事件约 30Hz 合批；`NO_COLOR` 使用 mono 主题，`TERM=dumb` 自动使用 ASCII 装饰并停止动画。也可设置 `ROAST_ASCII=1`、`ROAST_REDUCED_MOTION=1`，或配置 `ui.ascii: true`、`ui.motion: "reduced"`。`/theme ember|aurora|daylight|mono` 即时切换；`ROAST_THEME` 优先。
+界面按终端行数分配输入、工具与审批面板，长输入软换行且光标始终可见。动画共用一个计时器，事件约 30Hz 合批；`NO_COLOR` 使用 mono 主题，`TERM=dumb` 自动使用 ASCII 装饰并停止动画。也可设置 `ROAST_ASCII=1`、`ROAST_REDUCED_MOTION=1`，或配置 `ui.ascii: true`、`ui.motion: "reduced"`。`/theme` 用菜单即时选择并保存 ember / aurora / daylight / mono；`ROAST_THEME` 优先。终端滚动历史中的已打印内容保留原配色。
+
+Markdown 在常规终端左右留 2 列空白，窄屏自动缩减；段落、标题和顶层列表项之间增加空行，代码保持原有缩进，引用支持行内样式。可配置 `ui.markdown: { "padding": 2, "spacing": 1 }`；padding 范围 0–8，spacing 范围 0–2。流式活动区使用紧凑间距，已定稿内容使用设置的间距。
 
 只读调研可用 `/swarm research <目标>`。scout / critic / judge 可以阅读、搜索和验证；无法确认是否只读的 shell 命令会显示审批卡片及 agent 名称，可批准本次执行或拒绝，不能记住为永久例外。等待期间 agent 标为“等待用户授权”，取消后审批卡片会移除。新读取及验证结果算作进展，长调研不会因为没有修改文件而触发停滞提醒；默认连续 12 个已完成步骤没有新结果才提醒 Queen 检查。配置 deny 和 plan 模式的拒绝仍生效；非交互 `-p` 模式没有审批界面，无法确认的操作会明确返回拒绝结果。
 
@@ -70,11 +74,17 @@ Windows 上 bash 工具优先使用 Git Bash（`C:\Program Files\Git\bin\bash.ex
 
 运行 `roast config`（会话内使用 `/provider`）打开终端向导。支持 DeepSeek、通义千问、智谱、Kimi / Moonshot、Kimi Code、豆包、腾讯混元、硅基流动、OpenAI、Claude、Gemini、OpenRouter，以及自定义 OpenAI 兼容 / Anthropic 端点。地址和模型均可编辑，豆包需填写控制台实际模型或 Endpoint ID，Gemini 使用 OpenAI 兼容接口。预设模型是建议，请按账号实际可用模型调整。
 
-向导按“供应商 → 连接与模型 → API Key 与推理强度 → 确认保存”引导配置。密钥页直接聚焦 API Key，输入后 Enter 确认，下一页 Enter 保存。Tab / Shift+Tab 或 ↑↓ 切换字段，推理强度和默认模型用 ←→ 选择，Esc 返回或取消；小屏只显示当前字段，长确认页用 PgUp/PgDn 翻页。保存位置显示在页首及确认页：有项目或显式配置时更新当前最高优先级文件，否则写用户配置，保留其他供应商与扩展设置，避免保存后又被旧项目默认模型覆盖。项目连接信息变更后按提示运行 `roast trust`。修改在下一次启动生效。缺少配置时，交互式启动会自动打开向导。
+向导按“供应商 → 连接与模型 → API Key 与推理强度 → 确认保存”引导配置。模型字段可填多个逗号分隔的 ID，首个模型用于默认选择；留空时确认密钥后自动获取列表，也可在密钥或确认页按 Ctrl+L。模型列表用 Enter 勾选多个 ID，再选择“完成选择”；只保存所选模型的元数据，失败可 Esc 返回手填。新建同类供应商自动生成独立 ID，也可自行命名多个自定义端点。本地接口可在密钥页把“认证”设为“无密钥”。
+
+密钥页直接聚焦 API Key，输入后 Enter 确认，下一页 Enter 保存。Tab / Shift+Tab 或 ↑↓ 切换字段，推理强度、默认模型和认证用 ←→ 选择，Esc 返回或取消；小屏只显示当前字段，长确认页用 PgUp/PgDn 翻页。保存位置显示在页首及确认页：有项目或显式配置时更新当前最高优先级文件，否则写用户配置，保留其他供应商与扩展设置，避免保存后又被旧项目默认模型覆盖。项目连接信息变更后按提示运行 `roast trust`。修改在下一次启动生效。缺少配置时，交互式启动会自动打开向导。
 
 密钥直接输入并保存在 `~/.roast/credentials.json`（**用户目录中的本地明文文件**），配置只记录 `apiKeyRef`。供应商环境变量认证已弃用，旧配置仍可打开修改，但 `apiKeyEnv` 不再用于认证；请重新输入并保存 API Key，已有本地密钥仍可使用。`ROAST_HOME` 可覆盖用户目录。POSIX 下凭据文件权限为 `0600`，Windows 继承用户目录权限；密钥输入不进入聊天历史和日志。更换密钥使用新引用，当前会话仍使用原来的引用。
 
 `Reasoning effort` 按模型保存为 `models.<模型>.reasoningEffort`，“自动”保存为 `null` 并清除覆盖层继承的设置，请求不发送额外参数。OpenAI 兼容协议发送 `reasoning_effort`，Anthropic 发送 `output_config.effort`。选项需实际模型支持；Kimi Code 提供自动 / none / low / high / max，默认端点为 `https://api.kimi.com/coding/v1`，模型为 `kimi-for-coding`，工具循环保留当前回合的 reasoning 内容。参数依据：[OpenAI 官方文档](https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create)、[Anthropic effort](https://platform.claude.com/docs/en/build-with-claude/effort)、[Kimi Code 模型配置](https://www.kimi.com/code/docs/kimi-code/models.html)。
+
+列表通过 OpenAI 兼容 `GET <baseURL>/models` 或 Anthropic `GET <baseURL>/v1/models` 获取，Anthropic 也接受已带 `/v1` 的基础地址。发现有 10 秒超时、5 分钟会话缓存、取消与分页上限，沿用供应商 headers 与凭据，不追随重定向、不显示远端错误正文。标准 [OpenAI 模型列表](https://developers.openai.com/api/reference/resources/models/methods/list)只提供 ID 等基本字段，不能据此保证上下文、推理强度或聊天能力；服务返回相关元数据时使用它，显式配置优先。可配置 `reasoning: false` 隐藏 effort，或 `reasoningEfforts: ["low", "high"]` 限定该模型的选项。
+
+Hive 用 `/hive models` 为 lead / worker / scout / critic / judge 选择不同供应商、模型和 effort，保存后对新派生的子代理生效；“跟随主会话”继承主会话的模型与 effort。Queen 使用 `/model`。配置字段为 `swarm.models` 与 `swarm.efforts`；`models.<角色>: "inherit"` 可清除继承的角色路由。需要单个子代理覆盖时，工具 `spawn_agent` 和 `task` 支持 `model: "custom:model-b"`、`reasoning_effort: "high"`（`null` 为自动），各代理的请求与配置互不覆盖，连接仍须可信。
 
 脚本或非交互终端可用 `roast init --provider kimi-code --reasoning-effort high` 生成配置，然后运行 `roast config` 输入密钥；也可加 `--api-key-stdin` 从标准输入读取并保存密钥，无需设置供应商环境变量。
 
@@ -93,8 +103,8 @@ Windows 上 bash 工具优先使用 Git Bash（`C:\Program Files\Git\bin\bash.ex
     "claude":   { "driver": "anthropic", "apiKeyRef": "<向导生成的密钥引用>" }
   },
   "default": "deepseek:deepseek-chat",
-  "ui": { "theme": "ember", "motion": "full", "ascii": false },
-  "swarm": { "models": { "worker": "deepseek:deepseek-chat" }, "maxAgents": 12, "maxDepth": 3, "maxMinutes": 60 },
+  "ui": { "theme": "ember", "motion": "full", "ascii": false, "markdown": { "padding": 2, "spacing": 1 } },
+  "swarm": { "models": { "worker": "deepseek:deepseek-chat", "scout": "claude:claude-sonnet-4-5" }, "efforts": { "worker": null, "scout": "low" }, "maxAgents": 12, "maxDepth": 3, "maxMinutes": 60 },
   "hooks": { "PostToolUse": [{ "matcher": "edit|write|multi_edit", "command": "pnpm prettier --write ." }] },
   "mcp": { "servers": { "github": { "command": "npx", "args": ["-y", "@modelcontextprotocol/server-github"],
                                     "env": { "GITHUB_TOKEN": "${GITHUB_TOKEN}" } } } }

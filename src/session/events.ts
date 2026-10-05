@@ -109,7 +109,7 @@ export type SessionEventBody =
   | { type: 'rewind'; at: string; toTurn: number; checkpoint?: string; backup?: string; deleted?: string[] }
   /** v1：权限模式切换（default / acceptEdits / plan / yolo） */
   | { type: 'mode/change'; at: string; mode: 'default' | 'acceptEdits' | 'plan' | 'yolo' }
-  | { type: 'model/change'; at: string; provider: string; model: string }
+  | { type: 'model/change'; at: string; provider: string; model: string; reasoningEffort?: import('../core/config.js').ReasoningEffort | null }
   | { type: 'error'; at: string; where: string; code: string; message: string };
 
 export type SessionEvent = SessionEventBody & EventEnvelope;

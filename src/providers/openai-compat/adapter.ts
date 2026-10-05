@@ -8,6 +8,7 @@
  */
 import type { GenerateOptions, StreamChunk } from '../../core/types.js';
 import { VERSION } from '../../core/version.js';
+import { providerEndpoint } from '../endpoints.js';
 import { resolveApiKey, type ProviderProfile } from '../../core/config.js';
 import { RoastError, asRoastError, httpErrorCode, isRetryableCode, parseRetryAfter } from '../../core/errors.js';
 
@@ -31,7 +32,7 @@ export class OpenAICompatAdapter implements ProviderAdapter {
   }
 
   resolveModel(model: string): ModelInfo | undefined {
-    const meta = this.options.models?.[model];
+    const meta = this.profile.models?.[model];
     if (!meta) return undefined;
     const info: ModelInfo = { id: model };
     if (meta.contextWindow !== undefined) info.contextWindow = meta.contextWindow;
@@ -40,8 +41,8 @@ export class OpenAICompatAdapter implements ProviderAdapter {
   }
 
   private requestBody(options: GenerateOptions): Record<string, unknown> {
-    const meta = this.options.models?.[options.model];
-    return buildRequest(options, meta?.reasoningReplay ?? 'drop', meta?.maxTokensField ?? defaultMaxTokensField(options.model), meta?.reasoningEffort);
+    const meta = this.profile.models?.[options.model];
+    return buildRequest(options, meta?.reasoningReplay ?? 'drop', meta?.maxTokensField ?? defaultMaxTokensField(options.model), options.reasoningEffort === null ? undefined : options.reasoningEffort ?? meta?.reasoningEffort);
   }
 
   async *stream(options: GenerateOptions): AsyncGenerator<StreamChunk> {
@@ -77,12 +78,13 @@ export class OpenAICompatAdapter implements ProviderAdapter {
       state.idleTimedOut = true;
     });
     try {
-      const response = await fetch(`${this.options.baseURL}/chat/completions`, {
+      const response = await fetch(providerEndpoint(this.profile, 'chat/completions'), {
         method: 'POST',
+        redirect: 'error',
         headers: {
           'content-type': 'application/json',
           'user-agent': `RoastCli/${VERSION}`,
-          authorization: `Bearer ${apiKey}`,
+          ...(apiKey ? { authorization: `Bearer ${apiKey}` } : {}),
           ...this.options.headers,
         },
         body: JSON.stringify(this.requestBody(options)),
@@ -97,7 +99,7 @@ export class OpenAICompatAdapter implements ProviderAdapter {
           reason: 'error',
           error: new RoastError(
             code,
-            `provider "${this.providerName}" 返回 HTTP ${response.status}: ${bodyText.slice(0, 500)}`,
+            `provider "${this.providerName}" 返回 HTTP ${response.status}`,
             {
               retryable: isRetryableCode(code),
               status: response.status,

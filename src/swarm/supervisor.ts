@@ -9,7 +9,7 @@ import path from 'node:path';
 import type { AgentRuntime } from '../agent/runtime.js';
 import type { BoundaryHooks } from '../agent/boundary.js';
 import type { UiEvent } from '../agent/ui-events.js';
-import type { ModelRef } from '../core/config.js';
+import type { ModelRef, ReasoningEffort } from '../core/config.js';
 import { RunLogWriter } from '../session/log-writer.js';
 import type { ToolServices } from '../tools/tool.js';
 import { Blackboard } from './board.js';
@@ -40,7 +40,7 @@ export interface SupervisorDeps {
   cwd: string;
   createRuntime(input: CreateRuntimeInput): AgentRuntime;
   createServices(agentId: string): ToolServices;
-  modelFor(role: AgentRole): ModelRef;
+  modelFor(role: AgentRole, override?: string, effort?: ReasoningEffort | null): ModelRef;
   maxAgents?: number;
   maxDepth?: number;
   onAgentEvent?(agentId: string, ev: UiEvent): void;
@@ -197,7 +197,7 @@ export class Supervisor {
     return { id: `m-${from}-${++this.msgSeq}`, from, to: { agent: to }, kind, subject, body, refs, hop: 0, at: this.now() };
   }
 
-  spawn(parentId: string, opts: { role: AgentRole; task: string; refs?: string[]; isolation?: IsolationMode }): SpawnResult {
+  spawn(parentId: string, opts: { role: AgentRole; task: string; refs?: string[]; isolation?: IsolationMode; model?: string; reasoningEffort?: ReasoningEffort | null }): SpawnResult {
     const parent = this.recs.get(parentId);
     if (!parent) return { ok: false, reason: `未知的上级 ${parentId}` };
     if (opts.role === 'queen') return { ok: false, reason: '不能派生 queen' };
@@ -205,8 +205,11 @@ export class Supervisor {
     const maxDepth = this.deps.maxDepth ?? 3;
     if (this.recs.size - 1 >= maxAgents) return { ok: false, reason: `已达 agent 数量上限 ${maxAgents}` };
     if (parent.info.depth + 1 > maxDepth) return { ok: false, reason: `已达最大层级 ${maxDepth}` };
+    if (parent.controller.signal.aborted) return { ok: false, reason: '上级已取消，不能派生新 agent' };
+    let modelRef: ModelRef;
+    try { modelRef = { ...this.deps.modelFor(opts.role, opts.model, opts.reasoningEffort) }; }
+    catch (err) { return { ok: false, reason: err instanceof Error ? err.message : '模型选择失败' }; }
     const id = `${ROLE_INFO[opts.role].prefix}${++this.seq}`;
-    const modelRef = this.deps.modelFor(opts.role);
     const rec = this.makeRec({
       id,
       parentId,
@@ -215,6 +218,7 @@ export class Supervisor {
       state: 'running',
       brief: opts.task,
       model: `${modelRef.provider}:${modelRef.model}`,
+      ...(modelRef.reasoningEffort !== undefined ? { reasoningEffort: modelRef.reasoningEffort } : {}),
       startedAt: this.now(),
       children: [],
     }, parent.cwd, opts.isolation ?? 'auto');

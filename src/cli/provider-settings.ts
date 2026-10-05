@@ -1,5 +1,5 @@
 import { existsSync, readFileSync } from 'node:fs';
-import { ConfigSchema, ProviderProfileSchema, configSources, deepMerge, defaultBaseURL, roastHome, reasoningEfforts, type ProviderProfile, type ReasoningEffort } from '../core/config.js';
+import { ConfigSchema, ProviderProfileSchema, configSources, deepMerge, defaultBaseURL, roastHome, reasoningEfforts, type ModelMeta, type ProviderProfile, type ReasoningEffort } from '../core/config.js';
 import { atomicWriteJson, readCredential, saveCredential } from '../core/credentials.js';
 import { RoastError } from '../core/errors.js';
 import { PROVIDER_PRESETS } from '../providers/presets.js';
@@ -58,10 +58,16 @@ export interface ProviderDraft {
   driver: ProviderProfile['driver'];
   baseURL: string;
   model: string;
+  auth?: ProviderProfile['auth'];
+  modelMeta?: Record<string, ModelMeta>;
   apiKey: string;
   reasoningEffort?: ReasoningEffort;
   existing?: ProviderProfile;
   makeDefault: boolean;
+}
+
+export function draftModelIds(draft: ProviderDraft): string[] {
+  return [...new Set(draft.model.split(/[,，;\n]+/).map((id) => id.trim()).filter(Boolean))];
 }
 
 export function validateProviderDraft(draft: ProviderDraft, requireKey = true): string | undefined {
@@ -70,9 +76,10 @@ export function validateProviderDraft(draft: ProviderDraft, requireKey = true): 
     const url = new URL(draft.baseURL);
     if (!['https:', 'http:'].includes(url.protocol) || url.username || url.password || url.search || url.hash) throw new Error();
   } catch { return '连接地址须为 http(s) URL，不能包含账号、密码、查询参数或锚点'; }
-  if (!draft.model.trim() || /[\s\x00-\x1f]/.test(draft.model)) return '请填写有效的模型 ID（豆包可填写 Endpoint ID）';
-  if (draft.reasoningEffort && !reasoningEfforts(draft.driver, draft.baseURL).includes(draft.reasoningEffort)) return '该协议不支持所选 reasoning effort';
-  if (requireKey && !draft.apiKey.trim()) {
+  const ids = draftModelIds(draft);
+  if (!ids.length || ids.some((id) => id.length > 256 || /[\s\x00-\x1f\x7f]/.test(id) || ['__proto__', 'constructor', 'prototype'].includes(id))) return '请填写有效的模型 ID（多个 ID 用逗号分隔）';
+  if (draft.reasoningEffort && !reasoningEfforts(draft.driver, draft.baseURL, draft.existing?.models?.[ids[0]!] ?? draft.modelMeta?.[ids[0]!]).includes(draft.reasoningEffort)) return '该模型不支持所选 reasoning effort';
+  if (requireKey && draft.auth !== 'none' && !draft.apiKey.trim()) {
     try { if (!draft.existing?.apiKeyRef || !readCredential(roastHome(), draft.existing.apiKeyRef)) return '请输入 API Key'; }
     catch { return '已保存的 API Key 无法读取，请重新输入'; }
   }
@@ -96,21 +103,24 @@ export function saveProviderSettings(cwd: string, draft: ProviderDraft): { file:
   const providers = raw['providers'];
   if (providers !== undefined && (!providers || typeof providers !== 'object' || Array.isArray(providers))) throw new RoastError('CONFIG', '用户配置的 providers 须为对象');
   const userProfile = (providers as Record<string, unknown> | undefined)?.[draft.name];
-  const existing: Partial<ProviderProfile> = {
-    ...settings.providers[draft.name],
-    ...draft.existing,
-    ...(userProfile && typeof userProfile === 'object' ? userProfile : {}),
-  };
+  const existing = deepMerge(deepMerge(settings.providers[draft.name] ?? {}, draft.existing ?? {}), userProfile ?? {}) as Partial<ProviderProfile>;
   const { apiKeyEnv: _env, apiKeyRef: _ref, ...rest } = existing;
-  const preset = Object.values(PROVIDER_PRESETS).find((p) => p.baseURL === draft.baseURL.trim().replace(/\/+$/, '') && p.model === draft.model && p.driver === draft.driver);
+  const ids = draftModelIds(draft);
+  const model = ids[0]!;
+  const models = { ...existing.models };
+  for (const id of ids) {
+    const preset = Object.values(PROVIDER_PRESETS).find((p) => p.baseURL === draft.baseURL.trim().replace(/\/+$/, '') && p.model === id && p.driver === draft.driver);
+    models[id] = { ...(preset?.contextWindow ? { contextWindow: preset.contextWindow } : {}), ...preset?.modelMeta, ...draft.modelMeta?.[id], ...models[id] };
+  }
   const profile = {
     ...rest,
     driver: draft.driver,
+    ...(draft.auth ? { auth: draft.auth } : {}),
     baseURL: draft.baseURL.trim().replace(/\/+$/, ''),
     apiKeyRef: existing.apiKeyRef ?? 'pending',
-    models: { ...existing.models, [draft.model]: { ...(preset?.contextWindow ? { contextWindow: preset.contextWindow } : {}), ...preset?.modelMeta, ...existing.models?.[draft.model], reasoningEffort: draft.reasoningEffort ?? null } },
+    models: { ...models, [model]: { ...models[model], reasoningEffort: draft.reasoningEffort ?? null } },
   };
-  const next = { ...raw, providers: { ...(providers as object ?? {}), [draft.name]: profile }, default: draft.makeDefault || !settings.default ? `${draft.name}:${draft.model}` : settings.default };
+  const next = { ...raw, providers: { ...(providers as object ?? {}), [draft.name]: profile }, default: draft.makeDefault || !settings.default ? `${draft.name}:${model}` : settings.default };
   const merged = configSources(cwd).reduce<unknown>((acc, source) => deepMerge(acc, source.path === file ? next : source.exists ? readObject(source.path) : {}), {});
   // Validate before saving a secret, while preserving extension/unknown config fields on disk.
   if (!ConfigSchema.safeParse(merged).success) throw new RoastError('CONFIG', '合并后的配置无效，请检查现有配置后重试');
@@ -122,5 +132,15 @@ export function saveProviderSettings(cwd: string, draft: ProviderDraft): { file:
 
 export function draftFromProfile(name: string, profile: ProviderProfile, defaultModel?: string): ProviderDraft {
   const model = defaultModel?.startsWith(`${name}:`) ? defaultModel.slice(name.length + 1) : Object.keys(profile.models ?? {})[0] ?? '';
-  return { name, driver: profile.driver, baseURL: profile.baseURL ?? defaultBaseURL(profile.driver), model, reasoningEffort: profile.models?.[model]?.reasoningEffort, apiKey: '', existing: profile, makeDefault: defaultModel === `${name}:${model}` };
+  return { name, driver: profile.driver, baseURL: profile.baseURL ?? defaultBaseURL(profile.driver), model, auth: profile.auth, reasoningEffort: profile.models?.[model]?.reasoningEffort, apiKey: '', existing: profile, makeDefault: defaultModel === `${name}:${model}` };
+}
+
+/** Preference patches preserve unknown extension fields and inherited profiles. */
+export function saveConfigPatch(cwd: string, patch: Record<string, unknown>): string {
+  const file = providerSettingsSource(cwd).path;
+  const next = deepMerge(readObject(file), patch);
+  const merged = configSources(cwd).reduce<unknown>((acc, source) => deepMerge(acc, source.path === file ? next : source.exists ? readObject(source.path) : {}), {});
+  if (!ConfigSchema.safeParse(merged).success) throw new RoastError('CONFIG', '合并后的配置无效，请检查现有配置后重试');
+  atomicWriteJson(file, next);
+  return file;
 }

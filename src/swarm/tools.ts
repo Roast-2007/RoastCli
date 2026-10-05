@@ -4,6 +4,7 @@
  * 依赖 ToolServices 中的 SWARM_KEY → { supervisor, agentId }（每个 agent 各自一份）。
  */
 import { z } from 'zod';
+import { ReasoningEffortSchema } from '../core/config.js';
 import { isMutating } from '../ext/audit/checkpoints.js';
 import { defineTool, textResult, toolErrorResult, type PreExecuteHook, type ToolContext, type ToolResult } from '../tools/tool.js';
 import type { Supervisor, WaitResult } from './supervisor.js';
@@ -45,6 +46,8 @@ export const spawnAgentTool = defineTool({
     role: z.enum(SPAWNABLE),
     task: z.string().min(1).describe('清晰、自包含的任务描述（子 agent 看不到你的对话历史）'),
     refs: z.array(z.string()).optional().describe('参考资料：黑板键、文件路径或 ctx 句柄'),
+    model: z.string().optional().describe('可选 provider:model；默认使用用户为该角色设置的模型'),
+    reasoning_effort: ReasoningEffortSchema.nullable().optional().describe('只覆盖此子 agent 的推理强度；null 为供应商默认'),
     isolation: z
       .enum(ISOLATION_MODES)
       .optional()
@@ -59,6 +62,8 @@ export const spawnAgentTool = defineTool({
     const r = s.supervisor.spawn(s.agentId, {
       role: args.role,
       task: args.task,
+      ...(args.model ? { model: args.model } : {}),
+      ...(args.reasoning_effort !== undefined ? { reasoningEffort: args.reasoning_effort } : {}),
       ...(args.refs ? { refs: args.refs } : {}),
       ...(args.isolation ? { isolation: args.isolation } : {}),
     });
@@ -228,7 +233,7 @@ export const agentsStatusTool = defineTool({
   async execute(_args, ctx): Promise<ToolResult> {
     const s = access(ctx);
     if (!s) return toolErrorResult('agents_status', NO_SWARM);
-    const lines = s.supervisor.tree().map((a) => `${'  '.repeat(a.depth)}${a.id} [${a.role}] ${a.state}${a.waitingFor ? `（${a.waitingFor}）` : ''}：${a.brief.slice(0, 60)}${a.report ? ` → ${a.report.status}` : ''}`);
+    const lines = s.supervisor.tree().map((a) => `${'  '.repeat(a.depth)}${a.id} [${a.role}] ${a.state}${a.waitingFor ? `（${a.waitingFor}）` : ''} · ${a.model}${a.reasoningEffort ? ` / ${a.reasoningEffort}` : ''}：${a.brief.slice(0, 60)}${a.report ? ` → ${a.report.status}` : ''}`);
     return textResult(lines.join('\n'));
   },
 });
@@ -236,14 +241,14 @@ export const agentsStatusTool = defineTool({
 export const taskTool = defineTool({
   name: 'task',
   description: '派一个一次性子 agent 完成独立任务并等待其结果（适合并行调研或隔离的小改动）。',
-  parameters: z.object({ prompt: z.string().min(1), role: z.enum(['worker', 'scout']).default('worker') }),
+  parameters: z.object({ prompt: z.string().min(1), role: z.enum(['worker', 'scout']).default('worker'), model: z.string().optional(), reasoning_effort: ReasoningEffortSchema.nullable().optional() }),
   isReadOnly: false,
   isConcurrencySafe: true,
   permission: { kind: 'interact' },
   async execute(args, ctx): Promise<ToolResult> {
     const s = access(ctx);
     if (!s) return toolErrorResult('task', NO_SWARM);
-    const spawned = s.supervisor.spawn(s.agentId, { role: args.role, task: args.prompt });
+    const spawned = s.supervisor.spawn(s.agentId, { role: args.role, task: args.prompt, model: args.model, reasoningEffort: args.reasoning_effort });
     if (!spawned.ok) return toolErrorResult('task', spawned.reason);
     const r = await s.supervisor.wait(s.agentId, [spawned.id], 'all', { signal: ctx.signal });
     if (r.reason === 'aborted') {

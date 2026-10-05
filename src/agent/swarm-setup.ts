@@ -4,7 +4,8 @@
  * 各自独立：日志（agents/<id>.jsonl）、services（读写状态、后台任务、待办）、上下文引擎、mailbox、工作目录
  * （写入型子 agent 在 git 仓库中使用独立 worktree，见 swarm/isolation.ts）。
  */
-import { parseModelRef, roastHome, type ModelRef, type RoastConfig } from '../core/config.js';
+import { parseModelRef, roastHome, isProjectTrusted, untrustedProviderOverrides, reasoningEfforts, type ReasoningEffort, type ModelRef, type RoastConfig } from '../core/config.js';
+import { RoastError } from '../core/errors.js';
 import type { InteractionBroker } from '../core/interaction.js';
 import type { ProviderRegistry } from '../providers/adapter.js';
 import { ContextController } from '../context/controller.js';
@@ -58,9 +59,17 @@ export interface SwarmSetup {
 
 export function setupSwarm(input: SwarmSetupInput): SwarmSetup {
   const swarm = input.config.swarm;
-  const modelFor = (role: AgentRole): ModelRef => {
+  const modelFor = (role: AgentRole, override?: string, effort?: ReasoningEffort | null): ModelRef => {
     const ref = swarm.models?.[role];
-    return ref ? parseModelRef(ref) : input.mainRef;
+    const model = override ? parseModelRef(override) : ref && ref !== 'inherit' ? parseModelRef(ref) : { ...input.mainRef };
+    const profile = input.config.providers[model.provider];
+    if (!profile) throw new RoastError('CONFIG', `未配置 provider ${model.provider}`);
+    if (!isProjectTrusted(input.cwd) && untrustedProviderOverrides(input.cwd).includes(model.provider)) throw new RoastError('UNTRUSTED_CONFIG', '子 agent 的 provider 连接尚未信任，请运行 roast trust');
+    input.providers.get(model);
+    const selected = effort !== undefined ? effort : override || ref === 'inherit' ? undefined : swarm.efforts?.[role];
+    if (selected !== undefined) model.reasoningEffort = selected;
+    if (model.reasoningEffort != null && !reasoningEfforts(profile.driver, profile.baseURL, profile.models?.[model.model]).includes(model.reasoningEffort)) throw new RoastError('CONFIG', '子 agent 模型不支持所选 reasoning effort');
+    return model;
   };
   const live = new Set(['queued', 'running', 'waiting', 'paused']);
   const leases = new LeaseManager((id) => live.has(supervisor.info(id)?.state ?? 'done'));
@@ -104,6 +113,7 @@ export function setupSwarm(input: SwarmSetupInput): SwarmSetup {
         maxSteps: input.config.maxSteps,
         signal: input.signal,
         debugLog: input.debugLog,
+        ...(input.config.temperature !== undefined ? { temperature: input.config.temperature } : {}),
       });
       ctl.attach((b) => rt.committer.commit(b), () => rt.committer.state);
       rt.committer.onCommit((ev) => ctl.observe(ev));

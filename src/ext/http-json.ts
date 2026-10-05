@@ -2,7 +2,7 @@ import { RoastError } from '../core/errors.js';
 
 /** Shared bounded transport. Error bodies may contain credentials and are never echoed. */
 export async function remoteJson(baseURL: string, endpoint: string, opts: { label: string; method?: string; body?: unknown; headers?: Record<string, string>; signal?: AbortSignal; timeoutMs?: number }): Promise<unknown> {
-  const url = new URL(baseURL.replace(/\/$/, '') + '/' + endpoint.replace(/^\//, ''));
+  const url = new URL(endpoint ? baseURL.replace(/\/$/, '') + '/' + endpoint.replace(/^\//, '') : baseURL);
   if (!['https:', 'http:'].includes(url.protocol) || url.username || url.password) throw new RoastError('CONFIG', `${opts.label} 地址必须是无内嵌凭据的 HTTP(S) URL`);
   const signal = AbortSignal.any([AbortSignal.timeout(opts.timeoutMs ?? 15_000), ...(opts.signal ? [opts.signal] : [])]);
   let response: Response;
@@ -14,7 +14,7 @@ export async function remoteJson(baseURL: string, endpoint: string, opts: { labe
   if (!response.ok) { await response.body?.cancel(); throw new RoastError('INVALID_REQUEST', `${opts.label} HTTP ${response.status}`, { status: response.status }); }
   if (response.status === 204) return null;
   const maxBytes = 16 * 1024 * 1024;
-  if (Number(response.headers.get('content-length')) > maxBytes) throw new RoastError('INVALID_REQUEST', `${opts.label} 响应过大`);
+  if (Number(response.headers.get('content-length')) > maxBytes) { await response.body?.cancel(); throw new RoastError('INVALID_REQUEST', `${opts.label} 响应过大`); }
   const reader = response.body?.getReader();
   if (!reader) return null;
   const chunks: Uint8Array[] = [];

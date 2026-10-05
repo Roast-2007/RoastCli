@@ -63,7 +63,7 @@ describe('swarm templates', () => {
 });
 
 describe('/swarm command', () => {
-  it('lists templates without arguments and sends the rendered instruction otherwise', async () => {
+  it('opens the strategy panel without arguments and sends the rendered instruction otherwise', async () => {
     const ws = tempWorkspace();
     const provider = new ScriptedProvider([textScript('收到')]);
     const providers = new ProviderRegistry();
@@ -75,7 +75,7 @@ describe('/swarm command', () => {
 
     controller.submit('/swarm', '/swarm');
     await new Promise((r) => setTimeout(r, 20));
-    expect(items().at(-1)).toMatchObject({ kind: 'notice', text: expect.stringContaining('best-of-n') });
+    expect(store.getState().meta.overlay).toBe('swarm');
 
     controller.submit('/swarm best-of-n 实现 LRU', '/swarm best-of-n 实现 LRU');
     for (let i = 0; i < 100 && provider.requests.length === 0; i++) await new Promise((r) => setTimeout(r, 20));

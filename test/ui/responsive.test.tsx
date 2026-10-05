@@ -40,6 +40,7 @@ describe('real Ink terminal constraints', () => {
       expect(tty.chunks.join('')).not.toContain('\u001b[2J');
       expect(stripVTControlCharacters(tty.chunks.join(''))).toContain('line-1999 中文 output');
       expect(store.getState().agents.main!.pending).toBe('');
+      expect(tty.listenerCount('resize')).toBeLessThan(10);
     } finally { instance.unmount(); await instance.waitUntilExit(); controller.dispose(); await session.shutdown(); }
   });
   it.each([[40, 10], [60, 16], [80, 24], [120, 40]])('inline and mission fit %i×%i with huge drafts, tool output and permission queues', async (columns, rows) => {

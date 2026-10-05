@@ -15,7 +15,7 @@ import { formatContextStats } from './format-context.js';
 import { formatCost } from './status-info.js';
 import { pickTheme, THEMES } from './theme.js';
 import type { SkillMeta } from '../ext/skills.js';
-import { isProjectTrusted, roastHome } from '../core/config.js';
+import { isProjectTrusted, roastHome, ReasoningEffortSchema } from '../core/config.js';
 import { buildSwarmPrompt, DEFAULT_TEMPLATE, describeTemplates, loadTemplates } from '../swarm/templates.js';
 
 export interface CommandContext {
@@ -44,9 +44,10 @@ export const KEYS_HELP = [
 ].join('\n');
 
 const say = (ctx: CommandContext, text: string, tone: 'info' | 'warn' | 'error' | 'success' = 'info') => ctx.store.addNotice('main', text, tone);
+const importEffort = (value: string) => ReasoningEffortSchema.parse(value);
 
 const MEMORY_HEADING = '## 记忆';
-const INIT_TEMPLATE = `# 项目说明（ROAST.md）
+export const INIT_TEMPLATE = `# 项目说明（ROAST.md）
 
 > RoastCli 每次会话都会读取本文件。写下项目约定、常用命令和注意事项。
 
@@ -75,9 +76,10 @@ export function appendMemory(cwd: string, note: string): string {
 
 /** /swarm [模板] <目标>：按策略模板生成给 Queen 的指令并发送；不带参数时列出模板 */
 function swarm(ctx: CommandContext, args: string): void {
+  if (args === 'models' && ctx.openOverlay) return ctx.openOverlay('hive-models');
   const cwd = ctx.session.log.header.cwd;
   const templates = loadTemplates(cwd, roastHome(), { trusted: isProjectTrusted(cwd) });
-  if (!args) return say(ctx, `策略模板（/swarm <模板> <目标>；省略模板时用 ${DEFAULT_TEMPLATE}）：\n${describeTemplates(templates)}`);
+  if (!args) return ctx.openOverlay ? ctx.openOverlay('swarm') : say(ctx, `策略模板（/swarm <模板> <目标>；省略模板时用 ${DEFAULT_TEMPLATE}）：\n${describeTemplates(templates)}`);
   const [first = '', ...rest] = args.split(' ');
   const [name, goal] = templates.has(first) && rest.length > 0 ? [first, rest.join(' ')] : [DEFAULT_TEMPLATE, args];
   if (!ctx.send) return say(ctx, '当前界面不支持直接发起蜂群任务', 'warn');
@@ -129,6 +131,7 @@ export const COMMANDS: SlashCommand[] = [
     description: '立即压缩上下文',
     args: '[关注点]',
     run: async (ctx, args) => {
+      if (!args && ctx.openOverlay) return ctx.openOverlay('compact');
       const saved = await ctx.session.compact(args || undefined);
       say(ctx, saved > 0 ? `已压缩上下文，约节省 ${saved} tokens` : '暂无可压缩的内容（历史轮次太少）', saved > 0 ? 'success' : 'info');
     },
@@ -136,19 +139,25 @@ export const COMMANDS: SlashCommand[] = [
   { name: 'rewind', description: '回退到某一轮之前（文件 + 对话）', args: '[N]', run: rewind },
   {
     name: 'mode',
-    description: '切换权限模式（不带参数则轮换）',
+    description: '交互式选择权限模式',
     args: '[default|acceptEdits|plan|yolo]',
     run: (ctx, args) => {
+      if (!args && ctx.openOverlay) return ctx.openOverlay('mode');
       if (args && !(MODE_CYCLE as readonly string[]).includes(args)) return say(ctx, `未知模式：${args}`, 'warn');
       const mode = args ? (ctx.session.permissions.setMode(args as PermissionMode), args) : ctx.session.permissions.cycleMode();
       say(ctx, `权限模式：${mode}`);
     },
   },
-  { name: 'model', description: '查看或切换当前模型', args: '[provider:model]', run: (ctx, args) => { if (args) { ctx.session.switchModel(args); ctx.store.setMeta({ contextPercent: ctx.session.contextStats().percent }); } say(ctx, `${ctx.session.providerName}:${ctx.session.model}`); } },
+  { name: 'model', description: '自动发现、选择模型与推理强度', args: '[provider:model] [effort|auto]', run: (ctx, args) => {
+    if (!args && ctx.openOverlay) return ctx.openOverlay('model');
+    if (args) { const [ref = '', effort] = args.split(/\s+/); const parsed = effort === 'auto' ? null : effort === undefined ? undefined : importEffort(effort); ctx.session.switchModel(ref, parsed); ctx.store.setMeta({ contextPercent: ctx.session.contextStats().percent }); }
+    say(ctx, `${ctx.session.providerName}:${ctx.session.model} · effort ${ctx.session.reasoningEffort ?? '自动'}`);
+  } },
   {
     name: 'cost',
     description: '本次会话的 token 用量',
     run: (ctx) => {
+      if (ctx.openOverlay) return ctx.openOverlay('cost');
       const u = ctx.store.getState().agents['main']!.totalUsage;
       const estimate = ctx.session.cost();
       const cost = estimate !== null ? ` · 约 ${formatCost(estimate)}` : '（部分模型缺少 pricing，无法完整估算费用）';
@@ -158,12 +167,13 @@ export const COMMANDS: SlashCommand[] = [
   {
     name: 'todo',
     description: '查看当前待办清单',
-    run: (ctx) => say(ctx, renderTodos(ctx.store.getState().agents['main']!.todos)),
+    run: (ctx) => ctx.openOverlay ? ctx.openOverlay('todo') : say(ctx, renderTodos(ctx.store.getState().agents['main']!.todos)),
   },
   {
     name: 'init',
     description: '创建 ROAST.md 项目说明模板',
     run: (ctx) => {
+      if (ctx.openOverlay) return ctx.openOverlay('init');
       const file = path.join(ctx.session.log.header.cwd, 'ROAST.md');
       if (existsSync(file)) return say(ctx, `ROAST.md 已存在：${file}`, 'warn');
       writeFileSync(file, INIT_TEMPLATE, 'utf8');
@@ -174,6 +184,7 @@ export const COMMANDS: SlashCommand[] = [
     name: 'skills',
     description: '列出可用技能（/技能名 [参数] 直接调用）',
     run: (ctx) => {
+      if (ctx.openOverlay) return ctx.openOverlay('skills');
       const list = ctx.session.skills.list();
       say(ctx, list.length ? list.map((s) => `/${s.name}  ${s.description}（${s.source}）`).join('\n') : '没有技能。在 .roast/skills/<名称>/SKILL.md 或 ~/.roast/skills 下添加');
     },
@@ -183,6 +194,7 @@ export const COMMANDS: SlashCommand[] = [
     description: '查看 / 检索项目长期记忆',
     args: '[关键词]',
     run: async (ctx, args) => {
+      if (!args && ctx.openOverlay) return ctx.openOverlay('memory');
       const facts = args ? await ctx.session.memory.recall(args) : ((await ctx.session.memory.list?.({ limit: 30 })) ?? []);
       say(ctx, facts.length ? facts.map((f) => `[${f.id}] ${f.content}`).join('\n') : '没有记忆（模型可用 memory 工具保存，或输入 # 内容 写入 ROAST.md）');
     },
@@ -192,15 +204,17 @@ export const COMMANDS: SlashCommand[] = [
     description: '查看或即时切换主题',
     args: '[ember|aurora|daylight|mono]',
     run: (ctx, args) => {
+      if (!args && ctx.openOverlay) return ctx.openOverlay('theme');
       if (args && !THEMES[args]) return say(ctx, `未知主题：${args}`, 'warn');
       if (args) ctx.store.setMeta({ theme: args });
       const current = pickTheme(process.env, ctx.store.getState().meta.theme ?? ctx.session.config.ui?.theme).name;
       say(ctx, Object.keys(THEMES).map((n) => `${n === current ? '●' : '○'} ${n}`).join('  '));
     },
   },
-  { name: 'swarm', description: '以蜂群方式完成目标（不带参数列出策略模板）', args: '[模板] <目标>', run: swarm },
-  { name: 'agents', description: '查看蜂群成员、状态和模型', run: (ctx) => say(ctx, ctx.session.swarm.tree().map((agent) => `${'  '.repeat(agent.depth)}${agent.id} [${agent.role}] ${agent.state} · ${agent.model} · ${agent.brief}`).join('\n')) },
+  { name: 'swarm', aliases: ['hive'], description: '选择蜂群策略、输入目标；models 配置角色模型', args: '[模板] <目标>|models', run: swarm },
+  { name: 'agents', description: '管理蜂群成员、状态和模型', run: (ctx) => ctx.openOverlay ? ctx.openOverlay('agents') : say(ctx, ctx.session.swarm.tree().map((agent) => `${'  '.repeat(agent.depth)}${agent.id} [${agent.role}] ${agent.state} · ${agent.model} · ${agent.brief}`).join('\n')) },
   { name: 'board', description: '列出黑板，或查看指定条目的完整值', args: '[key]', run: (ctx, key) => {
+    if (!key && ctx.openOverlay) return ctx.openOverlay('board');
     if (key) {
       const entry = ctx.session.swarm.board.read(key);
       return say(ctx, entry ? `${key} v${entry.version} · ${entry.author}\n${typeof entry.value === 'string' ? entry.value : JSON.stringify(entry.value, null, 2)}` : `没有黑板条目：${key}`);
@@ -212,13 +226,14 @@ export const COMMANDS: SlashCommand[] = [
     name: 'mcp',
     description: 'MCP 服务器连接状态',
     run: (ctx) => {
+      if (ctx.openOverlay) return ctx.openOverlay('mcp');
       const list = ctx.session.mcpStatus();
       const icon = { connecting: '…', connected: '●', failed: '✗', closed: '○' } as const;
       const lines = list.map((s) => `${icon[s.state]} ${s.name}  ${s.state} · ${s.toolCount} 个工具${s.error ? `\n    ${s.error}` : ''}`);
       say(ctx, lines.length ? lines.join('\n') : '没有配置 MCP 服务器（roast mcp add <名称> -- <命令> [参数...]）');
     },
   },
-  { name: 'logs', description: '本次运行日志路径', run: (ctx) => say(ctx, ctx.session.log.path) },
+  { name: 'logs', description: '本次运行日志路径', run: (ctx) => ctx.openOverlay ? ctx.openOverlay('logs') : say(ctx, ctx.session.log.path) },
   { name: 'exit', aliases: ['quit'], description: '退出', run: (ctx) => ctx.exit() },
 ];
 

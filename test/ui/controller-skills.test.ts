@@ -53,8 +53,8 @@ describe('controller skills', () => {
     await session.shutdown();
   });
 
-  it('unknown names warn; /skills and /memory list content', async () => {
-    const { session, controller, items } = await setup();
+  it('unknown names warn; /skills opens a panel and /memory keywords retrieves content', async () => {
+    const { session, store, controller, items } = await setup();
     await session.memory.store({ content: '偏好 pnpm' });
 
     controller.submit('/nope', '/nope');
@@ -64,7 +64,8 @@ describe('controller skills', () => {
 
     const notices = items().filter((x) => x.kind === 'notice').map((x) => (x.kind === 'notice' ? x.text : ''));
     expect(notices.some((t) => t.includes('未知命令：/nope'))).toBe(true);
-    expect(notices.some((t) => t.includes('/deploy  部署到预发（project）'))).toBe(true);
+    expect(store.getState().meta.overlay).toBe('skills');
+    expect(session.skills.list()).toEqual(expect.arrayContaining([expect.objectContaining({ name: 'deploy', description: '部署到预发' })]));
     expect(notices.some((t) => t.includes('偏好 pnpm'))).toBe(true);
     controller.dispose();
     await session.shutdown();

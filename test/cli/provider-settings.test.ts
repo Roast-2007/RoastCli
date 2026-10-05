@@ -25,6 +25,21 @@ afterEach(() => {
 const draft = (overrides: Partial<ProviderDraft> = {}): ProviderDraft => ({ name: 'p', driver: 'openai-compat', baseURL: 'https://example.com/v1', model: 'model-a', apiKey: 'sk-local-test', makeDefault: true, ...overrides });
 
 describe('provider settings and credentials', () => {
+  it('adds multiple custom models, retains inherited metadata and supports explicit no-key interfaces', () => {
+    saveProviderSettings(workspace.dir, draft({ model: 'one, two, one', reasoningEffort: 'high', modelMeta: { two: { contextWindow: 32000 } } }));
+    let config = loadConfig(workspace.dir)!;
+    expect(config.default).toBe('p:one'); expect(Object.keys(config.providers['p']!.models!)).toEqual(['one', 'two']);
+    workspace.file('.roast/config.json', JSON.stringify({ providers: { p: { models: { one: { maxTokens: 4000 } } } } }));
+    const edit = draftFromProfile('p', readProviderSettings(workspace.dir).providers['p']!, 'p:one');
+    saveProviderSettings(workspace.dir, { ...edit, model: 'one, three' });
+    config = loadConfig(workspace.dir)!;
+    expect(config.providers['p']!.models!.one).toMatchObject({ reasoningEffort: 'high', maxTokens: 4000 });
+    expect(config.providers['p']!.models!.two).toMatchObject({ contextWindow: 32000 });
+    saveProviderSettings(workspace.dir, draft({ name: 'local', baseURL: 'http://localhost:1234/v1', model: 'local-a, local-b', apiKey: '', auth: 'none' }));
+    config = loadConfig(workspace.dir)!;
+    expect(resolveApiKey(config.providers['local']!, 'local')).toBe('');
+    expect(validateProviderDraft(draft({ model: 'good, __proto__' }))).toBeTruthy();
+  });
   it('saves reloadable API keys and ignores legacy environment variables; doctor never echoes secrets', async () => {
     const result = saveProviderSettings(workspace.dir, draft());
     const config = loadConfig(workspace.dir)!;

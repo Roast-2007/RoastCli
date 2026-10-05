@@ -12,7 +12,10 @@ import {
   untrustedProviderOverrides,
   type ModelRef,
   type RoastConfig,
+  type ReasoningEffort,
 } from '../core/config.js';
+import type { ModelCatalog } from '../providers/models.js';
+import type { AgentRole } from '../swarm/types.js';
 import { RoastError } from '../core/errors.js';
 import { buildProviderRegistry } from '../providers/registry.js';
 import type { ProviderRegistry } from '../providers/adapter.js';
@@ -48,7 +51,10 @@ export interface Session {
   initialEvents: readonly SessionEvent[];
   providerName: string;
   model: string;
-  switchModel(model: string): void;
+  reasoningEffort?: ReasoningEffort | null;
+  switchModel(model: string, effort?: ReasoningEffort | null): void;
+  listModels(opts?: { refresh?: boolean; signal?: AbortSignal }): Promise<ModelCatalog>;
+  setSwarmModel(role: AgentRole, model: string, effort?: ReasoningEffort | null): void;
   /** 主会话费用估算；任一已用模型缺少定价时返回 null。 */
   cost(): number | null;
   resume(logPath: string): Promise<Session>;
@@ -113,7 +119,7 @@ function chooseModel(config: RoastConfig, explicit: string | undefined, resumeLo
   if (explicit) return parseModelRef(explicit);
   if (resumeLogPath) {
     const changed = loadRunLog(resumeLogPath).events.filter((event) => event.type === 'model/change').at(-1);
-    if (changed?.type === 'model/change' && config.providers[changed.provider]) return { provider: changed.provider, model: changed.model };
+    if (changed?.type === 'model/change' && config.providers[changed.provider]) return { provider: changed.provider, model: changed.model, ...(changed.reasoningEffort !== undefined ? { reasoningEffort: changed.reasoningEffort } : {}) };
     const h = readHeader(resumeLogPath);
     const provider = typeof h?.['provider'] === 'string' ? h['provider'] : undefined;
     const model = typeof h?.['model'] === 'string' ? h['model'] : undefined;
@@ -152,7 +158,7 @@ export async function createSession(opts: CreateSessionOptions = {}): Promise<Se
   const ref = chooseModel(config, opts.modelRef, opts.resumeLogPath);
   assertProviderTrusted(cwd, ref.provider);
   // 子 agent 可按角色路由到其他 provider：同样要求其连接信息可信（否则仓库可借 swarm.models 把密钥发往自己的地址）
-  for (const r of Object.values(config.swarm.models ?? {})) assertProviderTrusted(cwd, parseModelRef(r).provider);
+  for (const r of Object.values(config.swarm.models ?? {})) if (r !== 'inherit') assertProviderTrusted(cwd, parseModelRef(r).provider);
   if (config.rag?.embeddings) assertProviderTrusted(cwd, config.rag.embeddings.provider);
   const providers = opts.providers ?? buildProviderRegistry(config);
   const opened = await openRunLog({

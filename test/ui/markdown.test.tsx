@@ -33,6 +33,19 @@ plain code
 `;
 
 describe('Markdown', () => {
+  it('adds readable gutters and paragraph/list spacing while honoring compact preferences', () => {
+    const text = 'First paragraph\n\nSecond paragraph\n\n- one\n- two\n\n> **styled quote**';
+    const roomy = render(<Markdown text={text} preferences={{ padding: 3, spacing: 1 }} />);
+    const lines = roomy.lastFrame()!.split('\n');
+    expect(lines.find((line) => line.includes('First'))).toMatch(/^ {3}First/);
+    expect(lines[lines.findIndex((line) => line.includes('First')) + 1]!.trim()).toBe('');
+    expect(lines[lines.findIndex((line) => line.includes('one')) + 1]!.trim()).toBe('');
+    expect(roomy.lastFrame()).toContain('styled quote'); expect(roomy.lastFrame()).not.toContain('**');
+    const dense = render(<Markdown text={text} preferences={{ padding: 0, spacing: 0 }} />);
+    expect(dense.lastFrame()!.split('\n').length).toBeLessThan(lines.length);
+    expect(dense.lastFrame()!.split('\n')[0]).toBe('First paragraph');
+    roomy.unmount(); dense.unmount();
+  });
   it('renders headings, inline styles, nested lists, quotes, tables, code and rules', () => {
     const { lastFrame, unmount } = render(<TerminalContext.Provider value={{ motion: false, ascii: false }}><Markdown text={DOC} /></TerminalContext.Provider>);
     const frame = lastFrame()!;

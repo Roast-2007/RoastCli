@@ -73,7 +73,7 @@ function providerChecks(cwd: string, config: RoastConfig): Check[] {
   for (const [name, p] of Object.entries(config.providers)) {
     try {
       resolveApiKey(p, name);
-      out.push(check(`凭据 ${name}`, 'ok', '用户凭据文件 已设置'));
+      out.push(check(`凭据 ${name}`, 'ok', p.auth === 'none' ? '已配置为无密钥接口' : '用户凭据文件 已设置'));
     } catch {
       out.push(check(`凭据 ${name}`, 'warn', p.apiKeyRef ? '用户凭据无法读取或不存在（运行 roast config 重新配置）' : `未保存 API Key${p.apiKeyEnv ? '，旧环境变量认证已弃用' : ''}（运行 roast config 输入密钥）`));
     }

@@ -2,14 +2,17 @@
  * Markdown → Ink 组件：标题、段落（粗体/斜体/行内代码/链接/删除线）、列表（含嵌套）、
  * 代码块（cli-highlight 高亮）、引用、表格（按显示宽度对齐）、分隔线。
  */
-import { memo, type ReactNode } from 'react';
-import { Box, Text, useWindowSize } from 'ink';
+import { createContext, useContext, memo, type ReactNode } from 'react';
+import { Box, Text } from 'ink';
 import { marked, type Token, type Tokens } from 'marked';
 import { highlight, supportsLanguage } from 'cli-highlight';
 import { displayWidth, useTheme, type Theme } from '../theme.js';
 import { truncateDisplay } from '../../core/text-width.js';
 import { terminalText } from '../../core/terminal-text.js';
 import { useTerminal } from '../terminal.js';
+import type { RoastConfig } from '../../core/config.js';
+
+const MarkdownLayout = createContext({ width: 80, spacing: 1 });
 
 function inline(tokens: Token[] | undefined, theme: Theme, keyPrefix = 'i'): ReactNode[] {
   if (!tokens) return [];
@@ -92,15 +95,16 @@ function ListBlock({ token, depth }: { token: Tokens.List; depth: number }) {
   const theme = useTheme();
   const { ascii } = useTerminal();
   const start = typeof token.start === 'number' ? token.start : 1;
+  const { spacing } = useContext(MarkdownLayout);
   return (
     <Box flexDirection="column">
       {token.items.map((item, i) => {
         const bullet = token.ordered ? `${start + i}.` : ascii ? '-' : depth === 0 ? '•' : '◦';
         const mark = item.task ? ascii ? item.checked ? '[x] ' : '[ ] ' : item.checked ? '☑ ' : '☐ ' : '';
         return (
-          <Box key={i} paddingLeft={depth * 2}>
-            <Text color={theme.accent}>{bullet} </Text>
-            <Box flexDirection="column">
+          <Box key={i} marginBottom={depth === 0 && i < token.items.length - 1 ? spacing : 0}>
+            <Box flexShrink={0}><Text color={theme.accent}>{bullet} </Text></Box>
+            <Box flexDirection="column" flexGrow={1} flexShrink={1}>
               {item.tokens.filter((child) => child.type !== 'checkbox').map((child, j) =>
                 child.type === 'list' ? (
                   <ListBlock key={j} token={child as Tokens.List} depth={depth + 1} />
@@ -122,7 +126,7 @@ function ListBlock({ token, depth }: { token: Tokens.List; depth: number }) {
 function TableBlock({ token }: { token: Tokens.Table }) {
   const theme = useTheme();
   const { ascii } = useTerminal();
-  const { columns } = useWindowSize();
+  const { width: columns } = useContext(MarkdownLayout);
   const rows = [token.header.map((c) => c.text), ...token.rows.map((r) => r.map((c) => c.text))];
   const budget = Math.max(1, Math.floor((columns - (token.header.length - 1) * 3) / Math.max(1, token.header.length)));
   const widths = token.header.map((_, col) => Math.min(budget, Math.max(...rows.map((r) => displayWidth(r[col] ?? '')))));
@@ -161,7 +165,7 @@ function BlockToken({ token }: { token: Token }) {
     case 'blockquote':
       return (
         <Box borderStyle={ascii ? 'classic' : 'bold'} borderLeft borderTop={false} borderRight={false} borderBottom={false} borderColor={theme.muted} paddingLeft={1}>
-          <Text dimColor>{(token as Tokens.Blockquote).text.trim()}</Text>
+          <Box flexDirection="column" flexGrow={1} flexShrink={1}>{(token as Tokens.Blockquote).tokens.filter((child) => child.type !== 'space').map((child, index) => <BlockToken key={index} token={child} />)}</Box>
         </Box>
       );
     case 'table':
@@ -178,18 +182,22 @@ function BlockToken({ token }: { token: Token }) {
 function RuleBlock() {
   const theme = useTheme();
   const { ascii } = useTerminal();
-  const { columns } = useWindowSize();
+  const { width: columns } = useContext(MarkdownLayout);
   return <Text color={theme.border}>{(ascii ? '-' : '─').repeat(Math.min(40, Math.max(1, columns)))}</Text>;
 }
 
 /** 渲染一段 markdown（通常是 splitStreaming 给出的一个已完成块，或流式尾巴） */
-export const Markdown = memo(function Markdown({ text }: { text: string }) {
-  const tokens = marked.lexer(terminalText(text));
+export const Markdown = memo(function Markdown({ text, preferences, compact = false, columns = 80 }: { text: string; preferences?: NonNullable<RoastConfig['ui']>['markdown']; compact?: boolean; columns?: number }) {
+  const padding = Math.min(preferences?.padding ?? (columns >= 60 ? 2 : columns >= 30 ? 1 : 0), Math.max(0, Math.floor((columns - 12) / 2)));
+  const width = Math.max(1, columns - padding * 2);
+  const spacing = compact ? 0 : preferences?.spacing ?? 1;
+  const tokens = marked.lexer(terminalText(text)).filter((token) => token.type !== 'space');
+  if (!tokens.length) return null;
   return (
-    <Box flexDirection="column">
+    <MarkdownLayout.Provider value={{ width, spacing }}><Box flexDirection="column" paddingX={padding}>
       {tokens.map((t, i) => (
-        <BlockToken key={i} token={t} />
+        <Box key={i} flexDirection="column" marginBottom={spacing}><BlockToken token={t} /></Box>
       ))}
-    </Box>
+    </Box></MarkdownLayout.Provider>
   );
 });

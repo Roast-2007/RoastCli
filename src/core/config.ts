@@ -16,7 +16,9 @@ import { readCredential } from './credentials.js';
 
 export const ReasoningEffortSchema = z.enum(['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']);
 export type ReasoningEffort = z.infer<typeof ReasoningEffortSchema>;
-export function reasoningEfforts(driver: 'openai-compat' | 'anthropic', baseURL?: string): ReasoningEffort[] {
+export function reasoningEfforts(driver: 'openai-compat' | 'anthropic', baseURL?: string, meta?: ModelMeta): ReasoningEffort[] {
+  if (meta?.reasoning === false) return [];
+  if (meta?.reasoningEfforts) return [...meta.reasoningEfforts];
   if (baseURL) {
     try {
       const url = new URL(baseURL.trim());
@@ -27,9 +29,11 @@ export function reasoningEfforts(driver: 'openai-compat' | 'anthropic', baseURL?
 }
 
 const ModelMetaSchema = z.object({
+  name: z.string().optional(),
   contextWindow: z.number().int().positive().optional(),
   maxTokens: z.number().int().positive().optional(),
   reasoning: z.boolean().optional(),
+  reasoningEfforts: z.array(ReasoningEffortSchema).optional(),
   /** 显式推理强度；null 在覆盖层中清除旧设置，由供应商决定。 */
   reasoningEffort: ReasoningEffortSchema.nullish().transform((effort) => effort ?? undefined),
   /** anthropic：开启 extended thinking 的预算（tokens，≥1024）；max_tokens 会自动保证大于预算 */
@@ -59,6 +63,8 @@ export type ModelPricing = NonNullable<z.infer<typeof ModelMetaSchema>['pricing'
 export const ProviderProfileSchema = z.object({
   driver: z.enum(['openai-compat', 'anthropic']),
   baseURL: z.string().url().optional(),
+  /** Local/custom servers may explicitly disable API-key authentication. */
+  auth: z.enum(['api-key', 'none']).optional(),
   /** @deprecated 只读取旧配置用于迁移；请求不再读取此环境变量。 */
   apiKeyEnv: z.string().min(1).optional(),
   apiKeyRef: z.string().min(1).optional(),
@@ -99,6 +105,7 @@ export const ConfigSchema = z.object({
   swarm: z
     .object({
       models: z.record(z.enum(['queen', 'lead', 'worker', 'scout', 'critic', 'judge']), z.string()).optional(),
+      efforts: z.record(z.enum(['queen', 'lead', 'worker', 'scout', 'critic', 'judge']), ReasoningEffortSchema.nullable()).optional(),
       maxAgents: z.number().int().min(1).max(64).default(12),
       maxDepth: z.number().int().min(1).max(5).default(3),
       /** 单个子 agent 的运行时长上限（分钟） */
@@ -114,6 +121,10 @@ export const ConfigSchema = z.object({
       theme: z.string().optional(),
       motion: z.enum(['full', 'reduced']).optional(),
       ascii: z.boolean().optional(),
+      markdown: z.object({
+        padding: z.number().int().min(0).max(8).optional(),
+        spacing: z.number().int().min(0).max(2).optional(),
+      }).optional(),
     })
     .optional(),
   memory: z.object({
@@ -144,6 +155,8 @@ export type RoastConfig = z.infer<typeof ConfigSchema>;
 export interface ModelRef {
   provider: string;
   model: string;
+  /** null explicitly clears the profile's default effort for this agent. */
+  reasoningEffort?: ReasoningEffort | null;
 }
 
 /** 解析 "provider:model" 引用；不带冒号时只含 model，由调用方决定默认 provider */
@@ -208,7 +221,7 @@ export function deepMerge(base: unknown, over: unknown): unknown {
 }
 
 /** 决定"密钥发往哪里"的 provider 字段：仓库内配置改动它们需要用户显式信任 */
-const CONNECTION_FIELDS = ['driver', 'baseURL', 'headers', 'apiKeyEnv', 'apiKeyRef'] as const;
+const CONNECTION_FIELDS = ['driver', 'baseURL', 'headers', 'apiKeyEnv', 'apiKeyRef', 'auth'] as const;
 const REPO_LAYERS: readonly ConfigLayer[] = ['project', 'legacy'];
 
 /**
@@ -270,7 +283,7 @@ export function repoConfigHash(cwd: string): string {
       const cfg = isPlainObject(raw) ? raw : {};
       const providers = isPlainObject(cfg['providers']) ? cfg['providers'] : {};
       const connections = Object.fromEntries(
-        Object.entries(providers).map(([name, p]) => [name, isPlainObject(p) ? Object.fromEntries(CONNECTION_FIELDS.filter((f) => f !== 'apiKeyRef' || p[f] !== undefined).map((f) => [f, p[f] ?? null])) : null]),
+        Object.entries(providers).map(([name, p]) => [name, isPlainObject(p) ? Object.fromEntries(CONNECTION_FIELDS.filter((f) => !['apiKeyRef', 'auth'].includes(f) || p[f] !== undefined).map((f) => [f, p[f] ?? null])) : null]),
       );
       const permissions = isPlainObject(cfg['permissions']) ? cfg['permissions'] : {};
       return {
@@ -353,6 +366,7 @@ export function loadConfig(cwd: string = process.cwd()): RoastConfig | null {
 
 /** Credentials come exclusively from API keys saved by the configuration wizard. */
 export function resolveApiKey(profile: ProviderProfile, providerName: string): string {
+  if (profile.auth === 'none') return '';
   const key = profile.apiKeyRef ? readCredential(roastHome(), profile.apiKeyRef) : undefined;
   if (!key) {
     throw new RoastError(

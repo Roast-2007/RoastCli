@@ -11,8 +11,14 @@ import { terminalText } from '../../core/terminal-text.js';
 import { listRuns } from '../../cli/logs.js';
 import { logsRootOf } from '../../agent/session.js';
 import { canonicalPath } from '../../core/paths.js';
+import { CommandPanel } from './CommandPanel.js';
 
 export function Overlay({ kind, session, store, controller, height }: { kind: OverlayKind; session: Session; store: UiStore; controller: UiController; height: number }) {
+  if (!['help', 'rewind', 'context', 'sessions'].includes(kind)) return <CommandPanel kind={kind} session={session} store={store} controller={controller} height={height} />;
+  return <LegacyOverlay kind={kind} session={session} store={store} controller={controller} height={height} />;
+}
+
+function LegacyOverlay({ kind, session, store, controller, height }: { kind: OverlayKind; session: Session; store: UiStore; controller: UiController; height: number }) {
   const theme = useTheme();
   const { ascii } = useTerminal();
   const glyph = useGlyphs();
@@ -33,6 +39,12 @@ export function Overlay({ kind, session, store, controller, height }: { kind: Ov
     if (key.downArrow || input === 'j') { setConfirm(false); return setSelected(Math.min(entries.length - 1, index + 1)); }
     if (key.pageUp) return setSelected(Math.max(0, index - count));
     if (key.pageDown) return setSelected(Math.min(entries.length - 1, index + count));
+    if (key.home) return setSelected(0);
+    if (key.end) return setSelected(Math.max(0, entries.length - 1));
+    if (key.return && kind === 'help') {
+      const command = COMMANDS[index - KEYS_HELP.split('\n').length - 1];
+      if (command) { close(); controller.runCommand(`/${command.name}`); }
+    }
     if (key.return && kind === 'rewind' && turns[index]) {
       if (!confirm) return setConfirm(true);
       close(); controller.runCommand(`/rewind ${turns[index]!.turn}`);
@@ -46,6 +58,6 @@ export function Overlay({ kind, session, store, controller, height }: { kind: Ov
   return <Box flexDirection="column" borderStyle={border ? ascii ? 'classic' : 'round' : undefined} borderColor={theme.accent} paddingX={border ? 1 : 0} height={height} overflow="hidden" flexShrink={0}>
     <Text bold color={theme.accent} wrap="truncate-end">{kind === 'help' ? '帮助 · ROAST' : kind === 'rewind' ? '可回退的轮次 · 文件 + 对话' : kind === 'sessions' ? '恢复会话 · 最近活动优先' : '上下文 · Context'}</Text>
     {entries.length ? entries.slice(first, first + count).map((line, i) => <Text key={i} wrap="truncate-end" color={first + i === index ? theme.accent2 : undefined}>{(kind === 'rewind' || kind === 'sessions') && first + i === index ? `${glyph.pointer} ` : '  '}{terminalText(line)}</Text>) : <Text dimColor>{kind === 'sessions' ? '没有其他历史会话' : '还没有可回退的轮次'}</Text>}
-    <Text color={confirm ? theme.warn : theme.muted} wrap="truncate-end">{confirm ? `再按 Enter 回退至第 ${turns[index]?.turn} 轮开始前；Esc 取消` : `↑↓ 选择 · PgUp/PgDn 翻页${kind === 'rewind' ? ' · Enter 回退' : kind === 'context' ? ' · p 钉住 / u 取消 / d 折叠' : ''} · Esc 关闭`}</Text>
+    <Text color={confirm ? theme.warn : theme.muted} wrap="truncate-end">{confirm ? `再按 Enter 回退至第 ${turns[index]?.turn} 轮开始前；Esc 取消` : `↑↓ 选择 · PgUp/PgDn 翻页${kind === 'rewind' ? ' · Enter 回退' : kind === 'help' ? ' · Enter 打开命令' : kind === 'context' ? ' · p 钉住 / u 取消 / d 折叠' : ''} · Esc 关闭`}</Text>
   </Box>;
 }

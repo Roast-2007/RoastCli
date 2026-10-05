@@ -91,6 +91,12 @@ export function InputBox({ active, placeholder, initialHistory, initialText, ini
         }
         const raw = textOf(state);
         if (!raw.trim()) return;
+        if (/^\/\S*$/.test(raw) && hints[chosen] && !deps.commands.some((command) => `/${command.name}` === raw)) {
+          const completed = expand(hints[chosen].apply(state)).trim();
+          onSubmit(completed, completed);
+          setSelected(0);
+          return dispatch({ type: 'commit' });
+        }
         onSubmit(expand(state).trim(), expand(state));
         return dispatch({ type: 'commit' });
       }
@@ -148,7 +154,7 @@ export function InputBox({ active, placeholder, initialHistory, initialText, ini
             <Text key={h.label} wrap="truncate-end">
               <Text color={h === hints[chosen] ? theme.accent : undefined}>{h === hints[chosen] ? `${glyph.pointer} ` : '  '}{h.label}</Text>
               {h.detail ? <Text dimColor>  {h.detail}</Text> : null}
-              {h === hints[chosen] ? <Text dimColor>  (Tab)</Text> : null}
+              {h === hints[chosen] ? <Text dimColor>  (Tab / Enter)</Text> : null}
             </Text>
           ))}
         </Box>

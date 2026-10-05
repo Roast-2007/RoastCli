@@ -9,6 +9,7 @@
  */
 import type { GenerateOptions, StreamChunk } from '../../core/types.js';
 import { VERSION } from '../../core/version.js';
+import { providerEndpoint } from '../endpoints.js';
 import { resolveApiKey, type ProviderProfile } from '../../core/config.js';
 import { RoastError, asRoastError, httpErrorCode, isRetryableCode, parseRetryAfter } from '../../core/errors.js';
 
@@ -38,7 +39,7 @@ export class AnthropicAdapter implements ProviderAdapter {
   }
 
   resolveModel(model: string): ModelInfo | undefined {
-    const meta = this.options.models?.[model];
+    const meta = this.profile.models?.[model];
     if (!meta) return undefined;
     const info: ModelInfo = { id: model };
     if (meta.contextWindow !== undefined) info.contextWindow = meta.contextWindow;
@@ -79,16 +80,17 @@ export class AnthropicAdapter implements ProviderAdapter {
       state.idleTimedOut = true;
     });
     try {
-      const response = await fetch(`${this.options.baseURL}/v1/messages`, {
+      const response = await fetch(providerEndpoint(this.profile, 'messages'), {
         method: 'POST',
+        redirect: 'error',
         headers: {
           'content-type': 'application/json',
-          'x-api-key': apiKey,
+          ...(apiKey ? { 'x-api-key': apiKey } : {}),
           'user-agent': `RoastCli/${VERSION}`,
           'anthropic-version': ANTHROPIC_VERSION,
           ...this.options.headers,
         },
-        body: JSON.stringify(buildRequest(options, { promptCaching: this.profile.promptCaching !== false, ...thinkingOf(this.profile, options.model) })),
+        body: JSON.stringify(buildRequest(options, { promptCaching: this.profile.promptCaching !== false, ...thinkingOf(this.profile, options.model), ...(options.reasoningEffort !== undefined ? { reasoningEffort: options.reasoningEffort ?? undefined } : {}) })),
         signal: idle.signal,
       });
 
@@ -100,7 +102,7 @@ export class AnthropicAdapter implements ProviderAdapter {
           reason: 'error',
           error: new RoastError(
             code,
-            `provider "${this.providerName}" 返回 HTTP ${response.status}: ${bodyText.slice(0, 500)}`,
+            `provider "${this.providerName}" 返回 HTTP ${response.status}`,
             {
               retryable: isRetryableCode(code),
               status: response.status,

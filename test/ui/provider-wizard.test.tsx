@@ -14,6 +14,7 @@ beforeEach(() => {
 });
 afterEach(() => {
   cleanup();
+  vi.unstubAllGlobals();
   for (const [name, value] of [['ROAST_HOME', savedEnv.home], ['ROASTCLI_CONFIG', savedEnv.config]] as const) {
     if (value === undefined) delete process.env[name]; else process.env[name] = value;
   }
@@ -27,6 +28,21 @@ async function keys(stdin: { write(text: string): void }, ...inputs: string[]) {
 }
 
 describe('ProviderWizard', () => {
+  it('automatically discovers a blank model, selects multiple IDs and saves only the selected metadata', async () => {
+    const fetchMock = vi.fn(async (_url: unknown, _init: RequestInit) => new Response(JSON.stringify({ data: [{ id: 'alpha', context_window: 16000 }, { id: 'beta' }, { id: 'unselected' }] })));
+    vi.stubGlobal('fetch', fetchMock);
+    const screen = render(<ProviderWizard cwd={workspace.dir} onExit={() => {}} />);
+    await tick(); await keys(screen.stdin, enter, enter, enter, enter, '\x15', enter);
+    await keys(screen.stdin, 'sk-list-secret', enter);
+    expect(screen.lastFrame()).toContain('模型列表');
+    expect(fetchMock.mock.calls[0]![1].headers).toHaveProperty('authorization', 'Bearer sk-list-secret');
+    await keys(screen.stdin, down, enter, down, enter, '\x1b[H', enter, enter, enter);
+    expect(screen.lastFrame()).toContain('保存成功');
+    const config = loadConfig(workspace.dir)!;
+    expect(config.default).toBe('deepseek:alpha');
+    expect(config.providers['deepseek']!.models).toEqual({ alpha: { contextWindow: 16000 }, beta: {} });
+    expect(screen.frames.join('\n')).not.toContain('sk-list-secret');
+  });
   it('guides setup, masks keys in every frame and persists a usable profile', async () => {
     const onExit = vi.fn();
     const { stdin, lastFrame, frames } = render(<ProviderWizard cwd={workspace.dir} onExit={onExit} />);

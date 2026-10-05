@@ -58,6 +58,28 @@ afterEach(() => {
 });
 
 describe('OpenAICompatAdapter.stream', () => {
+  it('honors per-agent effort overrides and auto, supports no-key servers and strips error bodies', async () => {
+    const fetchMock = vi.fn(async (_url: string, _init: RequestInit) => sseResponse(['data: [DONE]']));
+    vi.stubGlobal('fetch', fetchMock);
+    for (const adapter of [
+      new OpenAICompatAdapter({ driver: 'openai-compat', auth: 'none', baseURL: 'http://localhost:1234/v1/', models: { m: { reasoningEffort: 'high' } } }, 'local'),
+      new AnthropicAdapter({ driver: 'anthropic', auth: 'none', baseURL: 'http://localhost:1234/v1/', models: { m: { reasoningEffort: 'high' } } }, 'local'),
+    ]) {
+      for (const effort of ['low', null] as const) {
+        await collectAll(adapter.stream({ model: 'm', messages: [userMessage('hi')], reasoningEffort: effort }));
+        const [url, init] = fetchMock.mock.calls.at(-1)!;
+        expect(url).not.toContain('//v1'); expect(url).not.toContain('/v1/v1');
+        expect(init.headers).not.toHaveProperty('authorization'); expect(init.headers).not.toHaveProperty('x-api-key');
+        const request = JSON.parse(String(init.body));
+        expect(request.reasoning_effort ?? request.output_config?.effort).toBe(effort ?? undefined);
+        expect(init.redirect).toBe('error');
+      }
+      fetchMock.mockImplementationOnce(async () => new Response('secret-key-reflected-by-server', { status: 401 }));
+      const chunks = await collectAll(adapter.stream({ model: 'm', messages: [userMessage('hi')] }));
+      const finish = chunks.at(-1)!;
+      expect(finish.type === 'finish' && finish.error?.message).toBe('provider "local" 返回 HTTP 401');
+    }
+  });
   it('both drivers authenticate using a user-local reference, with no env variable', async () => {
     const ref = saveCredential(roastHome(), 'sk-file-auth');
     const fetchMock = vi.fn(async (_url: string, _init: RequestInit) => sseResponse(['data: [DONE]']));

@@ -53,17 +53,13 @@ describe('slash commands', () => {
     const h = await harness();
     await h.run('/help');
     expect(h.store.getState().meta.overlay).toBe('help');
-    expect(await h.run('/model')).toBe('p:m');
-    expect(await h.run('/cost')).toContain('输入 0');
-    expect(await h.run('/todo')).not.toBe('');
-    expect(await h.run('/logs')).toBe(h.session.log.path);
+    for (const command of ['model', 'theme', 'cost', 'todo', 'logs', 'mcp', 'skills', 'agents', 'board', 'memory', 'swarm', 'init', 'compact'] as const) {
+      await h.run(`/${command}`);
+      expect(h.store.getState().meta.overlay).toBe(command);
+    }
     await h.run('/context');
     expect(h.store.getState().meta.overlay).toBe('context');
-    expect(await h.run('/mcp')).toContain('没有配置 MCP 服务器');
-    expect(await h.run('/skills')).toContain('没有技能');
     expect(await h.run('/config')).toContain('roast config');
-    expect(await h.run('/agents')).toContain('main [queen]');
-    expect(await h.run('/board')).toContain('黑板为空');
     h.session.swarm.board.write('/example', 'complete value', { author: 'main' });
     expect(await h.run('/board /example')).toContain('complete value');
     expect(await h.run('/board /missing')).toContain('没有黑板条目');
@@ -74,7 +70,9 @@ describe('slash commands', () => {
     const h = await harness();
     expect(await h.run('/mode plan')).toBe('权限模式：plan');
     expect(h.session.permissions.mode).toBe('plan');
-    expect(await h.run('/mode')).toMatch(/^权限模式：/);
+    await h.run('/mode');
+    expect(h.store.getState().meta.overlay).toBe('mode');
+    expect(h.session.permissions.mode).toBe('plan');
     expect(await h.run('/mode nope')).toBe('未知模式：nope');
     await h.done();
   });
@@ -89,8 +87,9 @@ describe('slash commands', () => {
 
   it('init creates ROAST.md once; # notes append to its memory section', async () => {
     const h = await harness();
-    expect(await h.run('/init')).toContain('已创建');
-    expect(await h.run('/init')).toContain('已存在');
+    await h.run('/init');
+    expect(h.store.getState().meta.overlay).toBe('init');
+    expect(existsSync(path.join(h.ws.dir, 'ROAST.md'))).toBe(false);
     expect(await h.run('#偏好 pnpm')).toContain('已记住');
     const file = path.join(h.ws.dir, 'ROAST.md');
     expect(readFileSync(file, 'utf8')).toContain('## 记忆\n- 偏好 pnpm');

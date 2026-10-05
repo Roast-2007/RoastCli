@@ -124,6 +124,7 @@ export type StreamChunk =
 
 export interface GenerateOptions {
   model: string;
+  reasoningEffort?: import('./config.js').ReasoningEffort | null;
   /** 已组装好的系统 prompt */
   system?: string;
   messages: Message[];

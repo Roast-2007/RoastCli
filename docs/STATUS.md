@@ -1,6 +1,6 @@
 # RoastCli 当前状态
 
-> 更新于 2026-10-04。路线图见 [ROADMAP.md](ROADMAP.md)，架构见 [DESIGN.md](DESIGN.md)。
+> 更新于 2026-10-05，v0.2.0。路线图见 [ROADMAP.md](ROADMAP.md)，架构见 [DESIGN.md](DESIGN.md)。
 
 ## 当前交付
 
@@ -8,7 +8,7 @@
 
 M0–M8 的功能实现与自动化验收已完成，包含可选 Mem0、embeddings、无 Git 文件检查点及蜂群自适应并发。TUI 已补齐小屏布局、长输入、帮助与会话菜单、实时模型切换、暂停和终端降级。
 
-- 验证：97 个测试文件、607 个测试，typecheck / build 通过（具体平台会跳过不适用的测试）。
+- 验证：100 个测试文件、622 个测试，typecheck / build 通过（具体平台会跳过不适用的测试）。
 - 上次全量覆盖率采集（供应商后续修复前）：行 93.40%、分支 81.28%；性能测试保持约 30 次 store 通知 / 秒。
 - 真实 Ink 输出覆盖 40×10、60×16、80×24、120×40，运行中缩到 25×8，2000 行流式输出不触发整屏清空。
 - 尚未验证：Windows Terminal / conhost 的真实 IME 候选框、Shift+Enter，以及用户在线供应商。供应商、Mem0 和 embeddings 使用受控 HTTP 测试，未调用用户在线账户。
@@ -28,6 +28,17 @@ M0–M8 的功能实现与自动化验收已完成，包含可选 Mem0、embeddi
 | M8 打磨 | 实现完成 | doctor / init / 配置向导、四主题、终端降级、Mem0 / embeddings、性能与回归验证 |
 
 ## 本轮打磨
+
+### v0.2.0 模型、Hive 和命令交互
+
+- 自动获取 OpenAI 兼容 / Anthropic 模型列表；支持分页、超时、取消、会话缓存、搜索、刷新和手动回退。显式模型元数据优先，刷新会更新远端元数据；模型发现前检查项目连接信任。
+- `/model` 面板分两步选择模型与 effort，主会话和子代理空闲时切换；每次切换写日志并可恢复。effort 通过独立请求选项传递，自动用 null 清除配置默认值，不会改动其他代理的设置。
+- 向导支持逗号输入多个模型、留空自动拉取、Ctrl+L 列表多选，以及无密钥本地服务。同类供应商自动分配独立 ID，保存保留覆盖层和模型元数据。
+- `/hive models` 保存各角色模型 / effort，后续派生生效；spawn_agent 和 task 可单次指定其他已配置供应商。继承主会话时也继承它的 effort，无效供应商在分配 agent 前拒绝。
+- 选择与查看命令使用滚动、可搜索面板；主题选择持久化，技能 / 蜂群策略可输入参数 / 目标，成员可查看详情、发送指示、暂停或确认取消。命令补全可直接 Enter 打开，帮助页可 Enter 执行选中的命令。
+- Markdown 响应式左右留白与段落 / 列表间距，引用递归渲染，表格使用内容区宽度。尺寸从主界面传入，2000 行输出不增加每块 resize 监听器。
+- 修复 Anthropic 自定义 /v1 路径重复拼接、覆盖层丢模型元数据及供应商错误正文泄漏；模型与生成请求拒绝重定向。Release 工作流要求同一 main 提交已通过三平台 CI。
+- 新回归覆盖 HTTP 模型发现与分页、失败 / 取消 / 缓存刷新、完整向导多选、真实按键面板、跨供应商 Hive、effort 恢复、Markdown 留白和长输出监听器数量。供应商可用模型 / effort 仍以实际服务为准，未调用用户付费推理接口。
 
 ### 蜂群 research 权限与进展修复
 
@@ -54,14 +65,14 @@ M0–M8 的功能实现与自动化验收已完成，包含可选 Mem0、embeddi
 - 帮助、审批和屏幕切换保留草稿、粘贴映射及光标。权限 / 提问卡片可选菜单、详情翻页，自由回答复用编辑器。
 - Ctrl+O 工具详情支持 PgUp/PgDn、Home/End。工具、diff、历史与 Markdown 清理终端控制序列；表格按屏宽分配列宽。
 - 同一尚未发布帧内至少三次连续成功的同名读取 / 搜索工具聚合显示，保留各个记录；失败、diff 与已打印条目不聚合。
-- 四主题 ember / aurora / daylight / mono，/theme <name> 即时切换。NO_COLOR 优先，ROAST_THEME 高于配置。
+- 四主题 ember / aurora / daylight / mono，/theme 打开选择并保存的面板，/theme <name> 可直接即时切换。NO_COLOR 优先，ROAST_THEME 高于配置。
 - ui.ascii / ROAST_ASCII=1 使用 ASCII 边框和主要装饰；ui.motion: reduced / ROAST_REDUCED_MOTION=1 停止旋转动画。TERM=dumb 自动启用两项。
 - 所有旋转动画共用一个 80ms 计时器，订阅归零后停止；render 限制 30fps 并启用 incrementalRendering。模式与回答反馈用短暂 toast，卸载清理计时器。
 
 ### 交互与会话
 
 - !shell 提供实时输出，Esc / Ctrl+C 可中断，退出等待收尾。执行期间发送的模型消息保留在输入框。
-- /model [provider:model] 在主会话与子 agent 空闲时即时切换；模型引用、上下文窗口、蜂群 root 信息同步，历史与工具列表不变。
+- /model 自动获取列表并选择模型与 effort；/model [provider:model] [effort|auto] 可直接切换。主会话与子 agent 须空闲，模型引用、上下文窗口、蜂群 root 信息同步，历史与工具列表不变。
 - model/change 落日志，恢复选择最后使用的模型；费用按原模型逐次累计，回退不退还已用 tokens，缺少任何已用模型的定价时不虚报完整费用。
 - /clear 重新挂载 inline，保留上下文和编辑草稿，防止 Static 重印历史。
 - /resume 按同项目最近活动列出会话，/resume <runId> 直接恢复。加载期间可以退出，失败回到旧会话；候选会话、日志与渲染器均正常关闭。

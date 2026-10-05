@@ -323,6 +323,7 @@ export class AgentRuntime {
     const request: Omit<GenerateOptions, 'signal'> = {
       model,
       system,
+      ...(this.deps.modelRef.reasoningEffort !== undefined ? { reasoningEffort: this.deps.modelRef.reasoningEffort } : {}),
       messages,
       tools,
       ...(maxTokens !== undefined ? { maxTokens } : {}),
