@@ -17,7 +17,9 @@ function workspace() {
   return ws;
 }
 const at = { path: 'a.ts', line: 1, column: 14 };
-describe('semantic tools', () => {
+// Real TypeScript projects load standard libraries; preview + apply builds two services.
+// Coverage and four concurrent workers can exceed the default 5s on hosted runners.
+describe('semantic tools', { timeout: 20_000 }, () => {
   it('finds cross-file references while excluding an unrelated local symbol', async () => {
     const ws = workspace();
     const found = await executeTool(findReferencesTool, at, makeCtx(ws.dir));
