@@ -15,6 +15,8 @@ export function SelectPanel({ title, entries, height, onSelect, onClose, initial
   const theme = useTheme(), glyph = useGlyphs(), { ascii } = useTerminal();
   const [query, setQuery] = useState('');
   const [selected, setSelected] = useState(initialId ?? entries[0]?.id ?? '');
+  const inputState = useRef({ query, selected });
+  inputState.current = { query, selected };
   const [error, setError] = useState('');
   const pending = useRef(false);
   const items = entries.filter((entry) => `${entry.label} ${entry.detail ?? ''}`.toLocaleLowerCase().includes(query.toLocaleLowerCase()));
@@ -23,13 +25,23 @@ export function SelectPanel({ title, entries, height, onSelect, onClose, initial
   const headerRows = 1 + (searchable && height >= 5 ? 1 : 0) + ((error || message) && height >= 6 ? 1 : 0);
   const count = Math.max(1, height - (border ? 2 : 0) - headerRows - 1);
   const first = Math.max(0, index - count + 1);
-  const search = (text: string) => { setQuery((value) => value + terminalText(text).replace(/[\n\t]/g, '')); setSelected(''); };
+  const updateQuery = (value: string) => {
+    inputState.current.query = value; inputState.current.selected = '';
+    setQuery(value); setSelected('');
+  };
+  const search = (text: string) => updateQuery(inputState.current.query + terminalText(text).replace(/[\n\t]/g, ''));
   usePaste(search, { isActive: searchable });
   useInput((input, key) => {
     if (pending.current) return;
     if (key.escape || (key.ctrl && input === 'c')) return onClose();
     if (key.ctrl && input === 'r' && onRefresh) return onRefresh();
-    const move = (next: number) => { setSelected(items[Math.max(0, Math.min(items.length - 1, next))]?.id ?? ''); setError(''); };
+    const current = inputState.current;
+    const items = entries.filter((entry) => `${entry.label} ${entry.detail ?? ''}`.toLocaleLowerCase().includes(current.query.toLocaleLowerCase()));
+    const index = Math.max(0, items.findIndex((entry) => entry.id === current.selected));
+    const move = (next: number) => {
+      current.selected = items[Math.max(0, Math.min(items.length - 1, next))]?.id ?? '';
+      setSelected(current.selected); setError('');
+    };
     if (key.upArrow) return move(index - 1);
     if (key.downArrow || key.tab) return move(index + (key.shift ? -1 : 1));
     if (key.pageUp) return move(index - count);
@@ -42,8 +54,8 @@ export function SelectPanel({ title, entries, height, onSelect, onClose, initial
       return;
     }
     if (searchable) {
-      if (key.backspace || key.delete) { setQuery((value) => value.slice(0, previousBoundary(value, value.length))); setSelected(''); return; }
-      if (key.ctrl && input === 'u') { setQuery(''); setSelected(''); return; }
+      if (key.backspace || key.delete) return updateQuery(current.query.slice(0, previousBoundary(current.query, current.query.length)));
+      if (key.ctrl && input === 'u') return updateQuery('');
       if (input && !key.ctrl && !key.meta) search(input);
     }
   });

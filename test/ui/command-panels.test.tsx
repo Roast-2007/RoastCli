@@ -10,12 +10,16 @@ import { tempWorkspace } from '../fixtures/workspace.js';
 import { createUiStore } from '../../src/ui/store/store.js';
 import { createUiController } from '../../src/ui/controller.js';
 import { CommandPanel } from '../../src/ui/components/CommandPanel.js';
+import { SelectPanel } from '../../src/ui/components/SelectPanel.js';
 
 vi.mock('ink', async (original) => ({ ...await original<typeof import('ink')>(), useWindowSize: () => ({ columns: 40, rows: 10 }) }));
 const saved = process.env['ROAST_HOME'];
 let session: Session, home: ReturnType<typeof tempWorkspace>, ws: ReturnType<typeof tempWorkspace>;
 const tick = () => new Promise((resolve) => setTimeout(resolve, 40));
 async function press(stdin: { write(text: string): void }, ...keys: string[]) { for (const key of keys) { stdin.write(key); await tick(); } }
+async function waitForFrame(view: { lastFrame(): string | undefined }, text: string) {
+  await vi.waitFor(() => expect(view.lastFrame()).toContain(text), { timeout: 3000 });
+}
 beforeEach(async () => {
   home = tempWorkspace(); ws = tempWorkspace(); process.env['ROAST_HOME'] = home.dir;
   const config = ConfigSchema.parse({ providers: { p: { driver: 'openai-compat', auth: 'none', baseURL: 'https://example.test/v1', models: { m: {}, small: { reasoningEfforts: ['low', 'high'] } } } }, default: 'p:m', swarm: { worktrees: false } });
@@ -31,6 +35,16 @@ function screen(kind: 'theme' | 'model' | 'hive-models' | 'mode' | 'init' | 'boa
   return { ...render(<CommandPanel kind={kind} session={session} store={store} controller={controller} height={8} />), store, controller };
 }
 describe('interactive command panels', () => {
+  it('preserves rapid search and arrow input before React renders the next frame', async () => {
+    const onSelect = vi.fn();
+    const view = render(<SelectPanel title="Fast input" height={8} searchable entries={['auto', 'none', 'minimal', 'low'].map((id) => ({ id, label: id }))} onSelect={onSelect} onClose={() => {}} />);
+    await waitForFrame(view, 'Fast input');
+    for (const key of ['\x1b[B', '\x1b[B', '\x1b[B', '\r']) view.stdin.write(key);
+    await vi.waitFor(() => expect(onSelect).toHaveBeenCalledWith({ id: 'low', label: 'low' }));
+    await tick();
+    for (const key of ['m', 'i', 'n', '\r']) view.stdin.write(key);
+    await vi.waitFor(() => expect(onSelect).toHaveBeenLastCalledWith({ id: 'minimal', label: 'minimal' }));
+  });
   it('selects a theme and persists it with arrows and Enter; cancels mode without changing it', async () => {
     const view = screen('theme');
     try {
@@ -46,9 +60,11 @@ describe('interactive command panels', () => {
   it('searches fetched models and switches model plus effort, applying discovered context metadata', async () => {
     const view = screen('model');
     try {
-      await tick(); await press(view.stdin, 'remote', '\r');
-      expect(view.lastFrame()).toContain('推理强度');
+      await waitForFrame(view, '已获取'); await press(view.stdin, 'remote');
+      await waitForFrame(view, 'p:remote'); await press(view.stdin, '\r');
+      await waitForFrame(view, '推理强度');
       await press(view.stdin, '\x1b[B', '\x1b[B', '\x1b[B', '\r'); // auto, none, minimal, low
+      await vi.waitFor(() => expect(view.store.getState().meta.overlay).toBeNull());
       expect(session.model).toBe('remote'); expect(session.reasoningEffort).toBe('low'); expect(session.contextStats().window).toBe(8000);
       expect(view.store.getState().meta.overlay).toBeNull();
       expect(session.loop.committer.messages()).toEqual([]);
@@ -59,7 +75,9 @@ describe('interactive command panels', () => {
     const view = screen('hive-models');
     try {
       await tick(); await press(view.stdin, '\x1b[B', '\x1b[B', '\r'); // scout
-      await press(view.stdin, 'small', '\r', '\x1b[B', '\r');
+      await waitForFrame(view, 'Hive · scout 模型');
+      await press(view.stdin, 'small', '\r'); await waitForFrame(view, '推理强度 · p:small');
+      await press(view.stdin, '\x1b[B', '\r'); await waitForFrame(view, 'Hive · 各角色模型');
       expect(loadConfig(ws.dir)!.swarm.models!.scout).toBe('p:small'); expect(loadConfig(ws.dir)!.swarm.efforts!.scout).toBe('low'); expect(session.model).toBe('m');
       view.unmount();
       const init = screen('init'); await tick(); expect(existsSync(join(ws.dir, 'ROAST.md'))).toBe(false);
@@ -70,12 +88,13 @@ describe('interactive command panels', () => {
     const switchModel = vi.spyOn(session, 'switchModel').mockImplementation(() => { throw new Error('主会话忙'); });
     const view = screen('model');
     try {
-      await tick(); await press(view.stdin, '\r', '\r');
-      expect(view.lastFrame()).toContain('主会话忙'); expect(view.store.getState().meta.overlay).toBe('model');
+      await tick(); await press(view.stdin, '\r'); await waitForFrame(view, '推理强度');
+      await press(view.stdin, '\r'); await waitForFrame(view, '主会话忙'); expect(view.store.getState().meta.overlay).toBe('model');
       await press(view.stdin, '\x1b', '\x1b'); expect(view.store.getState().meta.overlay).toBeNull();
       view.unmount(); switchModel.mockRestore();
       session.swarm.board.write('/data', 'head\n' + 'long\n'.repeat(30) + 'last-secret-free-line', { author: 'main' });
-      const board = screen('board'); await tick(); await press(board.stdin, '\r', '\x1b[F');
+      const board = screen('board'); await tick(); await press(board.stdin, '\r'); await waitForFrame(board, 'head');
+      await press(board.stdin, '\x1b[F'); await waitForFrame(board, 'last-secret-free-line');
       expect(board.lastFrame()).toContain('last-secret-free-line'); expect(board.frames.every((frame) => frame.split('\n').length <= 8)).toBe(true); board.controller.dispose();
     } finally { view.controller.dispose(); }
   });

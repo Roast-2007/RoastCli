@@ -20,6 +20,11 @@ afterEach(() => {
   }
 });
 const tick = () => new Promise((resolve) => setTimeout(resolve, 40));
+async function waitForFrame(screen: { lastFrame(): string | undefined }, text: string) {
+  const until = Date.now() + 3000;
+  while (!screen.lastFrame()?.includes(text) && Date.now() < until) await tick();
+  expect(screen.lastFrame()).toContain(text);
+}
 const enter = '\r';
 const escape = '\x1b';
 const down = '\x1b[B';
@@ -36,8 +41,11 @@ describe('ProviderWizard', () => {
     await keys(screen.stdin, 'sk-list-secret', enter);
     expect(screen.lastFrame()).toContain('模型列表');
     expect(fetchMock.mock.calls[0]![1].headers).toHaveProperty('authorization', 'Bearer sk-list-secret');
-    await keys(screen.stdin, down, enter, down, enter, '\x1b[H', enter, enter, enter);
-    expect(screen.lastFrame()).toContain('保存成功');
+    await keys(screen.stdin, down, enter); await waitForFrame(screen, '[x] alpha');
+    await keys(screen.stdin, down, enter); await waitForFrame(screen, '[x] beta');
+    await keys(screen.stdin, '\x1b[H', enter); await waitForFrame(screen, '3 / 4 · 配置凭据');
+    await keys(screen.stdin, enter); await waitForFrame(screen, '确认并保存');
+    await keys(screen.stdin, enter); await waitForFrame(screen, '保存成功');
     const config = loadConfig(workspace.dir)!;
     expect(config.default).toBe('deepseek:alpha');
     expect(config.providers['deepseek']!.models).toEqual({ alpha: { contextWindow: 16000 }, beta: {} });
@@ -119,12 +127,13 @@ describe('ProviderWizard', () => {
     // Kimi Code follows the existing Kimi / Moonshot preset.
     await keys(stdin, down, down, down, down, enter);
     expect(lastFrame()).toContain('api.kimi.com/coding/v1');
-    await keys(stdin, enter, enter, enter);
+    for (let i = 0; i < 3; i++) stdin.write(enter);
+    await waitForFrame({ lastFrame }, '3 / 4 · 配置凭据');
     for (const character of 'sk-kimi-fast-input') stdin.write(character);
     await tick();
     await keys(stdin, '\t', '\x1b[D'); // Kimi Code: auto → max.
-    await keys(stdin, enter, enter);
-    expect(lastFrame()).toContain('保存成功');
+    stdin.write(enter); stdin.write(enter);
+    await waitForFrame({ lastFrame }, '保存成功');
     const config = loadConfig(workspace.dir)!;
     expect(config.default).toBe('kimi-code:kimi-for-coding');
     expect(resolveApiKey(config.providers['kimi-code']!, 'kimi-code')).toBe('sk-kimi-fast-input');

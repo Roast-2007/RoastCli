@@ -96,8 +96,14 @@ function Wizard({ cwd, onExit }: ProviderWizardProps) {
   };
   const [loaded, setLoaded] = useState(read);
   const [step, setStep] = useState<'home' | 'preset' | 'connection' | 'credential' | 'models' | 'review' | 'saved'>('home');
+  const stepRef = useRef(step); stepRef.current = step;
   const [selection, setSelection] = useState(0);
-  const [field, setField] = useState(0);
+  const [field, setFieldState] = useState(0);
+  const fieldRef = useRef(field); fieldRef.current = field;
+  const setField = (value: number | ((current: number) => number)) => {
+    fieldRef.current = typeof value === 'function' ? value(fieldRef.current) : value;
+    setFieldState(fieldRef.current);
+  };
   const [draft, setDraftState] = useState<ProviderDraft | null>(null);
   const draftRef = useRef(draft);
   const setDraft = (next: ProviderDraft | null) => { draftRef.current = next; setDraftState(next); };
@@ -114,7 +120,7 @@ function Wizard({ cwd, onExit }: ProviderWizardProps) {
   const presets = Object.values(PROVIDER_PRESETS);
   const homeEntries = ['＋ 添加供应商', ...names.map((name) => `${name} · ${settings.default?.startsWith(`${name}:`) ? `默认 ${settings.default.slice(name.length + 1)} · ` : ''}${credentialStatus(settings, name)}`)];
   const entries = step === 'home' ? homeEntries : presets.map((p) => p.label);
-  const go = (next: typeof step) => { setStep(next); setError(''); setField(0); setOffset(0); };
+  const go = (next: typeof step) => { stepRef.current = next; setStep(next); setError(''); setField(0); setOffset(0); };
   const update = (patch: Partial<ProviderDraft>) => { if (draftRef.current) setDraft({ ...draftRef.current, ...patch }); setError(''); };
   const openModels = () => {
     const current = draftRef.current;
@@ -163,6 +169,8 @@ function Wizard({ cwd, onExit }: ProviderWizardProps) {
   const pageOffset = Math.min(offset, Math.max(0, pageLines.length - bodyHeight));
 
   useInput((input, key) => {
+    const step = stepRef.current;
+    const field = fieldRef.current;
     if (step === 'models') return;
     const draft = draftRef.current;
     if (key.ctrl && input === 'c') return onExit(hasSaved);
