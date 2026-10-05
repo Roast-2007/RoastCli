@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { collectChecks, renderChecks } from '../../src/cli/doctor.js';
-import { draftFromProfile, providerOverrideWarnings, readProviderSettings, saveProviderSettings, validateProviderDraft, type ProviderDraft } from '../../src/cli/provider-settings.js';
+import { draftFromProfile, providerOverrideWarnings, readProviderSettings, saveConfigPatch, saveProviderSettings, validateProviderDraft, type ProviderDraft } from '../../src/cli/provider-settings.js';
 import { loadConfig, resolveApiKey, trustProject, trustState, untrustedProviderOverrides } from '../../src/core/config.js';
 import { readCredential } from '../../src/core/credentials.js';
 import { PROVIDER_PRESETS } from '../../src/providers/presets.js';
@@ -87,14 +87,14 @@ describe('provider settings and credentials', () => {
     expect(resolveApiKey(profile, 'p')).toBe('explicit-key');
   });
 
-  it('warns about higher priority files and treats reference changes as trust changes', () => {
+  it('keeps the global default and credentials ahead of project settings', () => {
     saveProviderSettings(workspace.dir, draft());
     workspace.file('.roast/config.json', JSON.stringify({ providers: { p: { apiKeyRef: 'project-ref', models: { 'model-c': {} } } }, default: 'p:model-c' }));
-    expect(providerOverrideWarnings(workspace.dir, 'p', true)[0]).toContain('.roast');
+    expect(providerOverrideWarnings(workspace.dir, 'p', true)).toEqual([]);
     expect(readProviderSettings(workspace.dir).providers['p']!.models).toHaveProperty('model-a');
-    expect(readProviderSettings(workspace.dir).default).toBe('p:model-c');
+    expect(readProviderSettings(workspace.dir).default).toBe('p:model-a');
     expect(readProviderSettings(workspace.dir).userDefault).toBe('p:model-a');
-    expect(untrustedProviderOverrides(workspace.dir)).toContain('p');
+    expect(untrustedProviderOverrides(workspace.dir)).not.toContain('p');
     trustProject(workspace.dir);
     expect(trustState(workspace.dir)).toBe('trusted');
     workspace.file('.roast/config.json', JSON.stringify({ providers: { p: { apiKeyRef: 'changed-ref' } } }));
@@ -114,27 +114,58 @@ describe('provider settings and credentials', () => {
     expect(existsSync(join(home.dir, 'config.json'))).toBe(false);
   });
 
-  it('updates the effective project config so saved models and keys survive reloading', () => {
+  it('saves globally even with a legacy project config and reuses the profile in a fresh project', () => {
     workspace.file('roastcli.config.json', JSON.stringify({ providers: { project: { driver: 'openai-compat', apiKeyEnv: 'PROJECT_KEY' } }, default: 'project:model' }));
     const result = saveProviderSettings(workspace.dir, draft({ baseURL: ' https://example.com/v1/ ' }));
-    expect(result.file).toBe(join(workspace.dir, 'roastcli.config.json'));
+    expect(result.file).toBe(join(home.dir, 'config.json'));
     expect(loadConfig(workspace.dir)!.default).toBe('p:model-a');
     expect(resolveApiKey(loadConfig(workspace.dir)!.providers['p']!, 'p')).toBe('sk-local-test');
     expect(readFileSync(result.file, 'utf8')).not.toContain('sk-local-test');
-    expect(result.warnings.join('\n')).toContain('roast trust');
+    expect(result.warnings).toEqual([]);
+    const other = tempWorkspace();
+    expect(loadConfig(other.dir)!.default).toBe('p:model-a');
+    expect(resolveApiKey(loadConfig(other.dir)!.providers['p']!, 'p')).toBe('sk-local-test');
+    expect(existsSync(join(other.dir, '.roast', 'config.json'))).toBe(false);
+    expect(JSON.parse(readFileSync(join(workspace.dir, 'roastcli.config.json'), 'utf8')).default).toBe('project:model');
   });
 
-  it('saves into a partial project overlay while preserving inherited metadata and other settings', () => {
+  it('saves inherited model metadata globally and leaves the project overlay intact', () => {
     saveProviderSettings(workspace.dir, draft());
     workspace.file('.roast/config.json', JSON.stringify({ providers: { p: { models: { extra: { contextWindow: 8000 } } } }, ui: { theme: 'aurora' } }));
     const edit = draftFromProfile('p', readProviderSettings(workspace.dir).providers['p']!, 'p:model-a');
     const result = saveProviderSettings(workspace.dir, { ...edit, model: 'new-model', apiKey: 'new-key' });
     const reloaded = loadConfig(workspace.dir)!;
-    expect(result.file).toBe(join(workspace.dir, '.roast', 'config.json'));
+    expect(result.file).toBe(join(home.dir, 'config.json'));
     expect(reloaded.default).toBe('p:new-model');
     expect(reloaded.ui?.theme).toBe('aurora');
     expect(reloaded.providers['p']!.models).toHaveProperty('extra');
     expect(resolveApiKey(reloaded.providers['p']!, 'p')).toBe('new-key');
+  });
+
+  it('saves UI and Hive preferences globally even when a project config exists', () => {
+    saveProviderSettings(workspace.dir, draft());
+    workspace.file('.roast/config.json', JSON.stringify({ ui: { theme: 'aurora' }, swarm: { models: { worker: 'inherit' } } }));
+    expect(saveConfigPatch(workspace.dir, { ui: { theme: 'mono' }, swarm: { models: { worker: 'p:model-a' }, efforts: { worker: 'high' } } })).toBe(join(home.dir, 'config.json'));
+    expect(loadConfig(tempWorkspace().dir)).toMatchObject({ ui: { theme: 'mono' }, swarm: { models: { worker: 'p:model-a' }, efforts: { worker: 'high' } } });
+    expect(JSON.parse(readFileSync(join(workspace.dir, '.roast', 'config.json'), 'utf8')).ui.theme).toBe('aurora');
+  });
+
+  it('honours an explicitly selected configuration file, including a new file', () => {
+    const explicit = join(workspace.dir, 'explicit.json');
+    process.env['ROASTCLI_CONFIG'] = explicit;
+    const result = saveProviderSettings(workspace.dir, draft());
+    expect(result.file).toBe(explicit);
+    expect(result.warnings.join('\n')).toContain('roast trust');
+    expect(existsSync(join(home.dir, 'config.json'))).toBe(false);
+    expect(resolveApiKey(loadConfig(workspace.dir)!.providers.p!, 'p')).toBe('sk-local-test');
+  });
+
+  it('does not carry a project-only default into a newly created global profile', () => {
+    workspace.file('.roast/config.json', JSON.stringify({ providers: { onlyHere: { driver: 'openai-compat', auth: 'none' } }, default: 'onlyHere:m' }));
+    saveProviderSettings(workspace.dir, draft({ makeDefault: false }));
+    const global = loadConfig(tempWorkspace().dir)!;
+    expect(global.default).toBe('p:model-a');
+    expect(global.providers).not.toHaveProperty('onlyHere');
   });
 
   it('round-trips model effort and removes an explicit override when returning to automatic', () => {

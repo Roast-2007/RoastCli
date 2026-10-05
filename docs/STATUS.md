@@ -1,6 +1,6 @@
 # RoastCli 当前状态
 
-> 更新于 2026-10-05，v0.2.0。路线图见 [ROADMAP.md](ROADMAP.md)，架构见 [DESIGN.md](DESIGN.md)。
+> 更新于 2026-10-05，v0.2.1。路线图见 [ROADMAP.md](ROADMAP.md)，架构见 [DESIGN.md](DESIGN.md)。
 
 ## 当前交付
 
@@ -8,7 +8,7 @@
 
 M0–M8 的功能实现与自动化验收已完成，包含可选 Mem0、embeddings、无 Git 文件检查点及蜂群自适应并发。TUI 已补齐小屏布局、长输入、帮助与会话菜单、实时模型切换、暂停和终端降级。
 
-- 验证：100 个测试文件、622 个测试，typecheck / build 通过（具体平台会跳过不适用的测试）。
+- 验证：102 个测试文件、636 个测试，typecheck / build 通过（具体平台会跳过不适用的测试）。
 - 上次全量覆盖率采集（供应商后续修复前）：行 93.40%、分支 81.28%；性能测试保持约 30 次 store 通知 / 秒。
 - 真实 Ink 输出覆盖 40×10、60×16、80×24、120×40，运行中缩到 25×8，2000 行流式输出不触发整屏清空。
 - 尚未验证：Windows Terminal / conhost 的真实 IME 候选框、Shift+Enter，以及用户在线供应商。供应商、Mem0 和 embeddings 使用受控 HTTP 测试，未调用用户在线账户。
@@ -28,6 +28,13 @@ M0–M8 的功能实现与自动化验收已完成，包含可选 Mem0、embeddi
 | M8 打磨 | 实现完成 | doctor / init / 配置向导、四主题、终端降级、Mem0 / embeddings、性能与回归验证 |
 
 ## 本轮打磨
+
+### v0.2.1 全局配置与启动信任
+
+- 用户目录 `.roast/config.json` 优先于项目配置，默认模型、供应商、界面及 Hive 设置跨项目复用；显式 `ROASTCLI_CONFIG` 仍优先。配置向导和偏好修改默认写全局文件。
+- 全局完整供应商独立拥有连接字段，避免继承项目 URL、headers、认证或密钥引用；项目独有的供应商仍受信任限制。配置层去重避免重复加载同一文件的钩子。
+- 首次交互启动用键盘面板信任文件夹，可查看完整路径和项目配置、确认或退出；记录保存于用户目录，相关项目配置变化后重问，非交互模式不自动授权。
+- Hive 启动在确认信任后构造策略提示，允许首次确认后使用可信的项目模板。
 
 ### v0.2.0 模型、Hive 和命令交互
 
@@ -51,7 +58,7 @@ M0–M8 的功能实现与自动化验收已完成，包含可选 Mem0、embeddi
 
 - 供应商认证只使用直接输入并保存在用户 credentials.json 的 API Key；旧 apiKeyEnv 可读取用于迁移，但不再读取环境变量密钥。向导、init、doctor 与配置示例同步更新；Mem0 / MCP 的独立认证配置仍按各自协议处理。
 - 向导直接聚焦密钥输入，Enter 确认后再 Enter 保存；同步维护输入与光标，连续快速按键不丢字符。缺少或失效的已保存密钥需重新输入，错误页保持遮罩。
-- 保存更新当前最高优先级配置，页首与确认页显示实际路径；无项目配置时写用户文件。支持部分项目覆盖层，保留其他供应商、模型元数据和扩展，修复用户默认模型被旧项目配置覆盖造成的“保存不生效”。项目连接信息更新后提示 roast trust。
+- 保存默认写用户级全局配置，显式 ROASTCLI_CONFIG 则写指定文件，页首与确认页显示实际路径。支持部分项目补充层，保留其他供应商、模型元数据和扩展；默认模型以用户配置为准，项目连接变更在交互启动时确认信任。
 - 新增 Kimi Code：OpenAI 兼容端点 https://api.kimi.com/coding/v1，默认模型 kimi-for-coding；保留当前工具循环的 reasoning_content，客户端如实标识 RoastCli。
 - Reasoning effort 按模型保存、编辑和清除；自动不发送参数。OpenAI 兼容请求使用 reasoning_effort，Anthropic 使用 output_config.effort 并保留原 thinkingBudget 行为。Kimi Code 按官方文档提供 none / low / high / max。
 - init 支持 --api-key-stdin 与 --reasoning-effort，无需供应商环境变量。回归验证覆盖保存后重载、旧认证迁移、真实 CLI stdin、快速输入、40×10 小屏及两种协议的实际请求体。

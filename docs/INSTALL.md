@@ -44,7 +44,7 @@ roast
 
 在向导里选择供应商，填写模型、API Key 和 reasoning effort，按 Enter 确认，再 Enter 保存。支持 Kimi Code：端点 `https://api.kimi.com/coding/v1`，默认模型 `kimi-for-coding`。供应商密钥直接保存，不需要设置密钥环境变量。
 
-密钥存放在用户目录 `~/.roast/credentials.json`（本地明文），配置只记录引用。项目配置修改后，按提示运行 `roast trust`；请先确认项目配置来源。Node.js 安装时配置的 npm 全局目录需要位于 PATH 中。
+密钥存放在用户目录 `~/.roast/credentials.json`（本地明文），配置只记录引用。供应商配置一次后全局复用，用户 `~/.roast/config.json` 优先于项目配置。首次交互启动及相关项目配置变化后，使用文件夹信任面板确认；脚本仍可显式运行 `roast trust`。Node.js 安装时配置的 npm 全局目录需要位于 PATH 中。
 
 ## 更新和卸载
 

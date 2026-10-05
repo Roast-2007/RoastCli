@@ -430,7 +430,7 @@ src/swarm/
 - 动画：useSpinner 共用一个 80ms 计时器，仅有订阅者时运行；Ink maxFps=30、incrementalRendering。TERM=dumb 或减少动画模式停止动画，ASCII 装饰通过 TerminalContext 提供，内容原文不转写。
 - 历史与界面：/clear 保留上下文及完整编辑状态；/resume 加载独立候选 Session，成功后替换 controller / store，失败恢复原界面，退出等待加载收尾。replayView 只从已提交事件恢复显示，不重复 raw chunks / 内部附件；Static 水位线避免重印。
 - 模型：共享 ModelRef 在空闲时切换，model/change 事件保存选择，ContextController 更新窗口并清除旧 usage 锚点；UsageCost 按每段模型定价累计 usage / auxUsage，rewind 不扣除真实消耗。
-- 供应商设置：API Key 存用户 credentials.json，配置只写 apiKeyRef；旧 apiKeyEnv 不再用于供应商认证。向导写当前最高优先级配置并展示实际路径，无项目覆盖时写用户配置；部分覆盖层先合并后校验，项目连接变更仍需 trust。Reasoning effort 按模型保存，null 清除继承的设置；两种协议分别发送 reasoning_effort / output_config.effort。
+- 供应商设置：API Key 存用户 credentials.json，配置只写 apiKeyRef；旧 apiKeyEnv 不再用于供应商认证。向导默认写全局配置并展示实际路径，显式 ROASTCLI_CONFIG 则写指定文件；项目配置补充全局，用户配置优先，完整全局供应商的连接字段不继承仓库值。交互启动先用文件夹信任面板确认，再加载会话与扩展；相关项目配置变化后重新提示，管道模式不自动授权。Reasoning effort 按模型保存，null 清除继承的设置；两种协议分别发送 reasoning_effort / output_config.effort。
 - Mem0：memory.driver=mem0；平台默认 v3（添加 /v3/memories/add/、POST 列表 / 搜索、v1 单条读取 / 删除），可选 v2；自托管使用 /memories、/search 与 X-API-Key。canonical cwd 的哈希作为 user_id，保存 infer=false，平台 async_mode=false；删除先检查项目归属。请求有大小限制 / 超时 / 中断，不追随重定向，不回显远端正文。
 - 语义检索：rag.embeddings 指定已配置的 OpenAI 兼容 provider，继承地址 / 凭据 / headers。VectorIndex 按内容哈希缓存向量，查询先检测维度，变化重建缓存；默认分批 32、最多 2000 chunks。CodeIndex 在路径筛选后以 reciprocal rank fusion 合并 BM25 与 cosine；网络失败提示回退，取消继续传播。缓存位于用户 indexes 目录，持久化失败不丢弃有效查询结果。
 - 信任：项目级 memory / rag 未信任时移除，并计入敏感配置 hash 和 roast trust 清单；未配置扩展的旧 hash 不受影响。

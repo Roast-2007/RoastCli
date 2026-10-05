@@ -68,7 +68,7 @@ describe('hooks config', () => {
     expect(untrusted.ignored).toBe(2);
 
     const trusted = loadHooks(ws.dir, true);
-    expect(trusted.hooks.Stop.map((h) => h.command)).toEqual(['user-stop', 'repo-stop']);
+    expect(trusted.hooks.Stop.map((h) => h.command)).toEqual(['repo-stop', 'user-stop']);
     expect(trusted.hooks.PreToolUse).toHaveLength(1);
     expect(trusted.ignored).toBe(0);
   });

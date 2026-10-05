@@ -43,7 +43,7 @@ describe('mcp config', () => {
 
     const trusted = loadMcpServers(ws.dir, true);
     expect(trusted.servers.map((s) => [s.name, s.command ?? s.url, s.transport, s.layer])).toEqual([
-      ['a', 'repo-a', 'stdio', 'project'],
+      ['a', 'user-a', 'stdio', 'user'],
       ['web', 'https://e.com/mcp', 'http', 'project'],
     ]);
   });

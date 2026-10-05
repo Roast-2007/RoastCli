@@ -22,6 +22,7 @@ import { findRunLog, listRuns, readHeader, resolveLogsRoot } from '../cli/logs.j
 import { findLatestRunFor } from '../session/resume.js';
 import { canonicalPath } from '../core/paths.js';
 import { runTrust } from '../cli/trust.js';
+import { ensureFolderTrust } from '../cli/startup.js';
 import { MODE_CYCLE, type PermissionMode } from '../tools/permissions/engine.js';
 import { mcpAdd, mcpList, mcpRemove, type McpAddOptions } from '../cli/mcp.js';
 import { collectChecks, renderChecks } from '../cli/doctor.js';
@@ -56,7 +57,7 @@ interface ChatOptions {
   permissionMode?: string;
   outputFormat?: string;
   /** 交互模式启动后自动提交的首条消息（roast swarm） */
-  initialPrompt?: string;
+  initialPrompt?: string | (() => string);
 }
 
 interface SwarmOptions {
@@ -144,12 +145,15 @@ async function openSession(opts: { modelRef?: string; resumeLogPath?: string; pe
 
 
 async function runChat(opts: ChatOptions): Promise<void> {
-  if (opts.prompt === undefined && process.stdin.isTTY && process.stdout.isTTY && !configSources().some((source) => source.exists)) {
-    const { runProviderWizard } = await import('../ui/screens.js');
-    if (!await runProviderWizard(process.cwd())) return;
-  }
-  const resumeLogPath = resolveResumeLog(opts);
   const permissionMode = parsePermissionMode(opts.permissionMode);
+  const interactive = opts.prompt === undefined && !!process.stdin.isTTY && !!process.stdout.isTTY;
+  if (interactive) {
+    const { runTrustPrompt, runProviderWizard } = await import('../ui/screens.js');
+    if (!await ensureFolderTrust(process.cwd(), true, runTrustPrompt)) return;
+    if (!configSources().some((source) => source.exists) && !await runProviderWizard(process.cwd())) return;
+  }
+  const initialPrompt = typeof opts.initialPrompt === 'function' ? opts.initialPrompt() : opts.initialPrompt;
+  const resumeLogPath = resolveResumeLog(opts);
   const session = await openSession({
     ...(opts.model ? { modelRef: opts.model } : {}),
     ...(resumeLogPath ? { resumeLogPath } : {}),
@@ -174,7 +178,7 @@ async function runChat(opts: ChatOptions): Promise<void> {
   }
   // inline 对话 ⇄ Mission Control（Ctrl+G）的屏幕管理；退出时中断进行中的 turn 并等它收尾再关日志
   const { runInteractive } = await import('../ui/screens.js');
-  await runInteractive(session, opts.initialPrompt ? { initialPrompt: opts.initialPrompt } : {});
+  await runInteractive(session, initialPrompt ? { initialPrompt } : {});
 }
 
 function runLogsList(): void {
@@ -279,10 +283,10 @@ async function main(): Promise<void> {
       const n = parseN(opts.n);
       if (opts.listTemplates) return void process.stdout.write(describeTemplates(swarmTemplates(), n) + '\n');
       if (goal.length === 0) throw new RoastError('INVALID_REQUEST', '请给出目标，例如：roast swarm -t best-of-n "实现 LRU 缓存"');
-      const prompt = buildSwarmPrompt(swarmTemplates(), goal.join(' '), opts.template ?? DEFAULT_TEMPLATE, n);
+      const prompt = () => buildSwarmPrompt(swarmTemplates(), goal.join(' '), opts.template ?? DEFAULT_TEMPLATE, n);
       const headless = opts.print === true || opts.outputFormat !== undefined;
       await runChat({
-        ...(headless ? { prompt } : { initialPrompt: prompt }),
+        ...(headless ? { prompt: prompt() } : { initialPrompt: prompt }),
         ...(opts.model ? { model: opts.model } : {}),
         ...(opts.permissionMode ? { permissionMode: opts.permissionMode } : {}),
         ...(opts.outputFormat ? { outputFormat: opts.outputFormat } : {}),

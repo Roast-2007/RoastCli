@@ -37,7 +37,8 @@ describe('roast doctor', () => {
 
     const missing = await collectChecks(ws.dir);
     expect(byName(missing, '凭据 p')).toEqual({ name: '凭据 p', level: 'warn', detail: '未保存 API Key，旧环境变量认证已弃用（运行 roast config 输入密钥）' });
-    expect(byName(missing, '项目信任')?.level).toBe('warn');
+    // The repository URL is shadowed by the global provider; it needs no connection approval.
+    expect(byName(missing, '项目信任')).toBeUndefined();
     expect(byName(missing, '钩子')).toMatchObject({ level: 'warn', detail: '0 个；1 个因项目未信任未启用' });
     expect(byName(missing, 'Skills')?.detail).toBe('deploy');
     expect(byName(missing, '项目说明')?.detail).toBe('ROAST.md');

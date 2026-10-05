@@ -33,10 +33,12 @@ curl -fsSL https://raw.githubusercontent.com/Roast-2007/RoastCli/main/install.sh
 在你的项目目录运行：
 
 ```sh
-roast config   # 自定义接口、多模型与密钥；Ctrl+L 获取模型列表
+roast config   # 配置一次，全局复用；Ctrl+L 获取模型列表
 roast doctor   # 检查配置和运行环境
 roast          # 开始对话
 ```
+
+供应商、默认模型、主题及 Hive 设置默认保存到用户目录 `~/.roast/config.json`（Windows 为 `%USERPROFILE%\.roast\config.json`），所有项目共享，项目同名设置不会覆盖全局配置。首次交互启动会弹出文件夹信任面板，↑↓ / Enter 确认，Esc 退出；信任记录保存在用户目录，相关项目配置变化后会重新提示。
 
 `Enter` 发送，`Shift+Enter` / `Ctrl+J` 换行，`Esc` 中断，`Ctrl+G` 打开蜂群面板，`F1` 显示帮助。用 `roast -c` 继续上次会话。
 

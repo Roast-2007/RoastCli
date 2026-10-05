@@ -1,5 +1,5 @@
 import { existsSync, readFileSync } from 'node:fs';
-import { ConfigSchema, ProviderProfileSchema, configSources, deepMerge, defaultBaseURL, roastHome, reasoningEfforts, type ModelMeta, type ProviderProfile, type ReasoningEffort } from '../core/config.js';
+import { ConfigSchema, ProviderProfileSchema, configSources, deepMerge, mergeConfigLayer, defaultBaseURL, roastHome, reasoningEfforts, type ModelMeta, type ProviderProfile, type ReasoningEffort } from '../core/config.js';
 import { atomicWriteJson, readCredential, saveCredential } from '../core/credentials.js';
 import { RoastError } from '../core/errors.js';
 import { PROVIDER_PRESETS } from '../providers/presets.js';
@@ -22,28 +22,24 @@ export interface ProviderSettings {
   file: string;
 }
 
-/** Write the highest active layer, so project/legacy configs cannot hide a saved selection. */
+/** Save personal settings globally unless the user explicitly selected a configuration file. */
 export function providerSettingsSource(cwd: string) {
   const sources = configSources(cwd);
-  return sources.filter((source) => source.exists).at(-1) ?? sources[0]!;
+  return process.env['ROASTCLI_CONFIG'] ? sources.at(-1)! : sources.find((source) => source.layer === 'user')!;
 }
 
 export function readProviderSettings(cwd: string): ProviderSettings {
   // Show the merged profiles, including providers currently defined only by a project.
-  let providers: Record<string, unknown> = {};
+  let merged: unknown = {};
   let defaultModel: string | undefined;
   let userDefault: string | undefined;
   for (const source of configSources(cwd).filter((s) => s.exists)) {
     const raw = readObject(source.path);
+    merged = mergeConfigLayer(merged, raw, source.layer);
     if (typeof raw['default'] === 'string') defaultModel = raw['default'];
     if (source.layer === 'user' && typeof raw['default'] === 'string') userDefault = raw['default'];
-    if (raw['providers'] && typeof raw['providers'] === 'object' && !Array.isArray(raw['providers'])) {
-      for (const [name, value] of Object.entries(raw['providers'])) {
-        if (['__proto__', 'constructor', 'prototype'].includes(name)) continue;
-        if (value && typeof value === 'object' && !Array.isArray(value)) providers[name] = deepMerge(providers[name] ?? {}, value);
-      }
-    }
   }
+  const providers = (merged as { providers?: Record<string, unknown> }).providers ?? {};
   const valid: Record<string, ProviderProfile> = {};
   for (const [name, profile] of Object.entries(providers)) {
     const result = ProviderProfileSchema.safeParse(profile);
@@ -120,8 +116,11 @@ export function saveProviderSettings(cwd: string, draft: ProviderDraft): { file:
     apiKeyRef: existing.apiKeyRef ?? 'pending',
     models: { ...models, [model]: { ...models[model], reasoningEffort: draft.reasoningEffort ?? null } },
   };
-  const next = { ...raw, providers: { ...(providers as object ?? {}), [draft.name]: profile }, default: draft.makeDefault || !settings.default ? `${draft.name}:${model}` : settings.default };
-  const merged = configSources(cwd).reduce<unknown>((acc, source) => deepMerge(acc, source.path === file ? next : source.exists ? readObject(source.path) : {}), {});
+  const nextProviders = { ...(providers as Record<string, unknown> ?? {}), [draft.name]: profile };
+  const previousDefault = typeof raw['default'] === 'string' ? raw['default'] : settings.default;
+  const canKeepDefault = previousDefault && (providerSettingsSource(cwd).layer !== 'user' || Object.hasOwn(nextProviders, previousDefault.split(':')[0]!));
+  const next = { ...raw, providers: nextProviders, default: draft.makeDefault || !canKeepDefault ? `${draft.name}:${model}` : previousDefault };
+  const merged = configSources(cwd).reduce<unknown>((acc, source) => mergeConfigLayer(acc, source.path === file ? next : source.exists ? readObject(source.path) : {}, source.layer), {});
   // Validate before saving a secret, while preserving extension/unknown config fields on disk.
   if (!ConfigSchema.safeParse(merged).success) throw new RoastError('CONFIG', '合并后的配置无效，请检查现有配置后重试');
   const warnings = providerOverrideWarnings(cwd, draft.name, draft.makeDefault || !settings.default);
@@ -139,7 +138,7 @@ export function draftFromProfile(name: string, profile: ProviderProfile, default
 export function saveConfigPatch(cwd: string, patch: Record<string, unknown>): string {
   const file = providerSettingsSource(cwd).path;
   const next = deepMerge(readObject(file), patch);
-  const merged = configSources(cwd).reduce<unknown>((acc, source) => deepMerge(acc, source.path === file ? next : source.exists ? readObject(source.path) : {}), {});
+  const merged = configSources(cwd).reduce<unknown>((acc, source) => mergeConfigLayer(acc, source.path === file ? next : source.exists ? readObject(source.path) : {}, source.layer), {});
   if (!ConfigSchema.safeParse(merged).success) throw new RoastError('CONFIG', '合并后的配置无效，请检查现有配置后重试');
   atomicWriteJson(file, next);
   return file;

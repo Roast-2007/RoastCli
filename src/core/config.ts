@@ -1,5 +1,5 @@
 /**
- * 配置加载：分层合并（~/.roast/config.json → .roast/config.json → roastcli.config.json → ROASTCLI_CONFIG）。
+ * 配置加载：项目配置补充 → ~/.roast/config.json 优先 → ROASTCLI_CONFIG 显式覆盖。
  * 原则（借鉴 deepseek-harness）：
  * - 显式 resolve 一步完成校验与默认值落地，运行时不再散落 `?? default`
  * - apiKeyRef 存用户凭据引用，密钥本身不进普通配置文件、不进日志
@@ -190,16 +190,21 @@ export function configSources(cwd: string = process.cwd()): ConfigSource[] {
   const user = join(roastHome(), 'config.json');
   const project = join(cwd, '.roast', 'config.json');
   const layers: { layer: ConfigLayer; path: string }[] = [
-    { layer: 'user', path: user },
     ...(canonicalPath(project) === canonicalPath(user) ? [] : [{ layer: 'project' as const, path: project }]),
     { layer: 'legacy', path: join(cwd, 'roastcli.config.json') },
+    { layer: 'user', path: user },
   ];
   const envPath = process.env['ROASTCLI_CONFIG'];
   if (envPath) {
     const abs = resolve(envPath);
-    layers.push({ layer: isPathInside(cwd, abs) ? 'project' : 'env', path: abs });
+    layers.push({ layer: canonicalPath(abs) === canonicalPath(user) ? 'user' : isPathInside(cwd, abs) ? 'project' : 'env', path: abs });
   }
-  return layers.map((l) => ({ ...l, exists: existsSync(l.path) }));
+  const unique = new Map<string, typeof layers[number]>();
+  for (const layer of layers) {
+    const key = canonicalPath(layer.path);
+    unique.delete(key); unique.set(key, layer);
+  }
+  return [...unique.values()].map((l) => ({ ...l, exists: existsSync(l.path) }));
 }
 
 function isPlainObject(v: unknown): v is Record<string, unknown> {
@@ -224,6 +229,25 @@ export function deepMerge(base: unknown, over: unknown): unknown {
 const CONNECTION_FIELDS = ['driver', 'baseURL', 'headers', 'apiKeyEnv', 'apiKeyRef', 'auth'] as const;
 const REPO_LAYERS: readonly ConfigLayer[] = ['project', 'legacy'];
 
+/** Trusted full profiles own their connections; never inherit a repository URL or key reference. */
+export function mergeConfigLayer(base: unknown, over: unknown, layer: ConfigLayer): unknown {
+  const merged = deepMerge(base, over);
+  if (REPO_LAYERS.includes(layer) || !isPlainObject(over) || !isPlainObject(over['providers']) || !isPlainObject(merged) || !isPlainObject(merged['providers'])) return merged;
+  const providers = { ...merged['providers'] };
+  for (const [name, profile] of Object.entries(over['providers'])) {
+    if (FORBIDDEN_KEYS.has(name) || !isPlainObject(profile) || profile['driver'] === undefined) continue;
+    const effective = providers[name];
+    if (!isPlainObject(effective)) continue;
+    const owned = { ...effective };
+    for (const field of CONNECTION_FIELDS) {
+      delete owned[field];
+      if (profile[field] !== undefined) owned[field] = profile[field];
+    }
+    providers[name] = owned;
+  }
+  return { ...merged, providers };
+}
+
 /**
  * 仓库内配置层（.roast/config.json、roastcli.config.json）修改了连接字段的 provider。
  * 不可信仓库可借此把你的 API key 发往任意地址，使用前需 `roast trust`。
@@ -231,11 +255,13 @@ const REPO_LAYERS: readonly ConfigLayer[] = ['project', 'legacy'];
 export function untrustedProviderOverrides(cwd: string = process.cwd()): string[] {
   const names = new Set<string>();
   for (const s of configSources(cwd)) {
-    if (!s.exists || !REPO_LAYERS.includes(s.layer)) continue;
+    if (!s.exists) continue;
     const raw = readJson(s.path);
     const providers = isPlainObject(raw) && isPlainObject(raw['providers']) ? raw['providers'] : {};
     for (const [name, p] of Object.entries(providers)) {
-      if (isPlainObject(p) && CONNECTION_FIELDS.some((f) => p[f] !== undefined)) names.add(name);
+      if (FORBIDDEN_KEYS.has(name) || !isPlainObject(p)) continue;
+      if (REPO_LAYERS.includes(s.layer) && CONNECTION_FIELDS.some((f) => p[f] !== undefined)) names.add(name);
+      else if (!REPO_LAYERS.includes(s.layer) && p['driver'] !== undefined) names.delete(name);
     }
   }
   return [...names];
@@ -334,7 +360,7 @@ function readJson(path: string): unknown {
 }
 
 /**
- * 加载并合并所有存在的配置层（用户级 → 项目级 → 旧版 roastcli.config.json → ROASTCLI_CONFIG）。
+ * 项目级 / 旧版配置补充用户级配置，ROASTCLI_CONFIG 显式指定的文件优先。
  * 一个配置文件都没有时返回 null（调用方决定是报错还是引导初始化）。
  */
 /**
@@ -355,7 +381,7 @@ export function loadConfig(cwd: string = process.cwd()): RoastConfig | null {
   const present = configSources(cwd).filter((s) => s.exists);
   if (present.length === 0) return null;
   const trusted = present.some((s) => REPO_LAYERS.includes(s.layer)) ? isProjectTrusted(cwd) : true;
-  const merged = present.reduce<unknown>((acc, s) => deepMerge(acc, trusted || !REPO_LAYERS.includes(s.layer) ? readJson(s.path) : withoutUntrustedKeys(readJson(s.path), cwd)), {});
+  const merged = present.reduce<unknown>((acc, s) => mergeConfigLayer(acc, trusted || !REPO_LAYERS.includes(s.layer) ? readJson(s.path) : withoutUntrustedKeys(readJson(s.path), cwd), s.layer), {});
   const result = ConfigSchema.safeParse(merged);
   if (!result.success) {
     const where = present.map((s) => s.path).join(' + ');

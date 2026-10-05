@@ -117,7 +117,7 @@ describe('config layers', () => {
     const roastHome = path.join(home.dir, '.roast');
     process.env['ROAST_HOME'] = roastHome;
     home.file('.roast/config.json', JSON.stringify({ hooks: { Stop: [{ command: 'x' }] } }));
-    expect(configSources(home.dir).map((s) => s.layer)).toEqual(['user', 'legacy']);
+    expect(configSources(home.dir).map((s) => s.layer)).toEqual(['legacy', 'user']);
     expect(loadHooks(home.dir, false)).toMatchObject({ ignored: 0, hooks: { Stop: [{ command: 'x' }] } });
   });
 
@@ -129,6 +129,14 @@ describe('config layers', () => {
     expect(configSources(ws.dir).at(-1)?.layer).toBe('env');
     expect(isPathInside(ws.dir, ws.dir)).toBe(true);
     expect(isPathInside(ws.dir, path.join(ws.dir, '..'))).toBe(false);
+  });
+
+  it('does not duplicate hooks or require repo trust when the explicit file is the global config', () => {
+    const ws = tempWorkspace();
+    const file = home.file('config.json', JSON.stringify({ hooks: { Stop: [{ command: 'global-hook' }] } }));
+    process.env['ROASTCLI_CONFIG'] = file;
+    expect(configSources(ws.dir).filter((source) => source.path === file)).toMatchObject([{ layer: 'user' }]);
+    expect(loadHooks(ws.dir, false).hooks.Stop.map((hook) => hook.command)).toEqual(['global-hook']);
   });
 });
 

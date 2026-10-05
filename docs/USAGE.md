@@ -76,7 +76,9 @@ Markdown 在常规终端左右留 2 列空白，窄屏自动缩减；段落、�
 
 向导按“供应商 → 连接与模型 → API Key 与推理强度 → 确认保存”引导配置。模型字段可填多个逗号分隔的 ID，首个模型用于默认选择；留空时确认密钥后自动获取列表，也可在密钥或确认页按 Ctrl+L。模型列表用 Enter 勾选多个 ID，再选择“完成选择”；只保存所选模型的元数据，失败可 Esc 返回手填。新建同类供应商自动生成独立 ID，也可自行命名多个自定义端点。本地接口可在密钥页把“认证”设为“无密钥”。
 
-密钥页直接聚焦 API Key，输入后 Enter 确认，下一页 Enter 保存。Tab / Shift+Tab 或 ↑↓ 切换字段，推理强度、默认模型和认证用 ←→ 选择，Esc 返回或取消；小屏只显示当前字段，长确认页用 PgUp/PgDn 翻页。保存位置显示在页首及确认页：有项目或显式配置时更新当前最高优先级文件，否则写用户配置，保留其他供应商与扩展设置，避免保存后又被旧项目默认模型覆盖。项目连接信息变更后按提示运行 `roast trust`。修改在下一次启动生效。缺少配置时，交互式启动会自动打开向导。
+密钥页直接聚焦 API Key，输入后 Enter 确认，下一页 Enter 保存。Tab / Shift+Tab 或 ↑↓ 切换字段，推理强度、默认模型和认证用 ←→ 选择，Esc 返回或取消；小屏只显示当前字段，长确认页用 PgUp/PgDn 翻页。向导默认保存到用户目录 `~/.roast/config.json`（Windows 为 `%USERPROFILE%\.roast\config.json`），配置一次后所有项目复用；`/theme` 和 `/hive models` 也保存到全局配置。项目文件只补充全局没有设置的值，同名供应商连接、默认模型与偏好以全局配置为准。只有显式设置 `ROASTCLI_CONFIG` 时才读写指定文件，实际保存位置始终显示在页首及确认页。修改在下一次启动生效。缺少配置时，交互式启动会自动打开向导。
+
+首次启动交互式 `roast` / `roast swarm` 时，自动显示文件夹信任面板：↑↓ 选择、Enter 确认、Esc / Ctrl+C 退出，也可先查看完整目录与项目配置。确认后保存到 `~/.roast/trusted.json`，同一目录以后直接启动；项目中的连接信息、钩子、MCP、权限 allow 等相关配置变化后重新提示。确认前不创建会话或启动项目扩展。脚本 / `-p` 模式不显示面板，也不会自动授予信任；仍可显式运行 `roast trust`。全局供应商的连接不会继承项目中的 URL、headers、认证方式或密钥引用，项目独有的供应商仍需信任。
 
 密钥直接输入并保存在 `~/.roast/credentials.json`（**用户目录中的本地明文文件**），配置只记录 `apiKeyRef`。供应商环境变量认证已弃用，旧配置仍可打开修改，但 `apiKeyEnv` 不再用于认证；请重新输入并保存 API Key，已有本地密钥仍可使用。`ROAST_HOME` 可覆盖用户目录。POSIX 下凭据文件权限为 `0600`，Windows 继承用户目录权限；密钥输入不进入聊天历史和日志。更换密钥使用新引用，当前会话仍使用原来的引用。
 
@@ -88,10 +90,10 @@ Hive 用 `/hive models` 为 lead / worker / scout / critic / judge 选择不同�
 
 脚本或非交互终端可用 `roast init --provider kimi-code --reasoning-effort high` 生成配置，然后运行 `roast config` 输入密钥；也可加 `--api-key-stdin` 从标准输入读取并保存密钥，无需设置供应商环境变量。
 
-配置分层合并，后者覆盖前者：
+配置分层合并，后者优先；项目配置作为全局配置的补充：
 
 ```
-~/.roast/config.json → .roast/config.json → roastcli.config.json（旧版）→ $ROASTCLI_CONFIG
+.roast/config.json → roastcli.config.json（旧版）→ ~/.roast/config.json → $ROASTCLI_CONFIG（显式指定）
 ```
 
 ```jsonc

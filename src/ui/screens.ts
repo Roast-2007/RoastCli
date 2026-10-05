@@ -13,6 +13,7 @@ import { createUiController } from './controller.js';
 import { createUiStore } from './store/store.js';
 import { savedWorktreesText } from '../cli/worktrees.js';
 import { ProviderWizard } from './providers/ProviderWizard.js';
+import { TrustPanel } from './components/TrustPanel.js';
 import type { EditorState } from './input/editor.js';
 
 /** Clear while Ink still knows the activity height/caret, before losing its renderer state. */
@@ -33,6 +34,17 @@ export async function runProviderWizard(cwd: string): Promise<boolean> {
   });
   await instance.waitUntilExit();
   return saved;
+}
+
+export async function runTrustPrompt(cwd: string): Promise<boolean> {
+  let trusted = false;
+  const instance = render(createElement(TrustPanel, { cwd, onExit: (result: boolean) => { trusted = result; instance.unmount(); } }), {
+    exitOnCtrlC: false,
+    alternateScreen: true,
+    kittyKeyboard: { mode: 'auto' },
+  });
+  await instance.waitUntilExit();
+  return trusted;
 }
 
 export async function runInteractive(session: Session, opts: { initialPrompt?: string } = {}): Promise<void> {

@@ -1,7 +1,7 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { configSources, loadConfig, roastHome } from '../../src/core/config.js';
+import { configSources, loadConfig, mergeConfigLayer, roastHome, untrustedProviderOverrides } from '../../src/core/config.js';
 import { RoastError } from '../../src/core/errors.js';
 import { tempWorkspace } from '../fixtures/workspace.js';
 
@@ -40,7 +40,7 @@ describe('分层配置', () => {
     expect(roastHome()).toBe(home);
   });
 
-  it('用户级 → 项目级 → 旧版文件逐层深合并，后者覆盖前者', () => {
+  it('项目配置补充全局配置，全局设置优先生效', () => {
     writeJson(path.join(home, 'config.json'), { providers: { deepseek: ds }, default: 'deepseek:deepseek-chat', maxSteps: 10 });
     writeJson(path.join(cwd, '.roast', 'config.json'), {
       providers: { deepseek: { models: { 'deepseek-chat': { maxTokens: 99 } } } },
@@ -48,10 +48,10 @@ describe('分层配置', () => {
     });
     writeJson(path.join(cwd, 'roastcli.config.json'), { logsDir: 'my-logs' });
     const config = loadConfig(cwd)!;
-    expect(config.maxSteps).toBe(20);
+    expect(config.maxSteps).toBe(10);
     expect(config.logsDir).toBe('my-logs');
     expect(config.providers['deepseek']!.models!['deepseek-chat']).toEqual({ contextWindow: 1000, maxTokens: 99 });
-    expect(configSources(cwd).filter((s) => s.exists).map((s) => s.layer)).toEqual(['user', 'project', 'legacy']);
+    expect(configSources(cwd).filter((s) => s.exists).map((s) => s.layer)).toEqual(['project', 'legacy', 'user']);
   });
 
   it('ROASTCLI_CONFIG 作为最高优先级层', () => {
@@ -60,6 +60,34 @@ describe('分层配置', () => {
     writeJson(explicit, { maxSteps: 7 });
     process.env['ROASTCLI_CONFIG'] = explicit;
     expect(loadConfig(cwd)!.maxSteps).toBe(7);
+  });
+
+  it('全局默认模型、界面和 Hive 路由跨项目复用，项目只补充未设置的值', () => {
+    writeJson(path.join(home, 'config.json'), { providers: { deepseek: ds }, default: 'deepseek:deepseek-chat', ui: { theme: 'mono' }, swarm: { models: { worker: 'deepseek:deepseek-chat' } } });
+    writeJson(path.join(cwd, '.roast', 'config.json'), { default: 'deepseek:old', ui: { theme: 'aurora', markdown: { spacing: 2 } }, swarm: { models: { worker: 'deepseek:old', scout: 'inherit' } } });
+    expect(loadConfig(cwd)).toMatchObject({ default: 'deepseek:deepseek-chat', ui: { theme: 'mono', markdown: { spacing: 2 } }, swarm: { models: { worker: 'deepseek:deepseek-chat', scout: 'inherit' } } });
+    expect(loadConfig(tempWorkspace().dir)).toMatchObject({ default: 'deepseek:deepseek-chat', ui: { theme: 'mono' } });
+  });
+
+  it('全局连接不继承仓库中的密钥引用、headers、URL 或认证方式', () => {
+    writeJson(path.join(cwd, '.roast', 'config.json'), { providers: { p: { driver: 'anthropic', baseURL: 'https://repo.example', headers: { 'x-repo': 'yes' }, apiKeyRef: 'repo-key', auth: 'none', models: { m: { contextWindow: 8000, maxTokens: 999 } } } }, default: 'p:old' });
+    writeJson(path.join(home, 'config.json'), { providers: { p: { driver: 'openai-compat', models: { m: { maxTokens: 100 } } } }, default: 'p:m' });
+    expect(loadConfig(cwd)!.providers.p).toEqual({ driver: 'openai-compat', models: { m: { contextWindow: 8000, maxTokens: 100 } } });
+    expect(untrustedProviderOverrides(cwd)).toEqual([]);
+    const explicit = path.join(cwd, 'explicit.json');
+    writeJson(explicit, { providers: { p: { baseURL: 'https://explicit.example' } } });
+    process.env['ROASTCLI_CONFIG'] = explicit;
+    expect(loadConfig(cwd)!.providers.p!.baseURL).toBe('https://explicit.example');
+    expect(untrustedProviderOverrides(cwd)).toEqual(['p']);
+  });
+
+  it('验证合并不修改将要持久化的全局配置对象', () => {
+    const raw = { providers: { p: { driver: 'openai-compat', apiKeyRef: 'pending' } } };
+    const merged = mergeConfigLayer({}, raw, 'user') as typeof raw;
+    expect(merged.providers.p).not.toBe(raw.providers.p);
+    raw.providers.p.apiKeyRef = 'saved-key';
+    expect(raw.providers.p.apiKeyRef).toBe('saved-key');
+    expect(merged.providers.p.apiKeyRef).toBe('pending');
   });
 
   it('合并后校验失败抛 CONFIG 错误并指出来源', () => {
@@ -84,14 +112,15 @@ describe('配置安全', () => {
     expect(merged['maxSteps']).toBe(3);
   });
 
-  it('项目层修改 provider 连接字段（baseURL/headers/apiKeyEnv/driver）被识别为需信任', async () => {
+  it('全局供应商屏蔽同名项目连接，项目独有的连接仍需信任', async () => {
     const { untrustedProviderOverrides } = await import('../../src/core/config.js');
     writeJson(path.join(home, 'config.json'), { providers: { deepseek: ds }, default: 'deepseek:deepseek-chat' });
     writeJson(path.join(cwd, '.roast', 'config.json'), {
       providers: { deepseek: { baseURL: 'https://evil.example' }, extra: { driver: 'openai-compat', apiKeyEnv: 'X' } },
       maxSteps: 3,
     });
-    expect(untrustedProviderOverrides(cwd).sort()).toEqual(['deepseek', 'extra']);
+    expect(untrustedProviderOverrides(cwd).sort()).toEqual(['extra']);
+    expect(loadConfig(cwd)!.providers.deepseek!.baseURL).toBeUndefined();
   });
 
   it('项目层只改模型元数据不需要信任', async () => {
