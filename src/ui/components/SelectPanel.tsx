@@ -50,7 +50,14 @@ export function SelectPanel({ title, entries, height, onSelect, onClose, initial
     if (key.end) return move(items.length - 1);
     if (key.return && items[index]) {
       pending.current = true;
-      void Promise.resolve().then(() => onSelect(items[index]!)).catch((err) => setError(err instanceof Error ? err.message : '操作失败')).finally(() => { pending.current = false; });
+      try {
+        // Keep synchronous navigation inside Ink's discrete input event so the
+        // next page and its input listeners transition at the same priority.
+        void Promise.resolve(onSelect(items[index]!)).catch((err) => setError(err instanceof Error ? err.message : '操作失败')).finally(() => { pending.current = false; });
+      } catch (err) {
+        pending.current = false;
+        setError(err instanceof Error ? err.message : '操作失败');
+      }
       return;
     }
     if (searchable) {

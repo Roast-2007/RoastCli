@@ -251,6 +251,7 @@ function Wizard({ cwd, onExit }: ProviderWizardProps) {
   if (step === 'models' && draft) {
     const ids = draftModelIds(draft);
     return <SelectPanel title="模型列表 · 可选择多个模型" height={Math.max(1, rows - 1)} searchable message={modelMessage} onClose={() => go('credential')} onRefresh={() => setRefresh((value) => value + 1)} entries={[{ id: ':done', label: `完成选择 · ${ids.length} 个模型（首个为默认）` }, ...remoteModels.map((model) => ({ id: model.id, label: `${ids.includes(model.id) ? '[x]' : '[ ]'} ${model.id}${model.meta.name ? ` · ${model.meta.name}` : ''}` }))]} onSelect={(entry) => {
+      if (stepRef.current !== 'models') return;
       if (entry.id === ':done') { if (!ids.length) throw new Error('请先选择模型，或 Esc 返回手动输入'); return go('credential'); }
       const next = ids.includes(entry.id) ? ids.filter((id) => id !== entry.id) : [...ids, entry.id];
       update({ model: next.join(', '), reasoningEffort: draft.existing?.models?.[next[0]!]?.reasoningEffort ?? draft.modelMeta?.[next[0]!]?.reasoningEffort });

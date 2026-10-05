@@ -40,7 +40,7 @@ describe('interactive command panels', () => {
     const view = render(<SelectPanel title="Fast input" height={8} searchable entries={['auto', 'none', 'minimal', 'low'].map((id) => ({ id, label: id }))} onSelect={onSelect} onClose={() => {}} />);
     await waitForFrame(view, 'Fast input');
     for (const key of ['\x1b[B', '\x1b[B', '\x1b[B', '\r']) view.stdin.write(key);
-    await vi.waitFor(() => expect(onSelect).toHaveBeenCalledWith({ id: 'low', label: 'low' }));
+    expect(onSelect).toHaveBeenCalledWith({ id: 'low', label: 'low' });
     await tick();
     for (const key of ['m', 'i', 'n', '\r']) view.stdin.write(key);
     await vi.waitFor(() => expect(onSelect).toHaveBeenLastCalledWith({ id: 'minimal', label: 'minimal' }));
