@@ -13,6 +13,10 @@ import type { ToolDefinition } from '../../tools/tool.js';
 import type { McpServerStatus } from '../mcp.js';
 import { expandEnvRefs, expandRecord, type McpServerEntry } from './config.js';
 import { wrapMcpTool, type McpCallResult, type McpToolInfo } from './tool.js';
+import { defineTool, textResult } from '../../tools/tool.js';
+import { mcpResultToToolResult, mcpToolName } from './tool.js';
+import { z } from 'zod';
+import type { ContentBlock } from '../../core/types.js';
 
 const CONNECT_TIMEOUT_MS = 15_000;
 const DEFAULT_CALL_TIMEOUT_MS = 120_000;
@@ -26,9 +30,15 @@ interface Connection {
   client?: Client;
   transport?: Transport;
   tools: McpToolInfo[];
+  resources: McpResourceInfo[];
+  templates: Array<{ uriTemplate: string; name: string; description?: string }>;
+  prompts: McpPromptInfo[];
   stderr: string[];
   error?: string;
 }
+export interface McpResourceInfo { uri: string; name: string; description?: string; mimeType?: string }
+export interface McpPromptInfo { name: string; description?: string; arguments?: Array<{ name: string; description?: string; required?: boolean }> }
+export interface McpPromptCommand extends McpPromptInfo { server: string; command: string }
 
 /** 默认传输：stdio（stderr 走管道，避免污染 TUI）/ streamable http / sse */
 export const defaultTransport: TransportFactory = async (server, cwd, onStderr) => {
@@ -78,7 +88,7 @@ export class McpManager {
   }
 
   private async connect(server: McpServerEntry): Promise<void> {
-    const conn: Connection = { server, state: 'connecting', tools: [], stderr: [] };
+    const conn: Connection = { server, state: 'connecting', tools: [], resources: [], templates: [], prompts: [], stderr: [] };
     this.conns.set(server.name, conn);
     try {
       const { Client } = await import('@modelcontextprotocol/sdk/client/index.js');
@@ -93,7 +103,33 @@ export class McpManager {
       };
       const timeout = this.opts.connectTimeoutMs ?? CONNECT_TIMEOUT_MS;
       await withTimeout(client.connect(transport), timeout, '连接');
-      const listed = await withTimeout(client.listTools(), timeout, '获取工具列表');
+      const capabilities = client.getServerCapabilities();
+      const pages = async <T>(load: (cursor?: string) => Promise<{ items: T[]; nextCursor?: string }>): Promise<T[]> => {
+        const out: T[] = [], cursors = new Set<string>();
+        let cursor: string | undefined;
+        do {
+          const page = await withTimeout(load(cursor), timeout, '获取 MCP 列表');
+          out.push(...page.items);
+          cursor = page.nextCursor;
+          if (cursor && cursors.has(cursor)) throw new Error('MCP 列表返回重复 cursor');
+          if (cursor) cursors.add(cursor);
+          if (cursors.size > 100 || out.length > 10_000) throw new Error('MCP 列表过大');
+        } while (cursor);
+        return out;
+      };
+      const [toolInfos, resources, templates, prompts] = await Promise.all([
+        capabilities?.tools ? pages(async (cursor) => { const page = await client.listTools({ cursor }); return { items: page.tools, nextCursor: page.nextCursor }; }) : [],
+        capabilities?.resources ? pages(async (cursor) => { const page = await client.listResources({ cursor }); return { items: page.resources, nextCursor: page.nextCursor }; }) : [],
+        capabilities?.resources ? pages(async (cursor) => {
+          try { const page = await client.listResourceTemplates({ cursor }); return { items: page.resourceTemplates, nextCursor: page.nextCursor }; }
+          catch (error) { if ((error as { code?: number }).code === -32601) return { items: [] }; throw error; }
+        }) : [],
+        capabilities?.prompts ? pages(async (cursor) => { const page = await client.listPrompts({ cursor }); return { items: page.prompts, nextCursor: page.nextCursor }; }) : [],
+      ]);
+      conn.resources = resources;
+      conn.templates = templates;
+      conn.prompts = prompts;
+      const listed = { tools: toolInfos };
       conn.tools = listed.tools.map((t) => ({
         name: t.name,
         ...(t.description ? { description: t.description } : {}),
@@ -127,12 +163,59 @@ export class McpManager {
       for (const info of conn.tools) {
         defs.push(wrapMcpTool(conn.server.name, info, (tool, args, signal) => this.callTool(conn.server.name, tool, args, signal), { timeoutMs: timeout, ...(conn.server.trustAnnotations ? { trustAnnotations: true } : {}) }));
       }
+      if (conn.client?.getServerCapabilities()?.resources) {
+        const server = conn.server.name;
+        defs.push(defineTool({
+          name: mcpToolName(server, 'list_resources'), description: `[MCP · ${server}] 列出可读取的资源及 URI 模板。`,
+          parameters: z.object({}), isReadOnly: true, isConcurrencySafe: true, permission: { kind: 'read' },
+          async execute() { return textResult(JSON.stringify({ resources: conn.resources, templates: conn.templates })); },
+        }));
+        defs.push(defineTool({
+          name: mcpToolName(server, 'read_resource'), description: `[MCP · ${server}] 按 URI 读取资源，URI 可来自列表或 URI 模板。`,
+          parameters: z.object({ uri: z.string().min(1) }), isReadOnly: true, isConcurrencySafe: true, timeoutMs: timeout,
+          permission: { kind: 'read', targetKind: 'label', target: (args) => args.uri },
+          execute: async (args, ctx) => mcpResultToToolResult({ content: (await this.readResource(server, args.uri, ctx.signal)).map((resource) => ({ type: 'resource', resource })) }),
+        }));
+      }
     }
     return defs.sort((a, b) => a.name.localeCompare(b.name));
   }
 
+  prompts(): McpPromptCommand[] {
+    return [...this.conns.values()].flatMap((conn) => conn.prompts.map((prompt) => ({ ...prompt, server: conn.server.name, command: mcpToolName(conn.server.name, `prompt_${prompt.name}`) }))).sort((a, b) => a.command.localeCompare(b.command));
+  }
+
+  private connection(server: string): Connection & { client: Client } {
+    const conn = this.conns.get(server);
+    if (!conn?.client || conn.state !== 'connected') throw new RoastError('UNKNOWN', `MCP 服务器 ${server} 未连接`);
+    return conn as Connection & { client: Client };
+  }
+
+  async readResource(server: string, uri: string, signal?: AbortSignal) {
+    const conn = this.connection(server);
+    const result = await conn.client.readResource({ uri }, { signal, timeout: conn.server.timeoutMs ?? DEFAULT_CALL_TIMEOUT_MS });
+    return result.contents;
+  }
+
+  async promptContent(command: string, values: string, signal?: AbortSignal): Promise<ContentBlock[]> {
+    const prompt = this.prompts().find((p) => p.command === command);
+    if (!prompt) throw new RoastError('INVALID_REQUEST', `未知 MCP prompt: ${command}`);
+    const conn = this.connection(prompt.server), args: Record<string, string> = {};
+    const tokens = values.match(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g) ?? [];
+    let positional = 0;
+    for (const token of tokens) {
+      const index = token.indexOf('=');
+      const name = index > 0 ? token.slice(0, index) : prompt.arguments?.[positional++]?.name;
+      if (!name || !prompt.arguments?.some((a) => a.name === name)) throw new RoastError('INVALID_REQUEST', 'MCP prompt 参数名称或数量错误');
+      args[name] = (index > 0 ? token.slice(index + 1) : token).replace(/^(["'])(.*)\1$/, '$2');
+    }
+    for (const arg of prompt.arguments ?? []) if (arg.required && !(arg.name in args)) throw new RoastError('INVALID_REQUEST', `缺少参数 ${arg.name}；用法：/${command} ${(prompt.arguments ?? []).map((a) => `${a.name}=值`).join(' ')}`);
+    const result = await conn.client.getPrompt({ name: prompt.name, arguments: args }, { signal, timeout: conn.server.timeoutMs ?? DEFAULT_CALL_TIMEOUT_MS });
+    return result.messages.flatMap((message) => [{ type: 'text' as const, text: `[MCP prompt ${prompt.server}/${prompt.name} · ${message.role}]` }, ...mcpResultToToolResult({ content: [message.content] }).content]);
+  }
+
   status(): McpServerStatus[] {
-    return [...this.conns.values()].map((c) => ({ name: c.server.name, state: c.state, toolCount: c.tools.length, ...(c.error ? { error: c.error } : {}) }));
+    return [...this.conns.values()].map((c) => ({ name: c.server.name, state: c.state, toolCount: c.tools.length, ...(c.resources.length || c.templates.length ? { resourceCount: c.resources.length + c.templates.length } : {}), ...(c.prompts.length ? { promptCount: c.prompts.length } : {}), ...(c.error ? { error: c.error } : {}) }));
   }
 
   private async closeConn(conn: Connection): Promise<void> {

@@ -36,6 +36,7 @@ export function permissionRequestOf(tool: ToolDefinition, args: unknown, ctx: To
   return {
     tool: tool.name,
     kind,
+    ...(tool.permission?.targetKind ? { targetKind: tool.permission.targetKind } : {}),
     ...(target !== undefined ? { target } : {}),
     cwd: ctx.cwd,
     ...(ctx.agentId ? { agentId: ctx.agentId } : {}),

@@ -15,7 +15,7 @@ const parameters = z.object({
   max_chars: z.number().int().min(1000).max(200_000).default(DEFAULT_MAX_CHARS).describe('返回内容的最大字符数'),
 });
 
-async function readCapped(res: Response): Promise<{ text: string; truncated: boolean }> {
+export async function readCapped(res: Response): Promise<{ text: string; truncated: boolean }> {
   const reader = res.body?.getReader();
   if (!reader) return { text: await res.text(), truncated: false };
   const chunks: Uint8Array[] = [];

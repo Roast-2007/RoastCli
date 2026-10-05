@@ -8,11 +8,12 @@ import { TerminalContext, terminalPreferences, useTerminal } from './terminal.js
 import { fullscreenLayout } from './layout.js';
 import { createTranscript } from './transcript.js';
 import { useScroll } from './scroll.js';
+import { mouseWheel, useMouseReporting } from './mouse.js';
 import { motionColor, useEntrance } from './motion.js';
 import { VERSION } from '../core/version.js';
 import { terminalText } from '../core/terminal-text.js';
 import { truncateDisplay } from '../core/text-width.js';
-import { COMMANDS, skillCommands } from './commands.js';
+import { COMMANDS, skillCommands, mcpPromptCommands } from './commands.js';
 import { FileIndex } from './input/files.js';
 import { loadHistory } from './input/history.js';
 import { createEditor, editorReducer, type EditorState } from './input/editor.js';
@@ -43,14 +44,16 @@ function Workspace({ session, store: storeProp, controller: controllerProp, inpu
   const ui = useSyncExternalStore(store.subscribe, store.getState), view = ui.agents.main!, meta = ui.meta;
   const localDraft = useRef<{ seed?: number; state?: EditorState }>({});
   const draft = inputDraft ?? localDraft.current;
-  const [splash, setSplash] = useState(Boolean(startup && motion));
+  const [splash, setSplash] = useState(Boolean(startup && motion && !initialPrompt));
+  useMouseReporting();
   const [detail, setDetail] = useState(false), [reading, setReading] = useState(false);
   const readingRef = useRef(false), detailRef = useRef(false), lastEsc = useRef(0);
+  const escHint = useRef(false);
   const [now, setNow] = useState(Date.now());
   useEffect(() => { if (!view.running) return; const timer = setInterval(() => setNow(Date.now()), 1000); return () => clearInterval(timer); }, [view.running]);
   const cwd = session.log.header.cwd;
   const history = useMemo(() => loadHistory(cwd), [cwd]), files = useMemo(() => new FileIndex(cwd), [cwd]);
-  const deps = useMemo(() => ({ commands: [...COMMANDS, ...skillCommands(session.skills.list())], files: (q: string) => files.match(q) }), [session, files]);
+  const deps = useMemo(() => ({ commands: [...COMMANDS, ...skillCommands(session.skills.list()), ...mcpPromptCommands(session)], files: (q: string) => files.match(q) }), [session, files]);
   const branch = useMemo(() => gitBranch(cwd), [cwd, view.running]);
   const card = meta.interactions[0];
   const layout = fullscreenLayout(rows, { interaction: Boolean(card), detail, todos: view.todos.some((t) => t.status !== 'completed'), agents: meta.swarm.some((a) => a.parentId && ['queued', 'running', 'waiting', 'paused'].includes(a.state)) });
@@ -71,6 +74,14 @@ function Workspace({ session, store: storeProp, controller: controllerProp, inpu
     stdin.on('data', help); return () => { stdin.off('data', help); };
   }, [ready, stdin, store]);
   useInput((input, key) => {
+    const wheel = mouseWheel(input);
+    if (wheel !== null) {
+      if (detailRef.current || wheel === 0) return;
+      const next = Math.max(0, Math.min(scroll.max, (readingRef.current ? scroll.position() : scroll.max) + wheel));
+      scroll.move(next);
+      if (next === scroll.max) leaveReading(); else read();
+      return;
+    }
     if (key.ctrl && input === 'c') return controller.isRunning() ? controller.interrupt() : exit();
     if (key.tab && key.shift) return controller.cycleMode();
     if (key.ctrl && input === 'g') return onMissionControl?.();
@@ -81,7 +92,9 @@ function Workspace({ session, store: storeProp, controller: controllerProp, inpu
       if (controller.isRunning()) return controller.interrupt();
       const time = Date.now();
       if (time - lastEsc.current < 600) { lastEsc.current = 0; return controller.runCommand('/rewind'); }
-      lastEsc.current = time; return;
+      lastEsc.current = time;
+      if (!escHint.current) { escHint.current = true; store.addNotice('main', '再次按 Esc 可打开回退菜单（文件与对话）'); }
+      return;
     }
     if (key.pageUp || ((key.shift || key.ctrl) && key.upArrow)) {
       if (!readingRef.current) { scroll.move(Math.max(0, scroll.max - (key.pageUp ? Math.max(1, count - 1) : 1))); read(); }

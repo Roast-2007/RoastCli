@@ -19,6 +19,7 @@ export interface PermissionRequest {
   kind: PermissionKind;
   /** bash：命令；路径类：绝对路径；web_fetch：URL */
   target?: string;
+  targetKind?: 'path' | 'label';
   cwd: string;
   agentId?: string;
   callId?: string;
@@ -90,11 +91,13 @@ export function matchesRule(rule: Rule, req: PermissionRequest): boolean {
     const domain = m[1]!.toLowerCase();
     return host === domain || host.endsWith('.' + domain);
   }
+  if (req.targetKind === 'label') return wildcardRegex(rule.pattern).test(req.target);
   return pathMatches(rule.pattern, req.target, req.cwd);
 }
 
 /** "始终允许此类"时建议记住的规则 */
 export function suggestRule(req: PermissionRequest): string {
+  if (req.targetKind === 'label') return req.tool;
   if (req.tool === 'bash' && req.target) {
     const words = req.target.trim().split(/\s+/).filter((w) => !w.startsWith('-'));
     return `bash(${words.slice(0, 2).join(' ')}:*)`;

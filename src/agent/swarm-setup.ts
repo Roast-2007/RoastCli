@@ -9,6 +9,7 @@ import { RoastError } from '../core/errors.js';
 import type { InteractionBroker } from '../core/interaction.js';
 import type { ProviderRegistry } from '../providers/adapter.js';
 import { ContextController } from '../context/controller.js';
+import { modelSummarizer } from '../context/model-summary.js';
 import { CONTEXT_ACCESS_KEY } from '../context/recall-tool.js';
 import { BROKER_KEY, FS_STATE_KEY, FileStateStore, MapToolServices, PERMISSIONS_KEY, type ToolRegistry } from '../tools/index.js';
 import type { PermissionEngine } from '../tools/permissions/engine.js';
@@ -25,6 +26,9 @@ import { composeBoundary } from './boundary.js';
 import { AgentRuntime } from './runtime.js';
 import type { SystemPromptAssembler } from './system-prompt.js';
 import type { UiEvent } from './ui-events.js';
+import type { SessionEvent } from '../session/events.js';
+import { CheckpointManager } from '../ext/audit/checkpoints.js';
+import { ShadowGit } from '../ext/audit/shadow-git.js';
 
 export interface SwarmSetupInput {
   cwd: string;
@@ -48,6 +52,7 @@ export interface SwarmSetupInput {
   signal: AbortSignal;
   debugLog: boolean;
   onAgentEvent(agentId: string, ev: UiEvent): void;
+  onSessionEvent?(ref: ModelRef, event: SessionEvent): void;
   onChange(): void;
 }
 
@@ -59,6 +64,7 @@ export interface SwarmSetup {
 
 export function setupSwarm(input: SwarmSetupInput): SwarmSetup {
   const swarm = input.config.swarm;
+  swarm.models ??= {};
   const modelFor = (role: AgentRole, override?: string, effort?: ReasoningEffort | null): ModelRef => {
     const ref = swarm.models?.[role];
     const model = override ? parseModelRef(override) : ref && ref !== 'inherit' ? parseModelRef(ref) : { ...input.mainRef };
@@ -79,11 +85,13 @@ export function setupSwarm(input: SwarmSetupInput): SwarmSetup {
     runId: input.mainLog.header.runId,
     cwd: input.cwd,
     modelFor,
+    roleModels: swarm.models,
     maxAgents: swarm.maxAgents,
     maxDepth: swarm.maxDepth,
     maxAgentMs: swarm.maxMinutes * 60_000,
     ...(swarm.worktrees === false ? {} : { worktrees: new WorktreeManager({ runId: input.mainLog.header.runId, home: roastHome() }) }),
     onAgentEvent: input.onAgentEvent,
+    onSessionEvent: input.onSessionEvent,
     onChange: input.onChange,
     onAgentEnd: (id) => leases.releaseAll(id),
     createServices(agentId) {
@@ -98,7 +106,8 @@ export function setupSwarm(input: SwarmSetupInput): SwarmSetup {
     createRuntime({ id, role, log, services, boundary, modelRef, cwd, worktree }) {
       if (worktree) services.set(EXECUTION_ROOT_KEY, worktree.root);
       if (READ_ONLY_ROLES.has(role)) services.set(READ_ONLY_ROLE_KEY, role);
-      const ctl = new ContextController({ window: input.windowFor(modelRef), config: input.config.context, overhead: input.overhead });
+      const checkpoints = new CheckpointManager(new ShadowGit(cwd), () => input.engine.mode);
+      const ctl = new ContextController({ window: input.windowFor(modelRef), config: input.config.context, overhead: input.overhead, summarizer: modelSummarizer(input.config, modelRef, input.providers, cwd) });
       const rt = new AgentRuntime({
         agentId: id,
         providers: input.providers,
@@ -108,7 +117,7 @@ export function setupSwarm(input: SwarmSetupInput): SwarmSetup {
         log,
         cwd,
         services,
-        hooks: { preExecute: [...(input.prePermission ?? []), ...(worktree ? [worktreeGuardHook(worktree)] : []), roleGuardHook(role), input.permissionHook, lease], postExecute: input.postExecute ?? [] },
+        hooks: { preExecute: [...(input.prePermission ?? []), ...(worktree ? [worktreeGuardHook(worktree)] : []), roleGuardHook(role), input.permissionHook, lease, checkpoints.hook()], postExecute: input.postExecute ?? [] },
         boundary: composeBoundary(ctl.hooks(), boundary),
         maxSteps: input.config.maxSteps,
         signal: input.signal,
@@ -116,6 +125,7 @@ export function setupSwarm(input: SwarmSetupInput): SwarmSetup {
         ...(input.config.temperature !== undefined ? { temperature: input.config.temperature } : {}),
       });
       ctl.attach((b) => rt.committer.commit(b), () => rt.committer.state);
+      checkpoints.attach((event) => rt.committer.commit(event));
       rt.committer.onCommit((ev) => ctl.observe(ev));
       services.set(CONTEXT_ACCESS_KEY, { state: () => rt.committer.state });
       return rt;

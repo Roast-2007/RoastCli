@@ -3,6 +3,8 @@
 > 本文描述架构与设计意图。M0–M8 已实现，具体文件名与精确验收记录以 STATUS.md 为准；早期接口示意不要求一对一对应独立类。
 > 进度见 [STATUS.md](STATUS.md)，功能清单见 [ROADMAP.md](ROADMAP.md)。Mem0 / embeddings 已在 M8 接入，早期扩展表中的本地实现是默认驱动，具体接入见 §9。
 
+> v0.4.0 实现：read_image、网页搜索、TS/JS 语义引用/重命名、MCP resources/prompts、Queen 模型选择、细粒度成本及每条 yolo bash 快照。配置与范围见 [USAGE.md](USAGE.md)。摘要器为 model-summary.ts，默认按已配置定价选择模型，可指定 summaryModel，失败回退 compactor.ts 的抽取摘要；context/compact 记录 auxUsage 与 auxModel。
+
 ---
 
 ## 0. 总原则与不变量
@@ -144,19 +146,19 @@ type ContextOp =
 3. **compact**：占用超过 `context.compactAt`（默认 0.8×窗口）时触发：
    - 只在**安全切点**处理：`user/message` 之前，或某个 assistant 消息的结果已经齐全的地方；
    - 保留最近 K=3 个 turn 的原文；
-   - 用辅助调用（同模型，或配置里更便宜的 `context.summarizer`）生成**锚定结构摘要**，固定六段：目标 / 约束与用户偏好 / 已做决策 / 涉及文件及其状态 / 未完成任务 / 关键报错与事实；
-   - 记录 `context/compact {fromSeq, toSeq, summary, auxUsage}`。
+   - 用辅助调用（配置的 `context.summaryModel`，或按价格自动选择）生成锚定结构摘要：保留目标、约束、决策、文件状态、未完成任务、关键报错；失败时回退抽取式摘要，可用 extractive 禁止辅助调用；
+   - 记录 `context/compact {upTo, summary, auxUsage, auxModel}`，辅助费用独立归因。
 4. **emergency**：收到 `CONTEXT_WINDOW_EXCEEDED` 时，用更激进的参数（K=1，aging 阈值减半）立即压缩，然后重试一次。在 `runStep` 外层处理，记录 `step/retry`。
 
 ### 3.4 CachePlanner
 
 - 每个 step 前收集各策略给出的 ops，按条件决定是否立即应用：
   - 占用超过阈值 → 立即应用；
-  - 距上一次请求的空闲时间超过 provider 的缓存 TTL（Anthropic 5 分钟，DeepSeek 按配置），缓存本来就冷了 → 立即应用；
-  - 估算的节省量 × 剩余预计步数，大于"从改动位置往后需要重写的 tokens" → 应用；
+  - 默认占用超过 70% 且节省量达到 minSavings 时批量应用；
+  - 空闲超过 cacheTtlMs 时仍需达到阈值的 80% 占用并有足够节省量；
   - 其余情况先攒着。
-- 统计 `cacheBusts` 指标，显示在 `/context` 和状态栏。
-- Anthropic 的 `cache_control` 打在三处：system 末尾、tools 末尾、最后一条消息的最后一个 block。
+- `/context` 统计实际输入的 token 加权命中率、请求/重试和前缀调整次数。
+- Anthropic 最多四个 cache_control：system、tools、前次仍相同的消息边界及当前尾部，避开 thinking blocks。OpenAI 官方端点带稳定 prompt_cache_key，兼容服务需显式开启；历史按消息 hash 验证旧边界。
 
 ### 3.5 recall 工具
 

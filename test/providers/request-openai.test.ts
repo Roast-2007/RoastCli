@@ -37,11 +37,16 @@ describe('openai-compat buildMessages：reasoning 回传策略', () => {
     expect(JSON.stringify(out)).not.toContain('thinking');
   });
 
-  it('field：仅当前 turn（最后一条用户文本之后）的 assistant 带 reasoning_content', () => {
+  it('field：保留所有历史 reasoning，跨 turn 的请求前缀保持稳定', () => {
     const out = buildMessages(history, 'field');
     const assistants = out.filter((m) => m.role === 'assistant');
-    expect(assistants[0]).not.toHaveProperty('reasoning_content');
+    expect(assistants[0]).toHaveProperty('reasoning_content', 'old thinking');
     expect(assistants[1]).toMatchObject({ reasoning_content: 'current thinking', content: null });
+  });
+  it('current：显式兼容模式只回传当前 turn 的 reasoning', () => {
+    const assistants = buildMessages(history, 'current').filter((m) => m.role === 'assistant');
+    expect(assistants[0]).not.toHaveProperty('reasoning_content');
+    expect(assistants[1]).toHaveProperty('reasoning_content', 'current thinking');
   });
 
   it('inline：沿用旧行为，reasoning 拼进 content', () => {

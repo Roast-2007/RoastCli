@@ -10,7 +10,7 @@
 import type { ContentBlock, GenerateOptions, Message } from '../../core/types.js';
 import type { ReasoningEffort } from '../../core/config.js';
 
-export type ReasoningReplay = 'drop' | 'field' | 'inline';
+export type ReasoningReplay = 'drop' | 'field' | 'current' | 'inline';
 /** 输出上限字段名：OpenAI o 系列 / gpt-5 只接受 max_completion_tokens */
 export type MaxTokensField = 'max_tokens' | 'max_completion_tokens';
 
@@ -20,7 +20,7 @@ export function defaultMaxTokensField(model: string): MaxTokensField {
 
 export interface WireMessage {
   role: string;
-  content: string | null;
+  content: string | null | Array<{ type: 'text'; text: string } | { type: 'image_url'; image_url: { url: string } }>;
   reasoning_content?: string;
   tool_call_id?: string;
   tool_calls?: Array<{ id: string; type: 'function'; function: { name: string; arguments: string } }>;
@@ -65,7 +65,7 @@ function assistantMessage(m: Message, replay: ReasoningReplay, inCurrentTurn: bo
   }
   const contentParts = replay === 'inline' ? [...reasoningParts, ...textParts] : textParts;
   const msg: WireMessage = { role: 'assistant', content: contentParts.length > 0 ? contentParts.join('\n') : null };
-  if (replay === 'field' && inCurrentTurn && reasoningParts.length > 0) msg.reasoning_content = reasoningParts.join('\n');
+  if ((replay === 'field' || (replay === 'current' && inCurrentTurn)) && reasoningParts.length > 0) msg.reasoning_content = reasoningParts.join('\n');
   if (toolCalls.length > 0) msg.tool_calls = toolCalls;
   if (msg.content === null && toolCalls.length === 0) {
     if (msg.reasoning_content === undefined) return null;
@@ -77,21 +77,30 @@ function assistantMessage(m: Message, replay: ReasoningReplay, inCurrentTurn: bo
 /** user / system：text 拼成 string content；tool-result 拆成 role:'tool' 消息 */
 function nonAssistantMessages(m: Message): WireMessage[] {
   const out: WireMessage[] = [];
-  let textParts: string[] = [];
+  const toolImages: ContentBlock[] = [];
+  let parts: ContentBlock[] = [];
   const flushText = () => {
-    if (textParts.length > 0) {
-      out.push({ role: m.role, content: textParts.join('\n') });
-      textParts = [];
+    if (parts.length > 0) {
+      const content: WireMessage['content'] = parts.some((b) => b.type === 'image')
+        ? parts.flatMap((b): Exclude<WireMessage['content'], string | null> => b.type === 'image'
+          ? [{ type: 'image_url', image_url: { url: `data:${b.mediaType};base64,${b.data}` } }]
+          : b.type === 'text' ? [{ type: 'text', text: b.text }] : [])
+        : blocksToText(parts);
+      out.push({ role: m.role, content });
+      parts = [];
     }
   };
   for (const b of m.content) {
     if (b.type === 'tool-result') {
       flushText();
       out.push({ role: 'tool', tool_call_id: b.toolCallId, content: blocksToText(b.content) });
-    } else if (b.type === 'text') {
-      textParts.push(b.text);
+      // All tool replies must remain adjacent before the following multimodal user message.
+      toolImages.push(...b.content.filter((c) => c.type === 'image'));
+    } else if (b.type === 'text' || b.type === 'image') {
+      parts.push(b);
     }
   }
+  parts.push(...toolImages);
   flushText();
   return out;
 }

@@ -41,10 +41,11 @@ const ModelMetaSchema = z.object({
   /**
    * openai-compat：assistant 历史中的 reasoning 如何回传
    * - drop（默认）：不回传
-   * - field：仅当前 turn 以 reasoning_content 字段回传（DeepSeek 思考模式工具调用需要）
+   * - field：以 reasoning_content 字段稳定回传历史（缓存前缀不随 turn 改变）
+   * - current：仅当前 turn 回传，适用于要求丢弃旧推理的兼容端点
    * - inline：拼进 content（旧行为，不推荐）
    */
-  reasoningReplay: z.enum(['drop', 'field', 'inline']).optional(),
+  reasoningReplay: z.enum(['drop', 'field', 'current', 'inline']).optional(),
   /** openai-compat：输出上限字段名（默认按模型名推断：o 系列 / gpt-5 → max_completion_tokens） */
   maxTokensField: z.enum(['max_tokens', 'max_completion_tokens']).optional(),
   /** 定价（美元 / 百万 tokens），用于状态栏与 /cost 估算费用 */
@@ -70,7 +71,7 @@ export const ProviderProfileSchema = z.object({
   apiKeyRef: z.string().min(1).optional(),
   models: z.record(z.string(), ModelMetaSchema).optional(),
   headers: z.record(z.string(), z.string()).optional(),
-  /** anthropic：是否打 prompt cache 断点（默认开启） */
+  /** anthropic：缓存断点；openai-compat：是否发送 prompt_cache_key（兼容端点需显式开启）。 */
   promptCaching: z.boolean().optional(),
   /** 覆盖默认的流空闲超时（毫秒） */
   streamIdleTimeoutMs: z.number().int().positive().optional(),
@@ -98,6 +99,8 @@ export const ConfigSchema = z.object({
       agingMinTokens: z.number().int().nonnegative(),
       previewLines: z.number().int().min(0),
       cacheTtlMs: z.number().int().nonnegative(),
+      summaryModel: z.string().min(3).optional(),
+      summaryMaxTokens: z.number().int().min(128).max(8192).optional(),
     })
     .partial()
     .default({}),
@@ -115,12 +118,19 @@ export const ConfigSchema = z.object({
     })
     .default({}),
   /** 界面偏好 */
+  webSearch: z.object({
+    driver: z.enum(['duckduckgo', 'brave', 'tavily', 'searxng']).default('duckduckgo'),
+    baseURL: z.string().url().optional(),
+    apiKeyRef: z.string().min(1).optional(),
+    timeoutMs: z.number().int().min(100).max(120_000).optional(),
+  }).optional(),
   ui: z
     .object({
       /** 主题：ember（默认）/ aurora / daylight（浅色终端）/ mono；环境变量 ROAST_THEME 优先 */
       theme: z.string().optional(),
       motion: z.enum(['full', 'reduced']).optional(),
       ascii: z.boolean().optional(),
+      shellTimeoutMs: z.number().int().min(1000).max(86_400_000).optional(),
       markdown: z.object({
         padding: z.number().int().min(0).max(8).optional(),
         spacing: z.number().int().min(0).max(2).optional(),
@@ -322,6 +332,7 @@ export function repoConfigHash(cwd: string): string {
         debugLog: cfg['debugLog'] ?? null,
         ...(cfg['memory'] === undefined ? {} : { memory: cfg['memory'] }),
         ...(cfg['rag'] === undefined ? {} : { rag: cfg['rag'] }),
+        ...(cfg['webSearch'] === undefined ? {} : { webSearch: cfg['webSearch'] }),
       };
     });
   return createHash('sha256').update(stableStringify(parts)).digest('hex').slice(0, 32);
@@ -370,7 +381,7 @@ function readJson(path: string): unknown {
  */
 function withoutUntrustedKeys(raw: unknown, cwd: string): unknown {
   if (!isPlainObject(raw)) return raw;
-  const { logsDir, debugLog: _debugLog, memory: _memory, rag: _rag, ...rest } = raw;
+  const { logsDir, debugLog: _debugLog, memory: _memory, rag: _rag, webSearch: _webSearch, ...rest } = raw;
   // 纯字符串判断，不触碰文件系统（对不可信的 UNC 路径做 realpath 本身就会发起网络连接）
   const rel = typeof logsDir === 'string' ? relative(resolve(cwd), resolve(cwd, logsDir)) : '..';
   const safeLogs = typeof logsDir === 'string' && !isAbsolute(logsDir) && !isUncPath(logsDir) && !rel.startsWith('..') && !isAbsolute(rel);

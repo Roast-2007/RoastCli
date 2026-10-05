@@ -1,6 +1,6 @@
 # 安装 RoastCli
 
-需要 **Node.js 22 或更新版本**（包含 npm）。安装 Node.js 后重新打开终端；Windows 建议使用 Windows Terminal，并安装 Git for Windows，以便使用 Git Bash 和 worktree。Git 与 ripgrep 可选，缺少时部分功能会降级。
+需要 **Node.js 22 或更新版本**（包含 npm）。安装 Node.js 后重新打开终端；Windows 建议使用 Windows Terminal，并安装 Git for Windows，以便使用 Git Bash 和 worktree。Git 可选，缺少时 Git 与 worktree 功能会降级；ripgrep 随依赖安装，无需单独安装。
 
 ## 一条命令安装
 
@@ -13,7 +13,7 @@ npm install -g --prefer-online https://github.com/Roast-2007/RoastCli/releases/l
 安装包来自本项目的 GitHub Release。当前尚未发布到 npm registry，因此请使用完整链接，而非 `npm install -g roastcli`。也可锁定版本：
 
 ```sh
-npm install -g https://github.com/Roast-2007/RoastCli/releases/download/v0.1.2/roastcli.tgz
+npm install -g https://github.com/Roast-2007/RoastCli/releases/download/v0.4.0/roastcli.tgz
 ```
 
 ## 安装脚本
@@ -80,4 +80,4 @@ pnpm dev config
 pnpm dev
 ```
 
-验证：`pnpm typecheck`、`pnpm test`、`pnpm build`、`pnpm check:package`。
+开发与发布规范见 [AGENTS.md](https://github.com/Roast-2007/RoastCli/blob/main/AGENTS.md)。验证：`pnpm typecheck`、`pnpm lint`、`pnpm test:coverage`、`pnpm build`、`pnpm check:package`。

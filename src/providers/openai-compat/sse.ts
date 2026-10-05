@@ -20,6 +20,8 @@ export async function* parseSse(
   let dataLines: string[] = [];
   let sawDone = false;
   const pending: unknown[] = [];
+  const abort = () => { void reader.cancel().catch(() => {}); };
+  signal?.addEventListener('abort', abort, { once: true });
 
   const handleLine = (rawLine: string): void => {
     let line = rawLine;
@@ -55,8 +57,10 @@ export async function* parseSse(
         throw new DOMException('The operation was aborted.', 'AbortError');
       }
       const { done, value } = await reader.read();
+      if (signal?.aborted) throw new DOMException('The operation was aborted.', 'AbortError');
       if (done) break;
       buffer += value;
+      if (buffer.length + dataLines.reduce((n, line) => n + line.length, 0) > 8 * 1024 * 1024) throw new RoastError('SERVER', 'SSE 事件超过 8 MiB');
       let idx: number;
       while ((idx = buffer.indexOf('\n')) >= 0) {
         const line = buffer.slice(0, idx);
@@ -71,8 +75,9 @@ export async function* parseSse(
     if (!sawDone && dataLines.length > 0) handleLine('');
     while (pending.length > 0) yield pending.shift();
   } finally {
+    signal?.removeEventListener('abort', abort);
+    await reader.cancel().catch(() => {});
     reader.releaseLock();
-    if (!sawDone) await reader.cancel().catch(() => {});
   }
 
   if (!sawDone) {

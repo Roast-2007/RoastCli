@@ -12,6 +12,7 @@ import { useTheme } from '../theme.js';
 import { useTerminal, useGlyphs } from '../terminal.js';
 import { editorViewport } from '../layout.js';
 import { graphemes, nextBoundary, previousBoundary, truncateDisplay } from '../../core/text-width.js';
+import { isMouseInput } from '../mouse.js';
 
 interface Props {
   active: boolean;
@@ -71,6 +72,7 @@ export function InputBox({ active, placeholder, initialHistory, initialText, ini
   usePaste((text) => { if (acceptInput?.() !== false) dispatch({ type: 'paste', text }); }, { isActive: active });
   useInput(
     (input, key) => {
+      if (isMouseInput(input)) return;
       if (acceptInput?.(input) === false) return;
       if (key.pageUp || key.pageDown || ((key.shift || key.ctrl) && (key.upArrow || key.downArrow))) return;
       const state = editorRef.current;

@@ -131,7 +131,7 @@ describe('OpenAICompatAdapter.stream', () => {
       { type: 'block-start', index: 0, block: 'text' },
       { type: 'text-delta', index: 0, text: '你好' },
       { type: 'block-end', index: 0 },
-      { type: 'usage', usage: { input: 6, output: 2, cacheRead: 4, cacheWrite: 6 } },
+      { type: 'usage', usage: { input: 6, output: 2, cacheRead: 4, cacheWrite: 0 } },
       { type: 'finish', reason: 'stop' },
     ]);
 

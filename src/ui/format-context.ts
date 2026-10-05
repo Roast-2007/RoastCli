@@ -28,5 +28,6 @@ export function formatContextStats(s: ContextStats): string {
         ...s.largest.map((x) => `  ${x.pinned ? '📌' : x.elided ? '◌' : '·'} ${x.id}  ${x.name}${x.path ? ` ${x.path}` : ''}  ${fmt(x.tokens)}${x.elided ? '（已折叠）' : ''}`),
       ]
     : [];
-  return [`上下文 ${s.percent}%（约 ${fmt(s.estimated)} / ${fmt(s.window)} tokens，${meta}）`, gauge(s.percent), ...lines, ...largest].join('\n');
+  const cache = s.cache ? [`缓存命中 ${(s.cache.hitRate * 100).toFixed(1)}% · ${fmt(s.cache.read)} / ${fmt(s.cache.input)} input tokens · ${s.cache.requests} 次请求 · ${s.cache.prefixChanges} 次前缀调整`] : [];
+  return [`上下文 ${s.percent}%（约 ${fmt(s.estimated)} / ${fmt(s.window)} tokens，${meta}）`, gauge(s.percent), ...cache, ...lines, ...largest].join('\n');
 }

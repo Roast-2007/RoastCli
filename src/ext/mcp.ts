@@ -25,6 +25,8 @@ export interface McpServerStatus {
   name: string;
   state: 'connecting' | 'connected' | 'failed' | 'closed';
   toolCount: number;
+  resourceCount?: number;
+  promptCount?: number;
   error?: string;
 }
 

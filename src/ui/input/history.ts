@@ -1,7 +1,7 @@
 /**
  * 输入历史持久化：~/.roast/projects/<hash>/history.jsonl（每行一个 JSON 字符串，保留最近 MAX 条）。
  */
-import { appendFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync } from 'node:fs';
 import path from 'node:path';
 import { projectSettingsPath } from '../../tools/permissions/settings.js';
 
@@ -18,7 +18,7 @@ export function loadHistory(cwd: string): string[] {
     return readFileSync(file, 'utf8')
       .split('\n')
       .filter(Boolean)
-      .map((l) => JSON.parse(l) as unknown)
+      .map((l) => { try { return JSON.parse(l) as unknown; } catch { return null; } })
       .filter((x): x is string => typeof x === 'string')
       .slice(-MAX);
   } catch {
@@ -31,7 +31,10 @@ export function appendHistory(cwd: string, entry: string): void {
   try {
     const file = historyPath(cwd);
     mkdirSync(path.dirname(file), { recursive: true });
-    appendFileSync(file, JSON.stringify(entry) + '\n', 'utf8');
+    const entries = [...loadHistory(cwd), entry].slice(-MAX);
+    const temp = `${file}.${process.pid}.tmp`;
+    writeFileSync(temp, entries.map((value) => JSON.stringify(value)).join('\n') + '\n', 'utf8');
+    renameSync(temp, file);
   } catch {
     // 历史写失败不影响使用
   }

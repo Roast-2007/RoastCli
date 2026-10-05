@@ -1,5 +1,6 @@
 import { useLayoutEffect, useRef, useState } from 'react';
 import type { Key } from 'ink';
+import { mouseWheel } from './mouse.js';
 
 /** A continuous line viewport; the ref also accumulates input between paints. */
 export function useScroll(total: number, count: number) {
@@ -10,13 +11,15 @@ export function useScroll(total: number, count: number) {
   useLayoutEffect(() => { current.current = start; if (offset !== start) setOffset(start); }, [start, offset]);
   const move = (value: number) => { current.current = Math.max(0, Math.min(value, max)); setOffset(current.current); };
   const onKey = (input: string, key: Key) => {
+    const wheel = mouseWheel(input);
+    if (wheel !== null) { move(current.current + wheel); return true; }
     if (key.home || input === 'g') { move(0); return true; }
     if (key.end || input === 'G') { move(max); return true; }
     if (key.upArrow || key.pageUp || input === 'k') { move(current.current - (key.pageUp ? Math.max(1, count - 1) : 1)); return true; }
     if (key.downArrow || key.pageDown || input === 'j') { move(current.current + (key.pageDown ? Math.max(1, count - 1) : 1)); return true; }
     return false;
   };
-  return { start, max, move, onKey };
+  return { start, max, move, onKey, position: () => current.current };
 }
 
 export function panelLayout(height: number, width: number, extraHeader = 0) {

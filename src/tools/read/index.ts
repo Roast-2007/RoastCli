@@ -44,7 +44,7 @@ export const readTool = defineTool({
     const buf = await readFile(abs);
     const sniff = buf.subarray(0, BINARY_SNIFF_BYTES);
     if (sniff.includes(0)) {
-      return toolErrorResult('read', `二进制文件不支持读取: ${abs}（前 8KB 检测到 NUL 字节）`);
+      return toolErrorResult('read', `二进制文件不支持文本读取: ${abs}；图片请使用 read_image（PNG/JPEG/GIF/WebP）`);
     }
 
     const content = buf.toString('utf8');

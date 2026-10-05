@@ -6,12 +6,28 @@ import { ProviderRegistry } from '../../src/providers/adapter.js';
 import { ScriptedProvider } from '../fixtures/scripted-provider.js';
 import { tempWorkspace } from '../fixtures/workspace.js';
 
-vi.mock('../../src/tools/bash/run.js', () => ({ runForeground: async (opts: { signal: AbortSignal; onOutput?(text: string, stream: string): void }) => {
+const shellState = vi.hoisted(() => ({ timeoutMs: 0 }));
+vi.mock('../../src/tools/bash/run.js', () => ({ runForeground: async (opts: { command: string; timeoutMs: number; signal: AbortSignal; onOutput?(text: string, stream: string): void }) => {
+  shellState.timeoutMs = opts.timeoutMs;
+  if (opts.command === 'emit-lots') return { kind: 'timeout', output: 'x'.repeat(10_000) };
   opts.onOutput?.('live shell output', 'stdout');
   await new Promise<void>((resolve) => { if (opts.signal.aborted) resolve(); else opts.signal.addEventListener('abort', () => resolve(), { once: true }); });
   return { kind: 'aborted', output: 'live shell output' };
 } }));
 describe('direct shell lifecycle', () => {
+  it('uses the configured timeout, reports expiry and keeps large output in tool details', async () => {
+    const providers = new ProviderRegistry(); providers.register('p', new ScriptedProvider([]));
+    const session = await createSession({ cwd: tempWorkspace().dir, providers, config: { providers: { p: { driver: 'openai-compat', auth: 'none' } }, default: 'p:m', maxSteps: 10, logsDir: 'logs', debugLog: false, context: {}, ui: { shellTimeoutMs: 5000 }, swarm: { maxAgents: 12, maxDepth: 3, maxMinutes: 60 } } });
+    const store = createUiStore(), controller = createUiController(session, store, { exit() {} });
+    try {
+      controller.submit('!emit-lots', '!emit-lots'); await controller.whenIdle(); store.flush();
+      expect(shellState.timeoutMs).toBe(5000);
+      const items = store.getState().agents.main!.items;
+      const tool = items.find((i) => i.kind === 'tool');
+      expect(tool?.kind === 'tool' && tool.tool.output?.length).toBe(10_000);
+      expect(items.some((i) => i.kind === 'notice' && i.text.includes('超时') && i.text.length < 120)).toBe(true);
+    } finally { controller.dispose(); await session.shutdown(); }
+  });
   it('replaces mode toasts and stops their timer on dispose', async () => {
     const providers = new ProviderRegistry(); providers.register('p', new ScriptedProvider([]));
     const session = await createSession({ cwd: tempWorkspace().dir, providers, config: { providers: { p: { driver: 'openai-compat', apiKeyEnv: 'UNUSED' } }, default: 'p:m', maxSteps: 10, logsDir: 'logs', debugLog: false, context: {}, swarm: { maxAgents: 12, maxDepth: 3, maxMinutes: 60 } } });

@@ -11,6 +11,7 @@ import { appendMemory, runSlash, skillPrompt } from './commands.js';
 import { appendHistory } from './input/history.js';
 import type { UiStore } from './store/store.js';
 import { emptyUsage } from '../core/types.js';
+import type { Message } from '../core/types.js';
 
 const TIMELINE_MAX = 50;
 
@@ -74,7 +75,7 @@ export function createUiController(session: Session, store: UiStore, opts: { exi
     store.setMeta((m) => ({ interactions: m.interactions.filter((r) => live.has(r.id)) }));
   };
 
-  async function runTurn(text: string): Promise<void> {
+  async function runTurn(text: string | Message): Promise<void> {
     running = true;
     store.setMeta({ running: true });
     const controller = new AbortController();
@@ -108,12 +109,14 @@ export function createUiController(session: Session, store: UiStore, opts: { exi
     store.pushEvent('main', { type: 'tool-call-start', callId, name: 'bash', args: { command } });
     let aborted = false;
     try {
-      const r = await runForeground({ command, cwd, timeoutMs: 120_000, signal: controller.signal, onOutput: (text) => store.pushEvent('main', { type: 'tool-progress', callId, text }) });
+      const timeoutMs = session.config.ui?.shellTimeoutMs ?? 600_000;
+      toast(`shell 最长 ${Math.round(timeoutMs / 1000)} 秒 · Esc 可中断`);
+      const r = await runForeground({ command, cwd, timeoutMs, signal: controller.signal, onOutput: (text) => store.pushEvent('main', { type: 'tool-progress', callId, text }) });
       const out = 'output' in r ? r.output.trim() : r.message;
       aborted = r.kind === 'aborted';
-      if (!aborted) store.pushEvent('main', { type: 'tool-call-end', callId, name: 'bash', isError: r.kind !== 'exited' || r.code !== 0, output: out.slice(-8000), preview: out.slice(-800), durationMs: Date.now() - start });
+      if (!aborted) store.pushEvent('main', { type: 'tool-call-end', callId, name: 'bash', isError: r.kind !== 'exited' || r.code !== 0, output: out, preview: out.slice(-800), durationMs: Date.now() - start });
       const code = r.kind === 'exited' ? ` · exit ${r.code}` : r.kind === 'timeout' ? ' · 超时' : aborted ? ' · 已中断' : '';
-      store.addNotice('main', `${out.slice(-8000) || '（无输出）'}\n[未发送给模型${code}]`, r.kind === 'exited' && r.code === 0 ? 'info' : 'warn');
+      store.addNotice('main', `[shell${code} · 未发送给模型 · Ctrl+O 查看完整输出]`, r.kind === 'exited' && r.code === 0 ? 'info' : 'warn');
     } catch (err) { store.addNotice('main', `shell 出错：${err instanceof Error ? err.message : String(err)}`, 'error'); aborted = true; }
     finally {
       store.pushEvent('main', { type: 'turn-end', reason: aborted ? 'aborted' : 'completed', usage: emptyUsage() });
@@ -121,14 +124,15 @@ export function createUiController(session: Session, store: UiStore, opts: { exi
     }
   }
 
-  function send(text: string): void {
+  function send(text: string | Message): void {
+    const shown = typeof text === 'string' ? text : text.content.filter((b) => b.type === 'text').map((b) => b.text).join('\n');
     if (shellRunning) {
-      store.setMeta((m) => ({ inputSeed: { key: m.inputSeed.key + 1, text } }));
+      store.setMeta((m) => ({ inputSeed: { key: m.inputSeed.key + 1, text: shown } }));
       store.addNotice('main', 'shell 正在执行，消息已保留在输入框；结束后可发送', 'info');
       return;
     }
-    if (running && session.loop.enqueue(text)) return store.addNotice('main', `⏳ 已排队，将在下一步送达：${text}`, 'info');
-    store.addUser('main', text);
+    if (running && session.loop.enqueue(text)) return store.addNotice('main', `⏳ 已排队，将在下一步送达：${shown.slice(0, 200)}`, 'info');
+    store.addUser('main', shown);
     pending = runTurn(text);
   }
 
@@ -136,6 +140,10 @@ export function createUiController(session: Session, store: UiStore, opts: { exi
   async function slash(text: string): Promise<void> {
     if (await runSlash(text, { session, store, exit: opts.exit, send, openProviders: opts.openProviders, clearScreen: opts.clearScreen, resumeSession, openOverlay: (overlay) => store.setMeta({ overlay }) })) return;
     const [head = '', ...rest] = text.slice(1).split(' ');
+    if (session.mcpPrompts?.().some((prompt) => prompt.command === head) && session.mcpPromptContent) {
+      try { return send({ role: 'user', content: await session.mcpPromptContent(head, rest.join(' ').trim()) }); }
+      catch (err) { store.addNotice('main', `MCP prompt 失败：${err instanceof Error ? err.message : String(err)}`, 'warn'); return; }
+    }
     if (session.skills.get(head)) return send(skillPrompt(head, rest.join(' ').trim()));
     store.addNotice('main', `未知命令：/${head}（/help 查看全部）`, 'warn');
   }

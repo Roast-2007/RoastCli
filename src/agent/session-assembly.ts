@@ -14,6 +14,7 @@ import { findInstructionFiles, type InstructionFile } from '../ext/instructions.
 import { CheckpointManager } from '../ext/audit/checkpoints.js';
 import { ShadowGit } from '../ext/audit/shadow-git.js';
 import { ContextController } from '../context/controller.js';
+import { modelSummarizer } from '../context/model-summary.js';
 import { CONTEXT_ACCESS_KEY } from '../context/recall-tool.js';
 import { estimateText } from '../context/estimator.js';
 import { SWARM_KEY } from '../swarm/tools.js';
@@ -30,6 +31,11 @@ import type { SystemPromptAssembler } from './system-prompt.js';
 import type { UiEvent } from './ui-events.js';
 import { userTurns } from './turns.js';
 import type { CreateSessionOptions, Session } from './session.js';
+import type { SessionEvent } from '../session/events.js';
+import { existsSync, readdirSync } from 'node:fs';
+import path from 'node:path';
+import { loadRunLog } from '../session/projection.js';
+import { modelCatalogSection } from '../swarm/model-routing.js';
 
 /** 模型未配置 contextWindow 时的默认窗口 */
 const DEFAULT_CONTEXT_WINDOW = 128_000;
@@ -59,6 +65,7 @@ interface Core {
 interface Listeners {
   agent: Set<(agentId: string, ev: UiEvent) => void>;
   swarm: Set<() => void>;
+  usage: Set<(ref: ModelRef, event: SessionEvent) => void>;
 }
 
 async function assembleCore(input: AssemblyInput): Promise<Core> {
@@ -76,6 +83,7 @@ async function assembleCore(input: AssemblyInput): Promise<Core> {
   });
   const instructions = findInstructionFiles(cwd, { home: roastHome() });
   const systemPrompt = input.buildSystemPrompt(cwd, instructions);
+  systemPrompt.register({ name: 'agent-models', order: 301, text: modelCatalogSection(input.config) });
   const ext = await setupExtensions({ cwd, home: roastHome(), systemPrompt, date: new Date().toISOString().slice(0, 10), trusted: isProjectTrusted(cwd), config: input.config });
   ext.provide(services);
   const hooks = await setupHooks({ cwd, sessionId: opened.log.header.runId, resumed: !!opened.resumedFrom, systemPrompt });
@@ -86,7 +94,7 @@ function contextFor(input: AssemblyInput, core: Core) {
   const toolsTokens = estimateText(JSON.stringify(input.tools.schemas()));
   const windowFor = (r: ModelRef) => input.providers.get(r).resolveModel?.(r.model)?.contextWindow ?? DEFAULT_CONTEXT_WINDOW;
   const overhead = () => estimateText(core.systemPrompt.assemble()) + toolsTokens;
-  const controller = new ContextController({ window: windowFor(input.ref), config: input.config.context, overhead });
+  const controller = new ContextController({ window: windowFor(input.ref), config: input.config.context, overhead, summarizer: modelSummarizer(input.config, input.ref, input.providers, input.cwd) });
   return { windowFor, overhead, controller };
 }
 
@@ -110,6 +118,7 @@ function buildSwarm(input: AssemblyInput, core: Core, ctx: ReturnType<typeof con
     signal,
     debugLog,
     onAgentEvent: (id, ev) => listeners.agent.forEach((l) => l(id, ev)),
+    onSessionEvent: (ref, event) => listeners.usage.forEach((listener) => listener(ref, event)),
     onChange: () => listeners.swarm.forEach((l) => l()),
   });
 }
@@ -118,12 +127,12 @@ export async function assembleSession(input: AssemblyInput): Promise<Session> {
   const { cwd, config, opened, opts } = input;
   const core = await assembleCore(input);
   const ctx = contextFor(input, core);
-  const listeners: Listeners = { agent: new Set(), swarm: new Set() };
+  const listeners: Listeners = { agent: new Set(), swarm: new Set(), usage: new Set() };
   const lifetime = new AbortController();
   const debugLog = config.debugLog || process.env['ROAST_DEBUG_LOG'] === '1';
   const { supervisor: swarm, leaseHook } = buildSwarm(input, core, ctx, listeners, lifetime.signal, debugLog);
   core.services.set(SWARM_KEY, { supervisor: swarm, agentId: 'main' });
-  const checkpoints = new CheckpointManager(new ShadowGit(cwd));
+  const checkpoints = new CheckpointManager(new ShadowGit(cwd), () => core.perms.engine.mode);
   checkpoints.restoreFromEvents(opened.events);
   const inputGuard = chainInputGuards(opts.extensions?.inputGuard, core.hooks.inputGuard);
   const loop = new AgentRuntime({
@@ -187,6 +196,15 @@ function sessionApi(p: ApiParts): Session {
   const usageCost = new UsageCost({ provider: input.opened.log.header.provider, model: input.opened.log.header.model }, input.config);
   for (const event of input.opened.events) usageCost.observe(event);
   usageCost.setModel(input.ref);
+  const agentsDir = path.join(path.dirname(input.opened.log.path), 'agents');
+  if (existsSync(agentsDir)) for (const name of readdirSync(agentsDir).filter((file) => file.endsWith('.jsonl'))) {
+    try {
+      const loaded = loadRunLog(path.join(agentsDir, name));
+      const ref = { provider: loaded.header.provider, model: loaded.header.model };
+      for (const event of loaded.events) usageCost.observe({ ...event, agentId: event.agentId ?? name.slice(0, -6) }, ref);
+    } catch { /* Incomplete child logs never prevent restoring the main conversation. */ }
+  }
+  listeners.usage.add((ref, event) => usageCost.observe(event, ref));
   loop.committer.onCommit((event) => usageCost.observe(event));
   const previousModel = input.opened.events.filter((event) => event.type === 'model/change').at(-1) ?? input.opened.log.header;
   if ('provider' in previousModel && (previousModel.provider !== input.ref.provider || previousModel.model !== input.ref.model)) {
@@ -207,12 +225,27 @@ function sessionApi(p: ApiParts): Session {
       const validated = value === 'inherit' ? undefined : validateModel(value, effort);
       const ref = validated ? `${validated.provider}:${validated.model}` : 'inherit';
       saveConfigPatch(input.cwd, { swarm: { models: { [role]: ref }, efforts: { [role]: effort ?? null } } });
-      input.config.swarm.models = { ...input.config.swarm.models, [role]: ref };
+      Object.assign(input.config.swarm.models ??= {}, { [role]: ref });
       input.config.swarm.efforts = { ...input.config.swarm.efforts, [role]: effort ?? null };
+      listeners.swarm.forEach((listener) => listener());
+    },
+    configureSwarmModels(models) {
+      if (loop.busy || swarm.tree().some((agent) => agent.parentId && ['queued', 'running', 'waiting', 'paused'].includes(agent.state))) throw new RoastError('INVALID_REQUEST', '请等蜂群空闲后指定角色模型');
+      for (const value of Object.values(models)) if (value !== 'inherit') validateModel(value);
+      if (models.queen && models.queen !== 'inherit') {
+        const next = validateModel(models.queen);
+        delete input.ref.reasoningEffort; Object.assign(input.ref, next);
+        p.contextCtl.setWindow(input.providers.get(next).resolveModel?.(next.model)?.contextWindow ?? DEFAULT_CONTEXT_WINDOW);
+        loop.committer.commit({ type: 'model/change', at: new Date().toISOString(), ...next });
+        swarm.setRootModel(`${next.provider}:${next.model}`);
+      }
+      Object.assign(input.config.swarm.models ??= {}, models);
+      core.systemPrompt.register({ name: 'agent-models', order: 301, text: modelCatalogSection(input.config) });
       listeners.swarm.forEach((listener) => listener());
     },
     resume: input.resume,
     cost: () => usageCost.value(),
+    costBreakdown: () => usageCost.breakdown(),
     switchModel(value, effort) {
       if (loop.busy || swarm.tree().some((a) => a.parentId && ['queued', 'running', 'waiting', 'paused'].includes(a.state))) throw new RoastError('INVALID_REQUEST', '请等主会话和子 agent 空闲后切换模型');
       const next = validateModel(value, effort);
@@ -234,6 +267,8 @@ function sessionApi(p: ApiParts): Session {
     ignoredRepoAllow: core.perms.ignoredRepoAllow,
     startupWarnings: startupWarnings(input.cwd, core, input.mcp),
     mcpStatus: () => input.mcp.manager.status(),
+    mcpPrompts: () => input.mcp.manager.prompts(),
+    mcpPromptContent: (command, args, signal) => input.mcp.manager.promptContent(command, args, signal),
     swarm,
     onAgentEvent(listener) {
       listeners.agent.add(listener);

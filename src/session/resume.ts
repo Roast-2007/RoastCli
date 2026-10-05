@@ -62,6 +62,8 @@ export function rebuildFileStates(events: SessionEvent[]): [string, FileState][]
     const p = ev.metadata['path'];
     const fs = ev.metadata['fileState'];
     if (typeof p === 'string' && isFileState(fs)) map.set(canonicalPath(p), [p, fs]);
+    const states = ev.metadata['fileStates'];
+    if (states && typeof states === 'object') for (const [file, state] of Object.entries(states)) if (isFileState(state)) map.set(canonicalPath(file), [file, state]);
   }
   return [...map.values()];
 }

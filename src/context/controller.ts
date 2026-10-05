@@ -37,6 +37,7 @@ export interface ContextStats {
   anchored: boolean;
   /** 占用最大的工具结果（含已折叠 / 已钉住标记） */
   largest: LargestItem[];
+  cache?: { requests: number; read: number; input: number; hitRate: number; prefixChanges: number };
 }
 
 export interface LargestItem {
@@ -53,6 +54,7 @@ const LARGEST_LIMIT = 6;
 interface Anchor {
   messageCount: number;
   tokens: number;
+  estimate: number;
 }
 
 export class ContextController {
@@ -62,7 +64,10 @@ export class ContextController {
   private readonly now: () => number;
   private anchor: Anchor | null = null;
   private pendingDigest: { messageCount: number; estimate: number } | null = null;
+  private lastDigest: { messageCount: number; estimate: number } | null = null;
+  private retryDigest = false;
   private lastRequestAt = 0;
+  private cache = { requests: 0, read: 0, input: 0, hitRate: 0, prefixChanges: 0 };
   private commit: ((body: SessionEventBody) => unknown) | null = null;
   private getState: (() => HistoryState) | null = null;
 
@@ -81,6 +86,7 @@ export class ContextController {
     this.opts.window = window;
     this.anchor = null;
     this.pendingDigest = null;
+    this.lastDigest = null;
   }
 
   /** 订阅 Committer：建立锚点、校准估算 */
@@ -88,15 +94,35 @@ export class ContextController {
     if (ev.type === 'request/digest' && this.getState) {
       const view = buildView(this.getState());
       this.pendingDigest = { messageCount: view.length, estimate: this.opts.overhead() + estimateMessages(view) };
+      this.lastDigest = this.pendingDigest;
+      this.retryDigest = false;
       this.lastRequestAt = this.now();
+      this.cache.requests++;
+    } else if (ev.type === 'step/retry' && this.lastDigest) {
+      this.pendingDigest = this.lastDigest;
+      this.lastRequestAt = this.now();
+      this.retryDigest = true;
     } else if (ev.type === 'usage' && this.pendingDigest) {
+      if (this.retryDigest) this.cache.requests++;
+      this.retryDigest = false;
       const actual = ev.usage.input + ev.usage.cacheRead + ev.usage.cacheWrite;
       if (actual > 0) {
         this.calibrator.observe(this.pendingDigest.estimate, actual);
-        this.anchor = { messageCount: this.pendingDigest.messageCount, tokens: actual };
+        this.anchor = { messageCount: this.pendingDigest.messageCount, tokens: actual, estimate: this.pendingDigest.estimate };
+        this.cache.read += ev.usage.cacheRead;
+        this.cache.input += actual;
+        this.cache.hitRate = this.cache.read / this.cache.input;
       }
+      this.pendingDigest = null;
     } else if (ev.type === 'context/transform' || ev.type === 'context/compact' || ev.type === 'rewind') {
       this.anchor = null; // 视图前缀变了，锚点失效
+      this.pendingDigest = null;
+      this.lastDigest = null;
+      this.cache.prefixChanges++;
+    } else if (ev.type === 'model/change') {
+      this.anchor = null;
+      this.pendingDigest = null;
+      this.lastDigest = null;
     }
   }
 
@@ -104,7 +130,8 @@ export class ContextController {
   estimate(state: HistoryState): number {
     const view = buildView(state);
     if (this.anchor && this.anchor.messageCount <= view.length) {
-      return this.anchor.tokens + this.calibrator.adjust(estimateMessages(view.slice(this.anchor.messageCount)));
+      // Attachments may extend the trailing user message without increasing its count.
+      return Math.max(0, this.anchor.tokens + this.calibrator.adjust(this.opts.overhead() + estimateMessages(view) - this.anchor.estimate));
     }
     return this.calibrator.adjust(this.opts.overhead() + estimateMessages(view));
   }
@@ -140,7 +167,7 @@ export class ContextController {
     const savings = [...dedup, ...agingIds].reduce((n, id) => n + tokensOf(id), 0);
     const est = this.estimate(state);
     const idle = this.lastRequestAt > 0 && this.now() - this.lastRequestAt > this.config.cacheTtlMs;
-    const worthIt = savings >= this.config.minSavings && (est > this.config.elideAt * this.opts.window || idle);
+    const worthIt = savings >= this.config.minSavings && (est > this.config.elideAt * this.opts.window || (idle && est > this.config.elideAt * this.opts.window * 0.8));
     if (!force && !worthIt) return 0;
     const ops = [
       ...(dedup.length ? [{ op: 'elide' as const, ids: dedup, reason: '已被后续读取或修改取代', tokens: Object.fromEntries(dedup.map((id) => [id, tokensOf(id)])) }] : []),
@@ -156,7 +183,7 @@ export class ContextController {
     const cut = chooseCut(state, keepTurns);
     if (cut === null) return 0;
     const prefix: Message[] = buildView({ ...state, messages: state.messages.slice(0, cut) });
-    const { summary, usage } = await this.summarizer.summarize(prefix, focus, signal);
+    const { summary, usage, model } = await this.summarizer.summarize(prefix, focus, signal);
     if (signal.aborted || !summary.trim()) return 0;
     const before = this.estimate(state);
     this.commit!({
@@ -165,7 +192,8 @@ export class ContextController {
       upTo: cut,
       summary,
       ...(focus ? { focus } : {}),
-      ...(usage.input + usage.output > 0 ? { auxUsage: usage } : {}),
+      ...(Object.values(usage).some((tokens) => tokens > 0) ? { auxUsage: usage } : {}),
+      ...(model ? { auxModel: model } : {}),
     });
     return Math.max(0, before - this.estimate(this.getState!()));
   }
@@ -232,6 +260,7 @@ export class ContextController {
       calibration: Math.round(this.calibrator.factor * 100) / 100,
       anchored: this.anchor !== null,
       largest: this.largest(state),
+      cache: { ...this.cache },
     };
   }
 }

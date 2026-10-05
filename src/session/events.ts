@@ -102,7 +102,7 @@ export type SessionEventBody =
   /** v1：上下文变换决策（折叠 / 取消折叠 tool-result） */
   | { type: 'context/transform'; at: string; ops: ElideOp[] }
   /** v1：上下文压缩决策：messages[0, upTo) 由 summary 替代（摘要原文入日志，回放不重算） */
-  | { type: 'context/compact'; at: string; upTo: number; summary: string; focus?: string; auxUsage?: TokenUsage }
+  | { type: 'context/compact'; at: string; upTo: number; summary: string; focus?: string; auxUsage?: TokenUsage; auxModel?: import('../core/config.js').ModelRef }
   /** v1：turn 内第一次写操作前的工作区快照（影子 git commit） */
   | { type: 'checkpoint'; at: string; turn: number; hash: string }
   /** v1：回退到 toTurn 开始前（对话由 history reducer 回退；文件已按 checkpoint 恢复） */

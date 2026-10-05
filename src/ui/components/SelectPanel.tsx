@@ -5,6 +5,7 @@ import { previousBoundary } from '../../core/text-width.js';
 import { useTheme } from '../theme.js';
 import { useGlyphs, useTerminal } from '../terminal.js';
 import { panelLayout } from '../scroll.js';
+import { mouseWheel } from '../mouse.js';
 import { motionColor, useEntrance } from '../motion.js';
 
 export interface SelectEntry { id: string; label: string; detail?: string }
@@ -48,6 +49,8 @@ export function SelectPanel({ title, entries, height, onSelect, onClose, initial
       setSelected(current.selected); setError('');
     };
     if (key.upArrow) return move(index - 1);
+    const wheel = mouseWheel(input);
+    if (wheel !== null) return move(index + wheel);
     if (key.downArrow || key.tab) return move(index + (key.shift ? -1 : 1));
     if (key.pageUp) return move(index - count);
     if (key.pageDown) return move(index + count);

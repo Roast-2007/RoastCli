@@ -82,7 +82,7 @@ describe('runPrintMode', () => {
       out,
       sink(),
     );
-    expect(out.text()).toBe('let me check\n> tool: read_file\n  ✓ file content\ndone\n');
+    expect(out.text()).toBe('let me check\n> tool: read_file · a.ts\n  ✓ file content\ndone\n');
     expect(code).toBe(0);
   });
 

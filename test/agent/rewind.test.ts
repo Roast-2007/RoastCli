@@ -25,6 +25,23 @@ async function drain(rt: AgentRuntime, text: string) {
 }
 
 describe('检查点与 rewind', () => {
+  it('yolo snapshots every bash and replays the first turn baseline for rewind', async () => {
+    const ws = tempWorkspace(); ws.file('a.txt', 'baseline');
+    const events: Parameters<CheckpointManager['restoreFromEvents']>[0][number][] = [];
+    const checkpoints = new CheckpointManager(new ShadowGit(ws.dir), () => 'yolo');
+    checkpoints.attach((body) => events.push({ ...body, seq: events.length + 1, agentId: 'main' }));
+    const bash = createDefaultToolRegistry().get('bash');
+    const ctx = { cwd: ws.dir, services: new MapToolServices(), signal: new AbortController().signal, turn: 1 };
+    await checkpoints.hook()(bash, { command: 'git status' }, ctx);
+    ws.file('a.txt', 'changed');
+    await checkpoints.hook()(bash, { command: 'git status' }, ctx);
+    ws.file('created.txt', 'new');
+    expect(events.filter((e) => e.type === 'checkpoint')).toHaveLength(2);
+    const restored = new CheckpointManager(new ShadowGit(ws.dir)); restored.restoreFromEvents(events);
+    await restored.rewind(1);
+    expect(readFileSync(path.join(ws.dir, 'a.txt'), 'utf8')).toBe('baseline');
+    expect(existsSync(path.join(ws.dir, 'created.txt'))).toBe(false);
+  }, 60_000);
   it('turn 2 写文件前自动快照；rewind 到 turn 2 后文件与对话回到 turn 1 结束时', async () => {
     const ws = tempWorkspace('roast-rewind-');
     const provider = new ScriptedProvider([

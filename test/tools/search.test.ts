@@ -20,7 +20,7 @@ function workspace() {
 const modes: [string, () => void][] = [
   ['ripgrep', () => {}],
   [
-    'JS 回退',
+    '打包的 ripgrep（空 PATH）',
     () => {
       process.env['ROAST_RG_PATH'] = '';
       process.env['PATH_BACKUP'] = process.env['PATH'];
@@ -40,6 +40,15 @@ afterEach(() => {
 
 describe.each(modes)('搜索工具（%s）', (name, prepare) => {
   const hasRg = locateRipgrep().path !== null;
+
+  it('supports type, context and multiline without a system rg', async () => {
+    prepare(); resetRipgrepCache();
+    if (name !== 'ripgrep') expect(locateRipgrep().source).toContain('bundled');
+    const ws = workspace();
+    const r = await executeTool(grepTool, { pattern: 'alpha.*TODO', type: 'ts', multiline: true, context: 1, output_mode: 'content' }, makeCtx(ws.dir));
+    expect(textOf(r)).toContain('alpha = 1'); expect(textOf(r)).toContain('TODO: refine');
+    expect(textOf(r)).not.toContain('Alpha docs');
+  });
 
   it.skipIf(name === 'ripgrep' && !hasRg)('glob：按模式找文件，忽略 node_modules', async () => {
     prepare();

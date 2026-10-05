@@ -1,13 +1,14 @@
 /**
- * 压缩摘要器。接口可插拔；默认实现是确定性的"抽取式锚定摘要"——不调用模型、零成本、可复现：
+ * 抽取式兜底摘要器。会话装配默认使用 model-summary.ts 的模型摘要，失败时回退到这里：
  * 从被压缩的历史中抽取 用户请求 / 涉及文件 / 执行过的命令 / 错误 / 最近结论 五类信息。
  * 原文仍完整保存在日志中，模型可用 recall 检索。
  */
 import type { Message, TokenUsage, ToolCallBlock } from '../core/types.js';
 import { emptyUsage } from '../core/types.js';
+import type { ModelRef } from '../core/config.js';
 
 export interface Summarizer {
-  summarize(messages: readonly Message[], focus: string | undefined, signal: AbortSignal): Promise<{ summary: string; usage: TokenUsage }>;
+  summarize(messages: readonly Message[], focus: string | undefined, signal: AbortSignal): Promise<{ summary: string; usage: TokenUsage; model?: ModelRef }>;
 }
 
 const MAX_LINE = 200;

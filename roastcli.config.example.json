@@ -40,7 +40,9 @@
   "default": "deepseek:deepseek-chat",
   "maxSteps": 50,
   "logsDir": "logs",
-  "ui": { "theme": "ember", "markdown": { "padding": 2, "spacing": 1 } },
+  "context": { "summaryModel": "auto", "summaryMaxTokens": 2048 },
+  "webSearch": { "driver": "duckduckgo", "timeoutMs": 30000 },
+  "ui": { "theme": "ember", "shellTimeoutMs": 600000, "markdown": { "padding": 2, "spacing": 1 } },
   "swarm": {
     "models": { "worker": "deepseek:deepseek-chat", "scout": "inherit" },
     "efforts": { "worker": null }

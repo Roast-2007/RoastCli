@@ -3,11 +3,12 @@
  * - 名称 mcp__<server>__<tool>（只保留 [A-Za-z0-9_-]，超过 64 字符截断并加 hash 后缀，满足各家 API 限制）
  * - schema 原样交给模型（rawJsonSchema），参数校验由 MCP 服务器完成
  * - 默认按 execute 询问（可用规则 `mcp__server__tool` 放行）；服务器配置 trustAnnotations 时，readOnlyHint 的工具按只读处理（可并发、免审批）
- * - 结果：文本原样；图片 / 音频 / 二进制资源以占位文字代替（各家 provider 的工具结果不一定支持多模态）
+ * - 结果：文本原样、支持的图片保留像素；音频及不支持/超限的二进制资源显示占位说明。
  */
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import type { ContentBlock } from '../../core/types.js';
+import { MAX_IMAGE_BYTES, imageMediaType } from '../../tools/read/image.js';
 import { defineTool, type ToolDefinition, type ToolResult } from '../../tools/tool.js';
 
 const MAX_NAME = 64;
@@ -60,11 +61,22 @@ function blockText(item: unknown): string {
 }
 
 export function mcpResultToToolResult(result: McpCallResult): ToolResult {
-  const parts = (result.content ?? []).map(blockText).filter((t) => t !== '');
+  const images: ContentBlock[] = [];
+  let imageBytes = 0;
+  const parts = (result.content ?? []).map((item) => {
+    const block = item as { type?: string; data?: string; mimeType?: string; resource?: { blob?: string; mimeType?: string } };
+    const data = block.type === 'image' ? block.data : block.type === 'resource' ? block.resource?.blob : undefined;
+    const mime = block.type === 'image' ? block.mimeType : block.resource?.mimeType;
+    if (data && mime?.startsWith('image/') && data.length <= Math.ceil(MAX_IMAGE_BYTES / 3) * 4 && /^[A-Za-z0-9+/]*={0,2}$/.test(data)) {
+      const bytes = Buffer.from(data, 'base64'), mediaType = imageMediaType(bytes);
+      if (mediaType && imageBytes + bytes.length <= MAX_IMAGE_BYTES) { imageBytes += bytes.length; images.push({ type: 'image', mediaType, data }); return ''; }
+    }
+    return blockText(item);
+  }).filter((t) => t !== '');
   if (parts.length === 0 && result.structuredContent !== undefined) parts.push(JSON.stringify(result.structuredContent, null, 2));
   let text = parts.join('\n\n') || '（无输出）';
   if (text.length > MAX_RESULT_CHARS) text = `${text.slice(0, MAX_RESULT_CHARS)}\n…（结果过长，已截断 ${text.length - MAX_RESULT_CHARS} 个字符）`;
-  const content: ContentBlock[] = [{ type: 'text', text }];
+  const content: ContentBlock[] = [{ type: 'text', text }, ...images];
   return { content, ...(result.isError ? { isError: true } : {}) };
 }
 

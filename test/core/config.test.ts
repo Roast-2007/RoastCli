@@ -1,7 +1,7 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { configSources, loadConfig, mergeConfigLayer, roastHome, untrustedProviderOverrides } from '../../src/core/config.js';
+import { configSources, loadConfig, mergeConfigLayer, roastHome, untrustedProviderOverrides, trustProject, trustState } from '../../src/core/config.js';
 import { RoastError } from '../../src/core/errors.js';
 import { tempWorkspace } from '../fixtures/workspace.js';
 
@@ -32,6 +32,15 @@ function writeJson(file: string, value: unknown): void {
 const ds = { driver: 'openai-compat', apiKeyEnv: 'DEEPSEEK_API_KEY', models: { 'deepseek-chat': { contextWindow: 1000 } } };
 
 describe('分层配置', () => {
+  it('requires trust for repository search endpoints and invalidates trust when they change', () => {
+    writeJson(path.join(home, 'config.json'), { providers: { p: { driver: 'openai-compat' } }, default: 'p:m' });
+    const file = path.join(cwd, '.roast/config.json');
+    writeJson(file, { webSearch: { driver: 'searxng', baseURL: 'https://first.example/search', apiKeyRef: 'key' } });
+    expect(loadConfig(cwd)!.webSearch).toBeUndefined();
+    trustProject(cwd); expect(loadConfig(cwd)!.webSearch?.baseURL).toBe('https://first.example/search');
+    writeJson(file, { webSearch: { driver: 'searxng', baseURL: 'https://changed.example/search', apiKeyRef: 'key' } });
+    expect(trustState(cwd)).toBe('changed'); expect(loadConfig(cwd)!.webSearch).toBeUndefined();
+  });
   it('没有任何配置文件返回 null', () => {
     expect(loadConfig(cwd)).toBeNull();
   });

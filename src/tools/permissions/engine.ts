@@ -153,6 +153,7 @@ export class PermissionEngine {
       case 'interact':
         return { behavior: 'allow', reason: '交互类工具' };
       case 'read':
+        if (req.targetKind === 'label') return { behavior: 'allow', reason: '只读资源' };
         return inside || req.target === undefined || this.readRoots.some((r) => isPathInside(r, req.target!))
           ? { behavior: 'allow', reason: '工作区内读取' }
           : { behavior: 'ask', reason: '读取工作区外的路径', suggestedRule };

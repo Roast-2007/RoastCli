@@ -30,6 +30,8 @@ import { initConfig, type InitOptions } from '../cli/init.js';
 import { configSources, isProjectTrusted, roastHome } from '../core/config.js';
 import { buildSwarmPrompt, DEFAULT_N, DEFAULT_TEMPLATE, describeTemplates, loadTemplates } from '../swarm/templates.js';
 import { listWorktrees, pruneWorktrees, savedWorktreesText } from '../cli/worktrees.js';
+import { parseRoleModels } from '../swarm/model-routing.js';
+import type { AgentRole } from '../swarm/types.js';
 import { terminalText } from '../core/terminal-text.js';
 
 /**
@@ -52,6 +54,7 @@ function normalizeArgv(argv: string[]): string[] {
 interface ChatOptions {
   prompt?: string;
   model?: string;
+  roleModels?: Partial<Record<AgentRole, string>>;
   continue?: boolean;
   resume?: string | true;
   permissionMode?: string;
@@ -67,6 +70,7 @@ interface SwarmOptions {
   print?: boolean;
   outputFormat?: string;
   model?: string;
+  roleModel?: string[];
   permissionMode?: string;
 }
 
@@ -124,10 +128,11 @@ function resolveResumeLog(opts: ChatOptions): string | undefined {
 }
 
 /** createSession 的错误出口：配置缺失提示 example 并 exit 2，其余 exit 1 */
-async function openSession(opts: { modelRef?: string; resumeLogPath?: string; permissionMode?: PermissionMode }): Promise<Session> {
+async function openSession(opts: { modelRef?: string; resumeLogPath?: string; permissionMode?: PermissionMode; roleModels?: Partial<Record<AgentRole, string>> }): Promise<Session> {
   try {
     return await createSession({
       ...(opts.modelRef ? { modelRef: opts.modelRef } : {}),
+      ...(opts.roleModels ? { roleModels: opts.roleModels } : {}),
       ...(opts.resumeLogPath ? { resumeLogPath: opts.resumeLogPath } : {}),
       ...(opts.permissionMode ? { permissionMode: opts.permissionMode } : {}),
     });
@@ -147,6 +152,7 @@ async function openSession(opts: { modelRef?: string; resumeLogPath?: string; pe
 async function runChat(opts: ChatOptions): Promise<void> {
   const permissionMode = parsePermissionMode(opts.permissionMode);
   const interactive = opts.prompt === undefined && !!process.stdin.isTTY && !!process.stdout.isTTY;
+  if (opts.prompt === undefined && !interactive) throw new RoastError('INVALID_REQUEST', '非 TTY 环境请提供 -p "目标"（蜂群使用 roast swarm --print "目标"）');
   if (interactive) {
     const { runTrustPrompt, runProviderWizard } = await import('../ui/screens.js');
     if (!await ensureFolderTrust(process.cwd(), true, runTrustPrompt)) return;
@@ -156,6 +162,7 @@ async function runChat(opts: ChatOptions): Promise<void> {
   const resumeLogPath = resolveResumeLog(opts);
   const session = await openSession({
     ...(opts.model ? { modelRef: opts.model } : {}),
+    ...(opts.roleModels ? { roleModels: opts.roleModels } : {}),
     ...(resumeLogPath ? { resumeLogPath } : {}),
     ...(permissionMode ? { permissionMode } : {}),
   });
@@ -278,6 +285,7 @@ async function main(): Promise<void> {
     .option('-p, --print', '管道模式：不进入 TUI')
     .option('--output-format <format>', 'text（默认）/ stream-json')
     .option('-m, --model <provider:model>', '覆盖默认模型')
+    .option('--role-model <role=provider:model>', '指定 Queen / Lead / Worker / Scout / Critic / Judge 的模型，可重复', (value: string, previous: string[]) => [...previous, value], [])
     .option('--permission-mode <mode>', '权限模式：default / acceptEdits / plan / yolo')
     .action(async (goal: string[], opts: SwarmOptions) => {
       const n = parseN(opts.n);
@@ -285,7 +293,9 @@ async function main(): Promise<void> {
       if (goal.length === 0) throw new RoastError('INVALID_REQUEST', '请给出目标，例如：roast swarm -t best-of-n "实现 LRU 缓存"');
       const prompt = () => buildSwarmPrompt(swarmTemplates(), goal.join(' '), opts.template ?? DEFAULT_TEMPLATE, n);
       const headless = opts.print === true || opts.outputFormat !== undefined;
+      const roleModels = parseRoleModels(opts.roleModel ?? []);
       await runChat({
+        roleModels,
         ...(headless ? { prompt: prompt() } : { initialPrompt: prompt }),
         ...(opts.model ? { model: opts.model } : {}),
         ...(opts.permissionMode ? { permissionMode: opts.permissionMode } : {}),

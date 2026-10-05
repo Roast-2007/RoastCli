@@ -19,7 +19,7 @@ import { useSpinner } from './components/useSpinner.js';
 import { InputBox } from './input/InputBox.js';
 import { FileIndex } from './input/files.js';
 import { loadHistory } from './input/history.js';
-import { COMMANDS, skillCommands } from './commands.js';
+import { COMMANDS, skillCommands, mcpPromptCommands } from './commands.js';
 import { pickTheme, ThemeContext, useTheme } from './theme.js';
 import type { EditorState } from './input/editor.js';
 import { inlineLayout } from './layout.js';
@@ -202,7 +202,7 @@ function Shell({ session, store: externalStore, controller: externalController, 
   const toolHeight = Math.max(1, Math.floor((layout.tools - (view.tools.length > toolsShown ? 1 : 0)) / Math.max(1, toolsShown)));
   const elapsed = view.turnStartedAt ? now - view.turnStartedAt : 0;
   const deps = useMemo(
-    () => ({ commands: [...COMMANDS, ...skillCommands(session.skills.list())], files: (q: string) => files.match(q) }),
+    () => ({ commands: [...COMMANDS, ...skillCommands(session.skills.list()), ...mcpPromptCommands(session)], files: (q: string) => files.match(q) }),
     [files, session],
   );
   // 分支在每个回合开始 / 结束时重新读取（模型可能切换了分支）

@@ -52,6 +52,8 @@ export interface ToolContext {
   /** 所在 turn（检查点等按 turn 归档） */
   turn?: number;
   progress?: (p: ToolProgress) => void;
+  /** Multi-file tools must authorize every discovered target before writing any file. */
+  checkTargets?(paths: string[]): Promise<void>;
 }
 
 export interface ToolDefinition<S extends z.ZodTypeAny = z.ZodTypeAny> {

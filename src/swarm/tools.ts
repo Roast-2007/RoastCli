@@ -24,6 +24,16 @@ function access(ctx: ToolContext): SwarmAccess | null {
 
 const NO_SWARM = '当前会话未启用蜂群';
 const SPAWNABLE = ['lead', 'worker', 'scout', 'critic', 'judge'] as const;
+export const configureSwarmTool = defineTool({
+  name: 'configure_swarm', description: 'Queen 启动蜂群前为未由用户显式指定的角色选择已配置模型。仅影响本次蜂群；不会保存配置。',
+  parameters: z.object({ models: z.record(z.enum(SPAWNABLE), z.string().min(1)) }),
+  isReadOnly: false, isConcurrencySafe: false, permission: { kind: 'interact' },
+  async execute(args, ctx) {
+    const s = access(ctx);
+    if (!s) return toolErrorResult('configure_swarm', NO_SWARM);
+    return textResult(`角色模型：${s.supervisor.configureModels(s.agentId, args.models)}`);
+  },
+});
 
 function formatReports(r: WaitResult): string {
   const lines = r.reports.map((x) => `[${x.agentId}] ${x.status}：${x.summary}${x.refs.length ? `\n  引用：${x.refs.join(', ')}` : ''}`);
@@ -261,6 +271,7 @@ export const taskTool = defineTool({
 });
 
 export const SWARM_TOOLS = [
+  configureSwarmTool,
   spawnAgentTool,
   sendMessageTool,
   awaitAgentsTool,

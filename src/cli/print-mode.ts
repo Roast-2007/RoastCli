@@ -3,6 +3,7 @@
  * 抽成纯函数便于单测 —— out/err 只要求可写流接口（{ write }）。
  */
 import type { UiEvent } from '../agent/ui-events.js';
+import { terminalText } from '../core/terminal-text.js';
 
 export interface WritableLike {
   write(chunk: string): unknown;
@@ -48,7 +49,9 @@ export async function runPrintMode(
         break;
       case 'tool-call-start':
         closeText();
-        out.write(`> tool: ${ev.name}\n`);
+        const args = ev.args as { path?: string; command?: string; query?: string; url?: string; pattern?: string } | null;
+        const summary = terminalText(String(args?.path ?? args?.command ?? args?.query ?? args?.url ?? args?.pattern ?? '')).replace(/\s+/g, ' ').slice(0, 140);
+        out.write(`> tool: ${ev.name}${summary ? ` · ${summary}` : ''}\n`);
         break;
       case 'tool-call-end':
         closeText();

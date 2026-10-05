@@ -39,6 +39,8 @@ Windows 上 bash 工具优先使用 Git Bash（`C:\Program Files\Git\bin\bash.ex
 | `roast logs list` / `roast logs show <runId> [--raw]` | 浏览运行日志，从日志重建会话 |
 | `roast worktrees list` / `roast worktrees prune` | 查看当前仓库保留的蜂群工作区 / 清理已结束且相对基线无改动的工作区；有未合并改动、仍在运行或缺少基线记录的工作区会保留 |
 
+非 TTY 环境必须提供 `-p "任务"`，蜂群使用 `roast swarm --print "目标"`；缺少任务会在创建会话前报出明确用法。
+
 ## TUI
 
 **按键**
@@ -49,6 +51,7 @@ Windows 上 bash 工具优先使用 Git Bash（`C:\Program Files\Git\bin\bash.ex
 | Esc / Ctrl+C | 中断当前回合（空闲时连按两次 Esc 打开回退列表，Ctrl+C 退出） |
 | Ctrl+O | 查看最近工具的完整输出；↑↓ 按行滚动，Home/End 到首尾，Ctrl+O / Esc 返回 |
 | Shift+↑↓ / PgUp | 进入连续阅读；↑↓ 滚动，Home 到顶部，End / Enter / Esc 返回输入 |
+| 鼠标滚轮 | 在全屏 chat、正文和选择面板滚动；chat 每次移动 3 行，草稿和输入历史选择保持不变；回到底部后跟随新输出 |
 | Shift+Tab | 切换权限模式 default → acceptEdits → plan → yolo |
 | Ctrl+G | 进入 / 退出全屏 Mission Control |
 | Tab / ↑↓ | 补全命令或 `@文件` / 选择补全项；`/` 或命令前缀可直接 Enter 打开选中命令 |
@@ -56,6 +59,8 @@ Windows 上 bash 工具优先使用 Git Bash（`C:\Program Files\Git\bin\bash.ex
 | 空输入时 `?` / F1 | 打开可滚动帮助，Esc 关闭并保留草稿 |
 
 **输入前缀**：`/` 命令，`@路径` 引用文件，`!命令` 直接执行 shell（结果不发给模型），`#内容` 记到 ROAST.md。agent 运行时输入的内容会排队，在下一步送达，不需要先中断。
+
+`!命令` 默认最多运行 600 秒，可设置 `ui.shellTimeoutMs`（毫秒，1 秒至 24 小时）。开始时提示期限，超时会明确显示；输出保存在 Ctrl+O 工具详情中（底层保留有大小上限的输出），聊天只显示简短状态。输入历史在磁盘上保留最近 500 条；会话、回退与 agent 列表支持输入搜索。蜂群自带初始目标时跳过 704ms 启动动画直接提交。
 
 **斜杠命令**：`/help /provider`（别名 `/config`）、`/clear /resume [runId] /context [pin|unpin|drop <id>] /compact [关注点] /rewind [N] /mode /model [provider:model] [effort|auto] /cost /todo /init /swarm [模板] <目标> /agents /board [key] /theme [名称] /skills /memory [关键词] /mcp /logs /exit`。`/hive` 是 `/swarm` 的别名，`/hive models` 打开角色模型配置。另外，每个 skill 都可以用 `/技能名 参数` 直接调用。
 
@@ -89,7 +94,9 @@ Markdown 在常规终端左右留 2 列空白，窄屏自动缩减；段落与�
 
 列表通过 OpenAI 兼容 `GET <baseURL>/models` 或 Anthropic `GET <baseURL>/v1/models` 获取，Anthropic 也接受已带 `/v1` 的基础地址。发现有 10 秒超时、5 分钟会话缓存、取消与分页上限，沿用供应商 headers 与凭据，不追随重定向、不显示远端错误正文。标准 [OpenAI 模型列表](https://developers.openai.com/api/reference/resources/models/methods/list)只提供 ID 等基本字段，不能据此保证上下文、推理强度或聊天能力；服务返回相关元数据时使用它，显式配置优先。可配置 `reasoning: false` 隐藏 effort，或 `reasoningEfforts: ["low", "high"]` 限定该模型的选项。
 
-Hive 用 `/hive models` 为 lead / worker / scout / critic / judge 选择不同供应商、模型和 effort，保存后对新派生的子代理生效；“跟随主会话”继承主会话的模型与 effort。Queen 使用 `/model`。配置字段为 `swarm.models` 与 `swarm.efforts`；`models.<角色>: "inherit"` 可清除继承的角色路由。需要单个子代理覆盖时，工具 `spawn_agent` 和 `task` 支持 `model: "custom:model-b"`、`reasoning_effort: "high"`（`null` 为自动），各代理的请求与配置互不覆盖，连接仍须可信。
+Hive 用 `/hive models` 为 lead / worker / scout / critic / judge 选择模型和 effort，保存后对新派生的子代理生效。配置字段为 `swarm.models` 与 `swarm.efforts`；`models.<角色>: "inherit"` 明确要求跟随主会话。Queen 可用 `/model` 或启动参数 `--role-model queen=provider:model` 选择。CLI 可重复使用 `--role-model worker=provider:model`；会话内支持 `/swarm research 目标 --role-model scout=provider:model`，这些临时路由不写入全局配置。
+
+用户的角色路由优先（包括 `inherit`）。未指定的角色由 Queen 根据已配置模型的价格、上下文与任务选择，可通过 `configure_swarm` 设置角色默认值，或在 `spawn_agent` / `task` 的 `model` 参数中指定一次性模型。模型信息不足时跟随主会话；不能覆盖用户锁定的角色。各子代理还支持 `reasoning_effort: "high"`（`null` 为自动），连接仍须可信。
 
 脚本或非交互终端可用 `roast init --provider kimi-code --reasoning-effort high` 生成配置，然后运行 `roast config` 输入密钥；也可加 `--api-key-stdin` 从标准输入读取并保存密钥，无需设置供应商环境变量。
 
@@ -119,7 +126,35 @@ Hive 用 `/hive models` 为 lead / worker / scout / critic / judge 选择不同�
 **安全**
 
 - 供应商密钥通过 `apiKeyRef` 用户凭据引用提供，不放入普通配置文件。MCP 的 env / headers 用 `${VAR}` 引用。
-- 仓库内的配置文件如果设置了 provider 连接信息、钩子、MCP、Mem0 或 embeddings，需要先运行 `roast trust` 才会生效，防止克隆来的仓库把你的密钥发往别处或执行任意命令。信任与这些配置的内容绑定：之后的改动（例如 `git pull` 带来新的钩子）需要重新确认。
+- 仓库内的 provider 连接信息、钩子、MCP、Mem0、embeddings 与 webSearch 设置需要先运行 `roast trust` 才会生效。信任与相关配置内容绑定，之后修改需重新确认。
+
+## 缓存、摘要与费用
+
+`/context` 显示按输入 token 加权的缓存命中率、请求次数（含重试）和上下文前缀调整次数。单次请求没有先前请求可复用，命中率低不能单独证明引擎有问题；供应商 TTL、最小缓存长度与实际服务策略也影响命中。
+
+0.4.0 修正 DeepSeek 的 `prompt_cache_miss_tokens` 重复计费，将其作为普通输入。`reasoningReplay: "field"` 稳定保留历史 `reasoning_content`，避免新 turn 到来时改写旧前缀；要求只回传当前回合推理的兼容服务可设为 `"current"`，默认 `"drop"` 不回传。OpenAI 官方端点自动发送稳定 `prompt_cache_key`，其他兼容端点需在 provider 中显式设置 `promptCaching: true` 才发送；设为 false 关闭。Anthropic 自动标记上次仍相同的请求边界和当前尾部。折叠默认在 70% 窗口后择机批量应用，压缩和回退后重新检查缓存边界。
+
+压缩默认调用已配置、有定价模型中 input + output 最低的模型，保留目标、决策、文件、错误与下一步；没有价格信息时用当前主模型。可指定摘要模型或关闭模型调用：
+
+```json
+{ "context": { "summaryModel": "provider:cheap-model", "summaryMaxTokens": 2048 } }
+```
+
+`summaryModel: "auto"` 使用自动选择，`"extractive"` 使用零模型调用的抽取式摘要。摘要只在压缩时生成，输入和输出均受限；失败回退抽取式摘要，原文仍可 `recall`。摘要请求也计入费用。`/cost` 按 turn、agent、provider、模型展示主会话、子代理和摘要费用，按请求原模型定价，恢复日志保留支出，rewind 不退款；缺失定价时显示未知。
+
+## 图片、网页与语义工具
+
+让模型用 `read_image({"path":"截图.png"})` 读取截图或 UI 稿。支持 PNG/JPEG/GIF/WebP，单张最多 5 MiB；MCP 图片也会以真实图像传入。需要支持视觉的模型，纯文本模型不会因此获得视觉能力。
+
+`web_search({"query":"报错或文档关键词","limit":5})` 返回来源 URL、标题和摘要，再用 `web_fetch` 读取正文。默认 DuckDuckGo 无需密钥；验证码或限流会明确失败，可切换 Brave、Tavily 或自有 SearXNG：
+
+```json
+{ "webSearch": { "driver": "searxng", "baseURL": "https://search.example/search", "timeoutMs": 30000 } }
+```
+
+Brave / Tavily 需要 `webSearch.apiKeyRef` 指向已有用户凭据，密钥不写普通配置。网络访问沿用权限规则，结果经过注入警示。
+
+`find_references({"path":"src/a.ts","line":1,"column":14})` 使用 TypeScript 语言服务查找真实引用；`rename_symbol` 传入同样位置与 `new_name`，默认预览，`apply:true` 校验所有文件权限和内容后应用，保留 CRLF、导入别名，跳过注释和字符串。位置为 1-based，列按 UTF-16 计数。内置支持 TS/JS、tsconfig/jsconfig；其他语言需通过相应 MCP 语义服务器提供工具。
 - 权限规则写在配置的 `permissions: { allow, ask, deny }` 中，格式如 `bash(git status:*)`、`edit(src/**)`、`mcp__github__create_issue`。仓库层的 allow 规则需要先 trust；在卡片上选"始终允许"会写入 `~/.roast/projects/<hash>/settings.json`，不进仓库。复合命令会拆开逐段判断，高危命令即使在 yolo 模式下也会询问。
 - worktree 的文件编辑限制在它自己的目录内。`node_modules` 使用独立副本，内部 pnpm 链接也映射到副本；复制依赖会增加启动时间和磁盘用量，支持时采用 copy-on-write。worktree 提供 Git 改动隔离；shell 和外部执行工具仍能访问其他目录，因此每次执行都需明确批准，`yolo` 和 allow 规则不能跳过。管道模式没有审批界面时会拒绝，验证可由主会话在合并后执行。
 - 会话退出时会在 stderr 列出仍保留的 worktree 路径，纯文本回答和 stream-json 输出格式不受影响。可以进入工作区检查改动；`worktrees prune` 只处理当前仓库，不会删除未合并代码。
@@ -133,9 +168,11 @@ Hive 用 `/hive models` 为 lead / worker / scout / critic / judge 选择不同�
 | 长期记忆 | `memory` 工具；默认本地 JSONL，也可使用 Mem0 平台 / 自托管服务。按项目隔离，最近事实在下次会话开始时进入稳定 system prompt |
 | 代码检索 | `search_code`：默认 BM25，支持自然语言、标识符、camelCase 子词及增量索引；可选 embeddings 混合排序，失败明确回退 BM25 |
 | 用户钩子 | `PreToolUse` / `PostToolUse` / `UserPromptSubmit` / `Stop` / `SessionStart`，JSON 经 stdin 传入。退出码 2 表示阻止（stderr 作为理由）。PreToolUse 在权限检查之前运行 |
-| MCP | stdio / streamable-http / sse。工具名为 `mcp__<服务器>__<工具>`，在会话启动时注册；`/mcp` 查看连接状态 |
+| MCP | stdio / streamable-http / sse；支持 tools、resources/URI templates 与 prompts。`/mcp` 查看连接状态，资源通过 `mcp__<服务器>__list_resources` / `read_resource` 读取，prompt 通过 `/mcp__<服务器>__prompt_<名称>` 调用 |
 | Prompt 覆盖 | `.roast/prompts/<section>.md` 覆盖同名的内置 system section，支持 `{{cwd}} {{date}} {{platform}}` |
 | 注入防护 | 读取网页、文件或命令输出时，如果发现疑似提示注入，会在结果后追加警示 |
+
+例如 `/mcp__docs__prompt_review topic="cache engine" tone=brief`。prompt 支持位置参数、`name=value` 和带引号的文本，缺失必填参数会提示用法；所有列表在启动时发现并分页获取，工具 schema 在会话内保持稳定。只有 resources/prompts 的 MCP 服务也可连接。图片结果单次累计最多 5 MiB，超限或不支持的媒体显示占位说明。
 
 Mem0 与 embeddings 均为可选能力，未配置时保持本地记忆与 BM25。下面的设置合并进已有配置；`rag.embeddings.provider` 引用已配置的 OpenAI 兼容供应商（支持其 `baseURL`、凭据与自定义 headers），并使用该供应商实际支持的 embedding 模型：
 
@@ -160,6 +197,8 @@ Mem0 平台用 `Authorization: Token`；自托管设置 `mode: "self-hosted"` �
 
 检查点优先使用影子 Git；没有 Git 时使用 `.roast/snapshots/` 文件快照，保持二进制和 CRLF，回退前另存备份。文件快照不跟随符号链接，默认跳过依赖、日志及 Roast 自身状态，单次上限 128 MiB。
 
+yolo 模式在每条 bash 前创建工作区快照，覆盖命令启发式漏判的情况；同一 turn 的 rewind 始终恢复第一次快照，恢复日志时也保持该基线。
+
 ## 架构
 
 ```
@@ -183,7 +222,9 @@ src/
 ```bash
 pnpm dev                 # 从源码运行（tsx）
 pnpm test                # vitest（脚本化 provider + ink-testing-library，不依赖网络）
-pnpm test:coverage       # 95 个文件 / 594 个测试；行与分支覆盖率见 STATUS.md
+pnpm test:coverage       # 最新测试数量与覆盖率见 STATUS.md
+pnpm lint                # Biome 正确性检查；CI 运行 lint 与覆盖率
+pnpm format              # 按 Biome 配置格式化源码、测试和脚本
 pnpm typecheck && pnpm build
 pnpm tsx scripts/smoke.ts deepseek:deepseek-chat "hi"   # 只冒烟 provider 层（需要真实密钥）
 ```

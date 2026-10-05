@@ -1,6 +1,6 @@
 # RoastCli 当前状态
 
-> 更新于 2026-10-05，v0.2.1。路线图见 [ROADMAP.md](ROADMAP.md)，架构见 [DESIGN.md](DESIGN.md)。
+> 更新于 2026-10-05，v0.4.0。版本说明见 [RELEASE-0.4.0.md](RELEASE-0.4.0.md)，路线图见 [ROADMAP.md](ROADMAP.md)，架构见 [DESIGN.md](DESIGN.md)。
 
 ## 当前交付
 
@@ -8,8 +8,9 @@
 
 M0–M8 的功能实现与自动化验收已完成，包含可选 Mem0、embeddings、无 Git 文件检查点及蜂群自适应并发。TUI 已补齐小屏布局、长输入、帮助与会话菜单、实时模型切换、暂停和终端降级。
 
-- 验证：102 个测试文件、636 个测试，typecheck / build 通过（具体平台会跳过不适用的测试）。
-- 上次全量覆盖率采集（供应商后续修复前）：行 93.40%、分支 81.28%；性能测试保持约 30 次 store 通知 / 秒。
+- 本轮 Windows 验证：117 个测试文件、714 个测试全部通过；typecheck / lint / build / 安装包白名单 / 离线 frozen-lockfile 校验通过。
+- 2026-10-05 最终 Vitest V8 覆盖率：行与语句 93.66%、分支 82.34%、函数 90.84%。CI 保存 JSON summary 和 LCOV；性能测试保持约 30 次 store 通知 / 秒。
+- 本地安装包为 release/roastcli-0.4.0.tgz；构建 CLI 的版本、蜂群角色模型帮助、非 TTY 提前报错与空 PATH 下的打包 ripgrep 已验证。跨平台 CI 与用户在线供应商尚未在本机验证。
 - 真实 Ink 输出覆盖 40×10、60×16、80×24、120×40，运行中缩到 25×8，2000 行流式输出不触发整屏清空。
 - 尚未验证：Windows Terminal / conhost 的真实 IME 候选框、Shift+Enter，以及用户在线供应商。供应商、Mem0 和 embeddings 使用受控 HTTP 测试，未调用用户在线账户。
 
@@ -28,6 +29,16 @@ M0–M8 的功能实现与自动化验收已完成，包含可选 Mem0、embeddi
 | M8 打磨 | 实现完成 | doctor / init / 配置向导、四主题、终端降级、Mem0 / embeddings、性能与回归验证 |
 
 ## 本轮打磨
+
+### v0.4.0 上下文、工具与蜂群
+
+- 修正 DeepSeek miss tokens 同时作为普通输入和 cacheWrite 累计的问题；历史 reasoning 在 field 模式下保持稳定，要求丢弃旧 reasoning 的服务可用 current。缓存 key 绑定模型/system/tools，Anthropic 的旧边界按实际内容校验，压缩、回退与模型切换不会沿用失效边界。
+- 延后批量折叠，默认廉价模型摘要，失败回退抽取式实现；按 token 加权统计命中率与重试次数。主模型、子代理和摘要请求均按原模型定价并可恢复。
+- 本机近期日志的多步 Kimi 请求已有约 75–95% 命中，单请求会话为 0%；未复现持续低命中，旧 DeepSeek 样本还受计费映射影响。需要分别检查供应商、会话长度和前缀变化；未调用线上推理接口验证升级后的收益，原始私人日志不进入仓库。
+- 滚轮滚动 chat 并保留草稿，回到底部跟随输出；初始蜂群目标跳过 splash。Queen 按已配置模型信息选择未指定角色，用户模型（包括 inherit）受到保护。
+- 图片、MCP resources/templates/prompts、网页搜索及 TS/JS 语义工具落地；跨文件重命名逐文件授权、内容校验和回滚。搜索端点加入项目 trust hash，MCP 图片有累计大小限制。
+- yolo 每条 bash 前快照，turn 首次基线保留；shell 超时提示与输出详情、非 TTY 提前报错、搜索列表、有限历史、管道参数摘要。
+- 直接回归覆盖会话装配、step 重试、工具并发/中断配对、SSE 分帧与取消、注入警示、真实 Ink 滚轮、语义跨文件修改、MCP prompt、摘要与子代理成本恢复。TS 和平台 ripgrep 为运行依赖，Biome/覆盖率接入 CI，install 不再自动构建。
 
 ### v0.2.1 全局配置与启动信任
 
@@ -107,7 +118,7 @@ M0–M8 的功能实现与自动化验收已完成，包含可选 Mem0、embeddi
 ## 保留的保障与设计决定
 
 - JSONL v1 + seq / agentId、request digest、固定工具 schema、共享 history reducer；工具调用和结果配对始终合法。恢复含断尾修复、悬空调用补结果、活进程写锁分叉、v0 导入、fs-state 与权限重建。
-- 确定性的抽取式摘要器继续使用；LLM 摘要器为后续可替换实现，不作为本轮依赖。
+- 模型摘要在会话装配中默认启用；确定性的抽取式实现作为失败兜底，也可通过 context.summaryModel=extractive 单独使用，原文召回与安全切点约束保留。
 - 等待只允许父级等待后代，问题等待有超时；结构约束和看门狗代替额外全局 quiescence 调度器。超过 agent 数量上限明确拒绝。
 - 蜂群拓扑由 Queen 在运行中产生，因此展示实时树，不制造启动前的静态拓扑预览。
 - worktree 文件编辑限制在副本内，依赖使用独立副本；外部执行每次需审批。字节保持、CRLF、非 UTF-8、diff 设置、hooks、UNC / 8.3 路径、配置 trust hash 的回归保障保留。

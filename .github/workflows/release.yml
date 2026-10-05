@@ -49,7 +49,17 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if ! gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
-            gh release create "$GITHUB_REF_NAME" --title "RoastCli $GITHUB_REF_NAME" --generate-notes
+          version="$(node -p 'require("./package.json").version')"
+          notes="docs/RELEASE-${version}.md"
+          test -f "$notes"
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            test "$(gh release view "$GITHUB_REF_NAME" --json isDraft --jq .isDraft)" = "true" || {
+              echo "This release is already public; its assets will not be overwritten."
+              exit 1
+            }
+            gh release edit "$GITHUB_REF_NAME" --notes-file "$notes"
+            gh release upload "$GITHUB_REF_NAME" release/roastcli.tgz release/SHA256SUMS --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" release/roastcli.tgz release/SHA256SUMS --verify-tag --draft --title "RoastCli $GITHUB_REF_NAME" --notes-file "$notes"
           fi
-          gh release upload "$GITHUB_REF_NAME" release/roastcli.tgz release/SHA256SUMS --clobber
+          gh release edit "$GITHUB_REF_NAME" --draft=false --latest

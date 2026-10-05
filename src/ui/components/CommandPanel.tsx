@@ -11,6 +11,7 @@ import type { UiController } from '../controller.js';
 import type { OverlayKind, UiStore } from '../store/store.js';
 import { INIT_TEMPLATE, skillPrompt } from '../commands.js';
 import { formatCost } from '../status-info.js';
+import { formatUsageBreakdown } from '../../core/usage-cost.js';
 import { THEMES } from '../theme.js';
 import { SelectPanel, type SelectEntry } from './SelectPanel.js';
 import { ModelPanel } from './ModelPanel.js';
@@ -65,7 +66,7 @@ export function CommandPanel({ kind, session, store, controller, height }: { kin
       if (entry.id === 'cancel') return setConfirmCancel(true);
       const info = session.swarm.info(agent); setSelected(entry); setBody(info ? `${info.model} · ${info.state}\n\n${info.brief}\n\n${info.report?.summary ?? '尚无报告'}` : '成员已结束');
     }} />;
-    return <SelectPanel key="agents" title="Hive · 成员" height={height} entries={session.swarm.tree().map((info) => ({ id: info.id, label: `${info.id} [${info.role}] ${info.state} · ${info.model}` }))} onClose={close} onSelect={(entry) => setAgent(entry.id)} />;
+    return <SelectPanel key="agents" searchable title="Hive · 成员" height={height} entries={session.swarm.tree().map((info) => ({ id: info.id, label: `${info.id} [${info.role}] ${info.state} · ${info.model} · ${info.brief}` }))} onClose={close} onSelect={(entry) => setAgent(entry.id)} />;
   }
   if (kind === 'board' || kind === 'mcp') {
     const entries = kind === 'board' ? session.swarm.board.list('/').map((entry) => ({ id: entry.key, label: `${entry.key} · v${entry.version} · ${entry.chars} 字` })) : session.mcpStatus().map((entry) => ({ id: entry.name, label: `${entry.name} · ${entry.state} · ${entry.toolCount} 个工具` }));
@@ -74,6 +75,7 @@ export function CommandPanel({ kind, session, store, controller, height }: { kin
   if (kind === 'memory' && prompt) return <PromptPanel title="检索记忆" label="关键词" height={height} onClose={() => setPrompt(false)} onSubmit={async (query) => { const facts = await session.memory.recall(query); setSelected({ id: query, label: `记忆 · ${query}` }); setBody(facts.map((fact) => `[${fact.id}] ${fact.content}`).join('\n') || '没有匹配的记忆'); setPrompt(false); }} />;
   if (kind === 'memory') return <SelectPanel title="项目记忆" height={height} onClose={close} entries={[{ id: 'list', label: '查看记忆' }, { id: 'search', label: '关键词检索' }]} onSelect={(entry) => { setSelected(entry); if (entry.id === 'search') setPrompt(true); else setBody(memory); }} />;
   const usage = store.getState().agents['main']!.totalUsage, cost = session.cost();
+  if (kind === 'cost' && session.costBreakdown) return <MessagePanel title="用量与费用" text={formatUsageBreakdown(session.costBreakdown())} height={height} onClose={close} />;
   const text = kind === 'cost' ? `输入 ${usage.input + usage.cacheRead}\n缓存命中 ${usage.cacheRead}\n输出 ${usage.output}\n缓存写入 ${usage.cacheWrite}\n${cost === null ? '部分模型缺少 pricing，无法完整估算费用' : `约 ${formatCost(cost)}`}` : kind === 'todo' ? renderTodos(store.getState().agents['main']!.todos) : session.log.path;
   return <MessagePanel title={{ cost: '用量与费用', todo: '待办清单', logs: '本次运行日志' }[kind as 'cost' | 'todo' | 'logs'] ?? kind} text={text} height={height} onClose={close} />;
 }

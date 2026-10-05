@@ -5,6 +5,7 @@
 import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
+import { createRequire } from 'node:module';
 
 let cached: { path: string | null; source: string } | null = null;
 
@@ -18,7 +19,13 @@ export function locateRipgrep(): { path: string | null; source: string } {
     const candidate = path.join(dir, exe);
     if (existsSync(candidate)) return (cached = { path: candidate, source: `PATH (${candidate})` });
   }
-  return (cached = { path: null, source: 'JS 回退（未找到 rg）' });
+  try {
+    // Resolve the optional platform package without requiring its ESM wrapper (Node 22.0 compatible).
+    const require = createRequire(createRequire(import.meta.url).resolve('@vscode/ripgrep'));
+    const rgPath = require.resolve(`@vscode/ripgrep-${process.platform}-${process.arch}/bin/${exe}`);
+    if (existsSync(rgPath)) return (cached = { path: rgPath, source: `bundled @vscode/ripgrep (${rgPath})` });
+  } catch { /* Minimal/source installations can still use the JS fallback. */ }
+  return (cached = { path: null, source: 'JS 回退（未找到系统或打包的 rg）' });
 }
 
 /** 测试用：清除缓存 */

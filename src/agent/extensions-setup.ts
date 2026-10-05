@@ -22,6 +22,7 @@ import { defaultBaseURL, resolveApiKey, type RoastConfig } from '../core/config.
 import { readCredential } from '../core/credentials.js';
 import { Mem0Provider } from '../ext/memory/mem0.js';
 import { OpenAiEmbeddings, VectorIndex } from '../ext/rag/embeddings.js';
+import { WEB_SEARCH_KEY } from '../tools/web/search.js';
 
 /** 启动时注入 system prompt 的最近记忆条数 */
 const MEMORY_SECTION_LIMIT = 20;
@@ -93,6 +94,7 @@ export async function setupExtensions(input: ExtensionsSetupInput): Promise<Exte
     postExecute: [injectionGuardHook()],
     warnings: [...warnings, ...(skipped.length ? [`项目级 prompt 覆盖未生效（未信任项目，可运行 roast trust）：${skipped.join(', ')}`] : [])],
     provide(services) {
+      if (input.config?.webSearch) services.set(WEB_SEARCH_KEY, input.config.webSearch);
       services.set(SKILLS_KEY, skills);
       services.set(MEMORY_KEY, memory);
       services.set(CODE_INDEX_KEY, codeIndex);

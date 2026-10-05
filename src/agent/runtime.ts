@@ -10,7 +10,7 @@
  */
 import { asRoastError, RoastError } from '../core/errors.js';
 import { addUsage, emptyUsage, toolCallsOf, userMessage } from '../core/types.js';
-import type { GenerateOptions, TokenUsage } from '../core/types.js';
+import type { GenerateOptions, TokenUsage, Message } from '../core/types.js';
 import type { ModelRef } from '../core/config.js';
 import type { ProviderRegistry } from '../providers/adapter.js';
 import type { ToolContext, ToolExecutorHooks, ToolRegistry, ToolServices } from '../tools/index.js';
@@ -58,10 +58,12 @@ export class AgentRuntime {
   private readonly maxSteps: number;
   private readonly clock: Clock;
   private turn: number;
-  private inbox: string[] = [];
+  private inbox: Array<string | Message> = [];
   private active = false;
   private lastSystemHash = '';
   private lastToolsHash = '';
+  private cachePrefix: string[] = [];
+  private lastCacheKey = '';
   private idleWaiters: (() => void)[] = [];
   private pauseGate: Promise<void> | null = null;
   private resumeGate: (() => void) | null = null;
@@ -88,7 +90,7 @@ export class AgentRuntime {
   /**
    * 运行中排队一条插话（下一个 step 边界送达）。返回 false 表示当前空闲、未入队，调用方应自行 run。
    */
-  enqueue(text: string): boolean {
+  enqueue(text: string | Message): boolean {
     if (!this.active) return false;
     this.inbox.push(text);
     return true;
@@ -101,7 +103,7 @@ export class AgentRuntime {
   }
 
   /** 入队并驱动直到空闲（运行中调用等同于 enqueue，事件由正在进行的 drive 产出） */
-  async *run(userText: string, signal?: AbortSignal): AsyncGenerator<UiEvent> {
+  async *run(userText: string | Message, signal?: AbortSignal): AsyncGenerator<UiEvent> {
     this.inbox.push(userText);
     yield* this.drive(signal);
   }
@@ -114,11 +116,11 @@ export class AgentRuntime {
     try {
       while (this.inbox.length > 0) {
         if (signal.aborted) break;
-        const first = this.inbox.shift() as string;
+        const first = this.inbox.shift()!;
         yield* this.runTurn(first, signal);
       }
       if (signal.aborted && this.inbox.length > 0) {
-        yield { type: 'queue-restored', texts: this.inbox };
+        yield { type: 'queue-restored', texts: this.inbox.map((value) => typeof value === 'string' ? value : value.content.filter((b) => b.type === 'text').map((b) => b.text).join('\n')) };
         this.inbox = [];
       }
     } finally {
@@ -135,7 +137,7 @@ export class AgentRuntime {
     return new Date(this.clock.now()).toISOString();
   }
 
-  private async *runTurn(firstText: string, signal: AbortSignal): AsyncGenerator<UiEvent> {
+  private async *runTurn(firstText: string | Message, signal: AbortSignal): AsyncGenerator<UiEvent> {
     const commit = this.committer.commit.bind(this.committer);
     const turn = ++this.turn;
     let usage: TokenUsage = emptyUsage();
@@ -144,12 +146,15 @@ export class AgentRuntime {
     commit({ type: 'turn/start', turn, at: this.now() });
     yield { type: 'turn-start', turn };
     try {
-      const text = await this.prepareInput(firstText, signal);
+      const rawText = typeof firstText === 'string' ? firstText : firstText.content.filter((b) => b.type === 'text').map((b) => b.text).join('\n');
+      const text = await this.prepareInput(rawText, signal);
       if (typeof text !== 'string') {
         yield* end('error', new RoastError('INVALID_REQUEST', text.blocked));
         return;
       }
-      commit({ type: 'user/message', turn, at: this.now(), message: userMessage(text), source: 'user' });
+      const message = userMessage(text);
+      if (typeof firstText !== 'string') message.content.push(...firstText.content.filter((b) => b.type === 'image'));
+      commit({ type: 'user/message', turn, at: this.now(), message, source: 'user' });
 
       let overflowRetried = false;
       for (let step = 1; step <= this.maxSteps; step++) {
@@ -265,14 +270,17 @@ export class AgentRuntime {
   private async *boundary(turn: number, step: number, signal: AbortSignal): AsyncGenerator<UiEvent> {
     if (step > 1) {
       while (this.inbox.length > 0) {
-        const raw = this.inbox.shift() as string;
+        const queued = this.inbox.shift()!;
+        const raw = typeof queued === 'string' ? queued : queued.content.filter((b) => b.type === 'text').map((b) => b.text).join('\n');
         // 插话与首条输入同样经过 inputGuard / RAG
         const text = await this.prepareInput(raw, signal);
         if (typeof text !== 'string') {
           yield { type: 'error', error: new RoastError('INVALID_REQUEST', `插话未送达模型：${text.blocked}`) };
           continue;
         }
-        this.committer.commit({ type: 'user/message', turn, at: this.now(), message: userMessage(text), source: 'steer' });
+        const message = userMessage(text);
+        if (typeof queued !== 'string') message.content.push(...queued.content.filter((b) => b.type === 'image'));
+        this.committer.commit({ type: 'user/message', turn, at: this.now(), message, source: 'steer' });
         yield { type: 'user-injected', text: raw };
       }
     }
@@ -320,15 +328,23 @@ export class AgentRuntime {
     const maxTokens = this.deps.providers.get(this.deps.modelRef).resolveModel?.(model)?.maxTokens;
     // 发给模型的是"视图"：折叠 / 压缩后的历史（原文仍在历史与日志中）
     const messages = buildView(this.committer.state);
+    const cacheKey = hashOf([this.deps.cwd, this.deps.modelRef.provider, model, systemHash, toolsHash]);
+    const prefix = messages.map((message) => hashOf(message));
+    let cacheBoundary = 0;
+    if (cacheKey === this.lastCacheKey) while (cacheBoundary < prefix.length && prefix[cacheBoundary] === this.cachePrefix[cacheBoundary]) cacheBoundary++;
     const request: Omit<GenerateOptions, 'signal'> = {
       model,
       system,
+      cacheKey,
+      ...(cacheBoundary > 0 ? { cacheBoundary } : {}),
       ...(this.deps.modelRef.reasoningEffort !== undefined ? { reasoningEffort: this.deps.modelRef.reasoningEffort } : {}),
       messages,
       tools,
       ...(maxTokens !== undefined ? { maxTokens } : {}),
       ...(this.deps.temperature !== undefined ? { temperature: this.deps.temperature } : {}),
     };
+    this.cachePrefix = prefix;
+    this.lastCacheKey = cacheKey;
     commit({ type: 'step/start', turn, step, at: this.now() });
     commit({
       type: 'request/digest',

@@ -25,7 +25,7 @@ export interface ContextConfig {
 
 export const DEFAULT_CONTEXT_CONFIG: ContextConfig = {
   compactAt: 0.8,
-  elideAt: 0.5,
+  elideAt: 0.7,
   minSavings: 4000,
   keepTurns: 3,
   agingTurns: 8,

@@ -10,7 +10,7 @@ import type { ShadowGit } from './shadow-git.js';
 
 /** 该次调用是否可能改动工作区文件 */
 export function isMutating(tool: ToolDefinition, args: unknown): boolean {
-  const kind = tool.permission?.kind ?? (tool.isReadOnly ? 'read' : 'execute');
+  const kind = tool.permission?.kindFor?.(args as never) ?? tool.permission?.kind ?? (tool.isReadOnly ? 'read' : 'execute');
   if (kind === 'edit') return true;
   if (kind !== 'execute') return false;
   if (tool.name !== 'bash') return true;
@@ -30,7 +30,7 @@ export class CheckpointManager {
   private readonly byTurn = new Map<number, string>();
   private commit: ((body: SessionEventBody) => unknown) | null = null;
 
-  constructor(private readonly shadow: ShadowGit) {}
+  constructor(private readonly shadow: ShadowGit, private readonly mode?: () => string) {}
 
   attach(commit: (body: SessionEventBody) => unknown): void {
     this.commit = commit;
@@ -39,7 +39,7 @@ export class CheckpointManager {
   /** resume：从日志恢复检查点索引（rewind 之后的检查点作废） */
   restoreFromEvents(events: readonly SessionEvent[]): void {
     for (const ev of events) {
-      if (ev.type === 'checkpoint') this.byTurn.set(ev.turn, ev.hash);
+      if (ev.type === 'checkpoint' && !this.byTurn.has(ev.turn)) this.byTurn.set(ev.turn, ev.hash);
       else if (ev.type === 'rewind') this.dropFrom(ev.toTurn);
     }
   }
@@ -55,10 +55,11 @@ export class CheckpointManager {
   hook(): PreExecuteHook {
     return async (tool, args, ctx) => {
       const turn = ctx.turn;
-      if (turn === undefined || this.byTurn.has(turn) || !isMutating(tool, args)) return { action: 'allow' };
-      const hash = await this.shadow.snapshot(`turn ${turn}`);
+      const everyBash = this.mode?.() === 'yolo' && tool.name === 'bash';
+      if (turn === undefined || (!everyBash && (this.byTurn.has(turn) || !isMutating(tool, args)))) return { action: 'allow' };
+      const hash = await this.shadow.snapshot(`turn ${turn}${ctx.callId ? ` · ${ctx.callId}` : ''}`);
       if (hash) {
-        this.byTurn.set(turn, hash);
+        if (!this.byTurn.has(turn)) this.byTurn.set(turn, hash);
         this.commit?.({ type: 'checkpoint', at: new Date().toISOString(), turn, hash });
       }
       return { action: 'allow' };

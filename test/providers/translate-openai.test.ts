@@ -19,7 +19,7 @@ describe('openai-compat mapUsage', () => {
   it('把 cache hit 从 prompt_tokens 中减出（disjoint）', () => {
     expect(
       mapUsage({ prompt_tokens: 100, completion_tokens: 20, prompt_cache_hit_tokens: 40, prompt_cache_miss_tokens: 60 }),
-    ).toEqual({ input: 60, output: 20, cacheRead: 40, cacheWrite: 60 });
+    ).toEqual({ input: 60, output: 20, cacheRead: 40, cacheWrite: 0 });
   });
 
   it('缺省 cache 字段时全部为 0', () => {
@@ -118,7 +118,7 @@ describe('openai-compat translate', () => {
     ]);
     expect(chunks.at(-2)).toEqual({
       type: 'usage',
-      usage: { input: 10, output: 1, cacheRead: 90, cacheWrite: 10 },
+      usage: { input: 10, output: 1, cacheRead: 90, cacheWrite: 0 },
     });
     expect(chunks.at(-1)).toEqual({ type: 'finish', reason: 'stop' });
   });

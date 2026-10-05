@@ -10,7 +10,7 @@ export default defineConfig({
       provider: 'v8',
       include: ['src/**/*.{ts,tsx}'],
       exclude: ['src/entrypoints/**', 'src/ext/*.ts'],
-      reporter: ['text-summary', 'text'],
+      reporter: ['text-summary', 'json-summary', 'lcov'],
     },
   },
 });

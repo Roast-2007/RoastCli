@@ -43,10 +43,11 @@ export interface WireUsage {
 export function mapUsage(usage: WireUsage): TokenUsage {
   const cacheRead = usage.prompt_cache_hit_tokens ?? usage.prompt_tokens_details?.cached_tokens ?? 0;
   return {
-    input: Math.max(0, (usage.prompt_tokens ?? 0) - cacheRead),
+    input: Math.max(0, (usage.prompt_tokens ?? ((usage.prompt_cache_miss_tokens ?? 0) + cacheRead)) - cacheRead),
     output: usage.completion_tokens ?? 0,
     cacheRead,
-    cacheWrite: usage.prompt_cache_miss_tokens ?? 0,
+    // DeepSeek misses are ordinary input, not separately billed cache creation.
+    cacheWrite: 0,
   };
 }
 

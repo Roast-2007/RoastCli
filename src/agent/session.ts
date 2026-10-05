@@ -36,6 +36,8 @@ import { setupMcp } from './mcp-setup.js';
 import { assembleSession } from './session-assembly.js';
 import type { TransportFactory } from '../ext/mcp/manager.js';
 import type { McpServerStatus } from '../ext/mcp.js';
+import type { McpPromptCommand } from '../ext/mcp/manager.js';
+import type { ContentBlock } from '../core/types.js';
 import type { SkillRegistry } from '../ext/skills.js';
 import type { MemoryProvider } from '../ext/memory.js';
 import type { UiEvent } from './ui-events.js';
@@ -55,8 +57,10 @@ export interface Session {
   switchModel(model: string, effort?: ReasoningEffort | null): void;
   listModels(opts?: { refresh?: boolean; signal?: AbortSignal }): Promise<ModelCatalog>;
   setSwarmModel(role: AgentRole, model: string, effort?: ReasoningEffort | null): void;
+  configureSwarmModels?(models: Partial<Record<AgentRole, string>>): void;
   /** 主会话费用估算；任一已用模型缺少定价时返回 null。 */
   cost(): number | null;
+  costBreakdown?(): import('../core/usage-cost.js').UsageBreakdown;
   resume(logPath: string): Promise<Session>;
   instructions: InstructionFile[];
   /** 已加载的技能（/技能名 斜杠命令、命令面板） */
@@ -73,6 +77,8 @@ export interface Session {
   startupWarnings: string[];
   /** MCP 服务器连接状态（/mcp） */
   mcpStatus(): McpServerStatus[];
+  mcpPrompts?(): McpPromptCommand[];
+  mcpPromptContent?(command: string, args: string, signal?: AbortSignal): Promise<ContentBlock[]>;
   /** 上下文占用统计（/context） */
   contextStats(): ContextStats;
   /** /context pin | unpin | drop：手动调整上下文（运行中调用会抛错），返回说明 */
@@ -97,6 +103,7 @@ export interface CreateSessionOptions {
   cwd?: string;
   /** 覆盖 config.default（"provider:model"） */
   modelRef?: string;
+  roleModels?: Partial<Record<AgentRole, string>>;
   extensions?: ExtensionPoints;
   /** 从该运行日志恢复（-c / -r） */
   resumeLogPath?: string;
@@ -154,8 +161,10 @@ function requireConfig(cwd: string, injected: RoastConfig | undefined): RoastCon
 
 export async function createSession(opts: CreateSessionOptions = {}): Promise<Session> {
   const cwd = opts.cwd ?? process.cwd();
-  const config = requireConfig(cwd, opts.config);
-  const ref = chooseModel(config, opts.modelRef, opts.resumeLogPath);
+  const baseConfig = requireConfig(cwd, opts.config);
+  const config = { ...baseConfig, swarm: { ...baseConfig.swarm, models: { ...baseConfig.swarm.models, ...opts.roleModels } } };
+  const queen = config.swarm.models.queen;
+  const ref = chooseModel(config, opts.modelRef ?? (queen && queen !== 'inherit' ? queen : undefined), opts.resumeLogPath);
   assertProviderTrusted(cwd, ref.provider);
   // 子 agent 可按角色路由到其他 provider：同样要求其连接信息可信（否则仓库可借 swarm.models 把密钥发往自己的地址）
   for (const r of Object.values(config.swarm.models ?? {})) if (r !== 'inherit') assertProviderTrusted(cwd, parseModelRef(r).provider);

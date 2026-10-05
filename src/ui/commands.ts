@@ -13,6 +13,8 @@ import { findRunLog } from '../cli/logs.js';
 import { logsRootOf } from '../agent/session.js';
 import { formatContextStats } from './format-context.js';
 import { formatCost } from './status-info.js';
+import { formatUsageBreakdown } from '../core/usage-cost.js';
+import { parseRoleModels } from '../swarm/model-routing.js';
 import { pickTheme, THEMES } from './theme.js';
 import type { SkillMeta } from '../ext/skills.js';
 import { isProjectTrusted, roastHome, ReasoningEffortSchema } from '../core/config.js';
@@ -40,7 +42,7 @@ export const KEYS_HELP = [
   '  Enter 发送 · Shift+Enter / Ctrl+J / 行尾 \\ 换行 · ↑↓ 选择 · Tab 补全 · Ctrl+R 搜索历史',
   '  ? / F1 帮助 · Esc 中断（空闲时连按两次：回退菜单）· Ctrl+C 中断 / 退出',
   '  Shift+Tab 切换权限模式 · Ctrl+O 最近工具的完整输出 · Ctrl+G Mission Control',
-  '  Shift+↑↓ / PgUp 进入连续阅读 · ↑↓ 滚动 · Home 顶部 · End / Enter / Esc 返回输入',
+  '  鼠标滚轮翻阅聊天 · Shift+↑↓ / PgUp 阅读 · Home 顶部 · End / Enter / Esc 返回输入',
   '  前缀：/ 命令 · @ 文件 · ! shell · # 记忆',
 ].join('\n');
 
@@ -77,6 +79,9 @@ export function appendMemory(cwd: string, note: string): string {
 
 /** /swarm [模板] <目标>：按策略模板生成给 Queen 的指令并发送；不带参数时列出模板 */
 function swarm(ctx: CommandContext, args: string): void {
+  const roleModels: string[] = [];
+  args = args.replace(/(?:^|\s)--role-model\s+(\S+)/g, (_match, value: string) => { roleModels.push(value); return ' '; }).trim();
+  if (roleModels.length) ctx.session.configureSwarmModels?.(parseRoleModels(roleModels));
   if (args === 'models' && ctx.openOverlay) return ctx.openOverlay('hive-models');
   const cwd = ctx.session.log.header.cwd;
   const templates = loadTemplates(cwd, roastHome(), { trusted: isProjectTrusted(cwd) });
@@ -156,9 +161,10 @@ export const COMMANDS: SlashCommand[] = [
   } },
   {
     name: 'cost',
-    description: '本次会话的 token 用量',
+    description: '按 turn / agent / provider / model 查看用量与费用',
     run: (ctx) => {
       if (ctx.openOverlay) return ctx.openOverlay('cost');
+      if (ctx.session.costBreakdown) return say(ctx, formatUsageBreakdown(ctx.session.costBreakdown()));
       const u = ctx.store.getState().agents['main']!.totalUsage;
       const estimate = ctx.session.cost();
       const cost = estimate !== null ? ` · 约 ${formatCost(estimate)}` : '（部分模型缺少 pricing，无法完整估算费用）';
@@ -258,6 +264,9 @@ export async function runSlash(text: string, ctx: CommandContext): Promise<boole
 /** 技能也作为斜杠命令出现在命令面板中（内置命令同名时内置优先） */
 export function skillCommands(skills: readonly SkillMeta[]): CommandInfo[] {
   return skills.filter((s) => !findCommand(s.name)).map((s) => ({ name: s.name, description: `技能 · ${s.description}`, args: '[参数]' }));
+}
+export function mcpPromptCommands(session: Session): CommandInfo[] {
+  return (session.mcpPrompts?.() ?? []).map((prompt) => ({ name: prompt.command, description: `MCP · ${prompt.description ?? prompt.name}`, args: prompt.arguments?.map((arg) => `${arg.required ? '<' : '['}${arg.name}${arg.required ? '>' : ']'}`).join(' ') }));
 }
 
 /** /技能名 参数 → 发给模型的提示 */

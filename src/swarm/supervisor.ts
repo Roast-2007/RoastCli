@@ -6,6 +6,7 @@
  * - 结构上无死锁：只有"父等后代"这一种阻塞关系
  */
 import path from 'node:path';
+import { existsSync, readdirSync } from 'node:fs';
 import type { AgentRuntime } from '../agent/runtime.js';
 import type { BoundaryHooks } from '../agent/boundary.js';
 import type { UiEvent } from '../agent/ui-events.js';
@@ -20,6 +21,7 @@ import type { Address, AgentInfo, AgentRole, Envelope, Report } from './types.js
 import { formatMerge, reportWorktreeNote, wantsWorktree, worktreeNote, type IsolationMode, type WorktreeProvider } from './isolation.js';
 import type { Worktree } from './worktree.js';
 import { ProgressWatchdog } from './watchdog.js';
+import type { SessionEvent } from '../session/events.js';
 
 export interface CreateRuntimeInput {
   id: string;
@@ -41,9 +43,11 @@ export interface SupervisorDeps {
   createRuntime(input: CreateRuntimeInput): AgentRuntime;
   createServices(agentId: string): ToolServices;
   modelFor(role: AgentRole, override?: string, effort?: ReasoningEffort | null): ModelRef;
+  roleModels?: Partial<Record<AgentRole, string>>;
   maxAgents?: number;
   maxDepth?: number;
   onAgentEvent?(agentId: string, ev: UiEvent): void;
+  onSessionEvent?(ref: ModelRef, event: SessionEvent): void;
   onChange?(): void;
   /** 子 agent 运行结束（释放租约等） */
   onAgentEnd?(agentId: string): void;
@@ -134,6 +138,8 @@ export class Supervisor {
   }
 
   registerRoot(id: string, model: string): void {
+    const dir = path.join(path.dirname(this.deps.mainLogPath), 'agents');
+    if (existsSync(dir)) for (const name of readdirSync(dir)) { const match = /^[qlwscj](\d+)\.jsonl$/.exec(name); if (match) this.seq = Math.max(this.seq, Number(match[1])); }
     this.recs.set(id, this.makeRec({ id, parentId: null, role: 'queen', depth: 0, state: 'running', brief: '主会话', model, startedAt: this.now(), children: [] }, this.deps.cwd));
   }
 
@@ -207,7 +213,11 @@ export class Supervisor {
     if (parent.info.depth + 1 > maxDepth) return { ok: false, reason: `已达最大层级 ${maxDepth}` };
     if (parent.controller.signal.aborted) return { ok: false, reason: '上级已取消，不能派生新 agent' };
     let modelRef: ModelRef;
-    try { modelRef = { ...this.deps.modelFor(opts.role, opts.model, opts.reasoningEffort) }; }
+    try {
+      const userRoute = this.deps.roleModels?.[opts.role];
+      if (userRoute && opts.model && opts.model !== userRoute) throw new Error(`${opts.role} 已由用户指定为 ${userRoute}`);
+      modelRef = { ...this.deps.modelFor(opts.role, userRoute ? undefined : opts.model ?? this.roleModels.get(opts.role), opts.reasoningEffort) };
+    }
     catch (err) { return { ok: false, reason: err instanceof Error ? err.message : '模型选择失败' }; }
     const id = `${ROLE_INFO[opts.role].prefix}${++this.seq}`;
     const rec = this.makeRec({
@@ -231,6 +241,19 @@ export class Supervisor {
     void run.finally(() => this.runs.delete(run));
     this.deps.onChange?.();
     return { ok: true, id };
+  }
+
+  private roleModels = new Map<AgentRole, string>();
+  configureModels(caller: string, models: Partial<Record<AgentRole, string>>): string {
+    if (this.recs.get(caller)?.info.parentId !== null) throw new Error('只有 Queen 可以设置蜂群角色模型');
+    for (const [role, model] of Object.entries(models)) {
+      if (role === 'queen') throw new Error('Queen 模型请用 /model 或 --role-model queen=provider:model 设置');
+      const userRoute = this.deps.roleModels?.[role as AgentRole];
+      if (userRoute && userRoute !== model) throw new Error(`${role} 已由用户指定为 ${userRoute}`);
+      this.deps.modelFor(role as AgentRole, model === 'inherit' ? undefined : model);
+    }
+    for (const [role, model] of Object.entries(models)) { if (model === 'inherit') this.roleModels.delete(role as AgentRole); else this.roleModels.set(role as AgentRole, model); }
+    return Object.entries(models).map(([role, model]) => `${role}=${model}`).join(', ');
   }
 
   /** 按隔离策略准备工作区；返回追加到角色卡的说明 */
@@ -282,6 +305,7 @@ export class Supervisor {
       rec.runtime = runtime;
       const watchdog = new ProgressWatchdog(() => this.watchdogSteps);
       offWatchdog = runtime.committer?.onCommit((event) => {
+        this.deps.onSessionEvent?.(modelRef, event);
         const alert = watchdog.observe(event);
         if (!alert || !rec.info.parentId || rec.controller.signal.aborted || rec.info.report) return;
         this.deliver(rec.info.parentId, this.systemEnvelope(id, rec.info.parentId, 'alert', `${id} 需要检查进展`,

@@ -34,11 +34,11 @@ beforeEach(async () => {
   vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ data: [{ id: 'm' }] }))));
 });
 afterEach(async () => { const exited = instance?.waitUntilExit(); instance?.unmount(); await exited; instance?.cleanup(); instance = undefined; controller?.dispose(); await session.shutdown(); vi.unstubAllGlobals(); vi.unstubAllEnvs(); });
-function workspace(columns = 80, rows = 24, startup = false) {
+function workspace(columns = 80, rows = 24, startup = false, initialPrompt?: string) {
   const store = createUiStore(); controller = createUiController(session, store, { exit() {} });
   const tty = new Terminal(columns, rows), stdin = new Input();
   const draft: { seed?: number; state?: EditorState } = {};
-  const app = () => <App session={session} store={store} controller={controller} fullScreen startup={startup} inputDraft={draft} />;
+  const app = () => <App session={session} store={store} controller={controller} fullScreen startup={startup} inputDraft={draft} initialPrompt={initialPrompt} />;
   instance = render(app(), { stdout: tty as unknown as NodeJS.WriteStream, stdin: stdin as unknown as NodeJS.ReadStream, interactive: true, patchConsole: false, alternateScreen: true, incrementalRendering: false, exitOnCtrlC: false });
   return { store, tty, stdin, draft, app };
 }
@@ -56,6 +56,33 @@ async function frameContains(tty: Terminal, text: string) {
 }
 
 describe('fullscreen workspace in real Ink', () => {
+  it('wheel scrolls the chat, accumulates rapid events, preserves the draft and follows the bottom again', async () => {
+    const { store, stdin, tty, draft } = workspace();
+    store.setMeta({ inputSeed: { key: 1, text: 'pending draft' } });
+    store.addNotice('main', Array.from({ length: 100 }, (_, i) => `wheel-line-${i}`).join('\n'));
+    await frameContains(tty, 'wheel-line-99');
+    expect(tty.chunks.join('')).toContain('\x1b[?1006h');
+    stdin.write('\x1b[<64;10;5M'); await frameContains(tty, '阅读 · ');
+    const first = Number(/阅读 · (\d+)/.exec(tty.frames().at(-1)!)![1]);
+    for (let i = 0; i < 4; i++) stdin.write('\x1b[<64;10;5M');
+    await frameContains(tty, `阅读 · ${first - 12}–`);
+    expect(draft.state?.lines.join('\n')).toBe('pending draft');
+    for (let i = 0; i < 5; i++) stdin.write('\x1b[<65;10;5M');
+    await frameContains(tty, 'wheel-line-99');
+    expect(tty.frames().at(-1)).not.toMatch(/阅读 · \d/);
+    store.addNotice('main', 'wheel new tail'); await frameContains(tty, 'wheel new tail');
+    expect(draft.state?.lines.join('\n')).toBe('pending draft'); fits(tty);
+    instance!.unmount(); await instance!.waitUntilExit(); instance!.cleanup(); instance = undefined;
+    expect(tty.chunks.join('')).toContain('\x1b[?1006l');
+  });
+  it('submits an initial prompt immediately with startup animation enabled', async () => {
+    session.config.ui = { motion: 'full' };
+    const { tty, store } = workspace(80, 24, true, 'initial objective');
+    await vi.waitFor(() => expect(store.getState().agents.main!.items.some((i) => i.kind === 'user')).toBe(true));
+    await controller.whenIdle(); await instance!.waitUntilRenderFlush();
+    expect(tty.frames().join('\n')).not.toContain('TERMINAL WORKSPACE');
+    expect(tty.frames().join('\n')).toContain('initial objective');
+  });
   it('runs a complete 2000-line answer, returns to its beginning and keeps all frames bounded', async () => {
     const cwd = session.log.header.cwd, config = session.config;
     await session.shutdown();

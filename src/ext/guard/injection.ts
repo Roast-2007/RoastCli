@@ -22,7 +22,7 @@ export function injectionWarning(text: string): string | null {
 }
 
 /** 只检查读取外部内容的工具结果 */
-const SCANNED = new Set(['read', 'web_fetch', 'grep', 'bash', 'bash_output', 'search_code']);
+const SCANNED = new Set(['read', 'web_fetch', 'web_search', 'grep', 'bash', 'bash_output', 'search_code']);
 
 /** MCP 工具的结果来自外部服务器，是主要的注入面 */
 function scanned(name: string): boolean {

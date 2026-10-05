@@ -42,7 +42,9 @@ export class OpenAICompatAdapter implements ProviderAdapter {
 
   private requestBody(options: GenerateOptions): Record<string, unknown> {
     const meta = this.profile.models?.[options.model];
-    return buildRequest(options, meta?.reasoningReplay ?? 'drop', meta?.maxTokensField ?? defaultMaxTokensField(options.model), options.reasoningEffort === null ? undefined : options.reasoningEffort ?? meta?.reasoningEffort);
+    const request = buildRequest(options, meta?.reasoningReplay ?? 'drop', meta?.maxTokensField ?? defaultMaxTokensField(options.model), options.reasoningEffort === null ? undefined : options.reasoningEffort ?? meta?.reasoningEffort);
+    if (options.cacheKey && (this.profile.promptCaching === true || (this.profile.promptCaching !== false && new URL(this.options.baseURL).hostname === 'api.openai.com'))) request['prompt_cache_key'] = options.cacheKey;
+    return request;
   }
 
   async *stream(options: GenerateOptions): AsyncGenerator<StreamChunk> {

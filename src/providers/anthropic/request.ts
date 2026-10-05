@@ -40,7 +40,7 @@ function wireBlock(b: ContentBlock, role: Message['role']): unknown | null {
     case 'tool-result':
       // tool_result 只能出现在 user 消息里
       if (role !== 'user') return null;
-      return { type: 'tool_result', tool_use_id: b.toolCallId, content: blocksToText(b.content), is_error: b.isError ?? false };
+      return { type: 'tool_result', tool_use_id: b.toolCallId, content: b.content.some((c) => c.type === 'image') ? b.content.filter((c) => c.type === 'text' || c.type === 'image').map((c) => wireBlock(c, 'user')) : blocksToText(b.content), is_error: b.isError ?? false };
     case 'reasoning':
       if (role !== 'assistant') return null;
       if (b.redactedData !== undefined) return { type: 'redacted_thinking', data: b.redactedData };
@@ -80,11 +80,15 @@ const THINKING_HEADROOM = 4096;
 const EPHEMERAL = { type: 'ephemeral' } as const;
 
 /** 给最后一条消息的最后一个 block 打缓存断点（不修改入参） */
-function markLastMessage(messages: unknown[]): unknown[] {
-  const last = messages.at(-1) as { role: string; content: Record<string, unknown>[] } | undefined;
-  if (!last || last.content.length === 0) return messages;
-  const content = last.content.map((b, i) => (i === last.content.length - 1 ? { ...b, cache_control: EPHEMERAL } : b));
-  return [...messages.slice(0, -1), { ...last, content }];
+function markLastMessage(messages: unknown[], boundary?: number): unknown[] {
+  const indices = new Set([messages.length - 1, ...(boundary && boundary < messages.length ? [boundary - 1] : [])]);
+  return messages.map((value, index) => {
+    const msg = value as { role: string; content: Record<string, unknown>[] };
+    if (!indices.has(index)) return value;
+    let last = msg.content.length - 1;
+    while (last >= 0 && ['thinking', 'redacted_thinking'].includes(String(msg.content[last]!['type']))) last--;
+    return { ...msg, content: msg.content.map((b, i) => i === last ? { ...b, cache_control: EPHEMERAL } : b) };
+  });
 }
 
 export function buildRequest(options: GenerateOptions, opts: AnthropicRequestOptions = {}): Record<string, unknown> {
@@ -96,7 +100,7 @@ export function buildRequest(options: GenerateOptions, opts: AnthropicRequestOpt
   const request: Record<string, unknown> = {
     model: options.model,
     max_tokens: budget ? Math.max(maxTokens, budget + THINKING_HEADROOM) : maxTokens,
-    messages: cache ? markLastMessage(out) : out,
+    messages: cache ? markLastMessage(out, options.cacheBoundary) : out,
     stream: true,
   };
   if (system) request['system'] = cache ? [{ type: 'text', text: system, cache_control: EPHEMERAL }] : system;

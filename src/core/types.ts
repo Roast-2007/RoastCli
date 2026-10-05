@@ -22,7 +22,7 @@ export interface ReasoningBlock {
   redactedData?: string;
 }
 
-/** base64 编码图片（未来多模态用，本期工具层不产出） */
+/** base64 编码图片；read_image、MCP 和两种供应商协议共用。 */
 export interface ImageBlock {
   type: 'image';
   mediaType: string;
@@ -125,6 +125,10 @@ export type StreamChunk =
 export interface GenerateOptions {
   model: string;
   reasoningEffort?: import('./config.js').ReasoningEffort | null;
+  /** Stable routing key; adapters send it only to opted-in compatible endpoints. */
+  cacheKey?: string;
+  /** Message count in the preceding request, for a second Anthropic cache breakpoint. */
+  cacheBoundary?: number;
   /** 已组装好的系统 prompt */
   system?: string;
   messages: Message[];

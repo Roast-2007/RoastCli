@@ -2,7 +2,7 @@
  * 工具执行管线：preExecute hooks → zod 校验 → validateInput → execute（含超时）→ postExecute hooks。
  * 全程不向外抛（除非调用方 abort），所有失败归一化为 ToolResult{isError:true}。
  */
-import { asRoastError } from '../core/errors.js';
+import { asRoastError, RoastError } from '../core/errors.js';
 import {
   emptyHooks,
   toolErrorResult,
@@ -61,7 +61,14 @@ export async function executeTool(
     const signal = def.timeoutMs
       ? AbortSignal.any([ctx.signal, AbortSignal.timeout(def.timeoutMs)])
       : ctx.signal;
-    let result = await def.execute(parsed.data, { ...ctx, signal });
+    const checkTargets = async (paths: string[]) => {
+      for (const target of paths) for (const hook of hooks.preExecute) {
+        const decision = await hook({ ...def, permission: { ...def.permission, target: () => target } }, parsed.data, { ...ctx, signal });
+        if (decision.action === 'deny') throw new RoastError('INVALID_REQUEST', `工具 ${def.name} 执行被拒绝 (${target}): ${decision.reason ?? '权限拒绝'}`);
+        if (decision.args !== undefined && JSON.stringify(decision.args) !== JSON.stringify(parsed.data)) throw new RoastError('INVALID_REQUEST', '多文件操作的授权钩子改写了参数，请使用改写后的参数重试');
+      }
+    };
+    let result = await def.execute(parsed.data, { ...ctx, signal, checkTargets });
 
     // 5. postExecute hooks：可替换结果
     for (const hook of hooks.postExecute) {

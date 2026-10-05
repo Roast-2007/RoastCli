@@ -2,9 +2,19 @@
 
 > M0–M8 功能实现与自动化验收已完成（2026-10-04）；原生终端与在线服务的验证边界见 [STATUS.md](STATUS.md)。设计见 [DESIGN.md](DESIGN.md)。
 
+## v0.4.0（2026-10-05）
+
+- [x] 缓存计费修正、稳定 reasoning/cache key、历史边界校验、廉价模型摘要及可关闭兜底
+- [x] chat 鼠标滚轮阅读、初始目标跳过动画、列表搜索、可配置 shell 超时和有限输入历史
+- [x] 用户角色模型优先、Queen 自动选择未指定角色、turn/agent/provider/model 费用归因
+- [x] read_image、MCP resources/templates/prompts、web_search、TS/JS 语义引用和跨文件重命名
+- [x] yolo 每条 bash 快照、平台 ripgrep、Biome、覆盖率 CI、会话/SSE/工具调度直接回归
+
+其他语言的完整 LSP 客户端仍可后续扩展，当前通过 MCP 提供对应语义工具。
+
 ## 产品目标
 做一个和市面 CLI 有明显差异的编码 agent，四个主轴：
-1. **极致易用、美观的 TUI**：inline 对话为主，Ctrl+G 进入全屏 Mission Control。
+1. **极致易用、美观的 TUI**：全屏对话为主，Ctrl+G 进入 Mission Control；inline 保留给嵌入场景。
 2. **无损上下文引擎**：旧内容折叠而不删除，模型可以 `recall` 回来；对 provider 前缀缓存友好。
 3. **全部扩展缝落地**：skills、MCP、memory、RAG、审计、guard、prompts、hooks、plan。
 4. **Hive 蜂群**：Queen → Lead → Worker 三层加专家角色，通过消息总线和黑板互相通信；不设 token 预算，用 token 换质量；通信本身不占上下文。
