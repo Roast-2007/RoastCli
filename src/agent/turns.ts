@@ -16,7 +16,8 @@ export function userTurns(state: HistoryState): TurnSummary[] {
     .map(([t, before]) => {
       const msg = state.messages[before.length];
       const first = msg?.role === 'user' ? msg.content.find((b) => b.type === 'text') : undefined;
-      const raw = first && first.type === 'text' ? first.text.split('\n')[0]!.trim() : '';
+      const text = first && first.type === 'text' ? first.text : '';
+      const raw = (/<goal>\s*([\s\S]*?)\s*<\/goal>/.exec(text)?.[1] ?? text).split('\n')[0]!.trim();
       return { turn: Number(t), text: raw.length > MAX_TEXT ? `${raw.slice(0, MAX_TEXT)}…` : raw };
     })
     .filter((t) => t.text !== '')

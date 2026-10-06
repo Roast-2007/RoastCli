@@ -43,6 +43,7 @@ export interface AgentInfo {
   /** A pending user interaction, visible to Queen and both TUI screens. */
   waitingFor?: string;
   brief: string;
+  taskId?: string;
   model: string;
   reasoningEffort?: import('../core/config.js').ReasoningEffort | null;
   startedAt: number;

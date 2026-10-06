@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import type { Session } from '../../agent/session.js';
 import { isProjectTrusted, roastHome } from '../../core/config.js';
 import { saveConfigPatch } from '../../cli/provider-settings.js';
-import { buildSwarmPrompt, loadTemplates } from '../../swarm/templates.js';
+import { missionInput, loadStrategies } from '../../swarm/strategies.js';
 import { MODE_CYCLE, type PermissionMode } from '../../tools/permissions/engine.js';
 import { renderTodos } from '../../tools/interact/index.js';
 import type { UiController } from '../controller.js';
@@ -26,7 +26,7 @@ export function CommandPanel({ kind, session, store, controller, height }: { kin
   const [confirmCancel, setConfirmCancel] = useState(false);
   const close = () => store.setMeta({ overlay: null });
   const cwd = session.log.header.cwd;
-  const templates = useMemo(() => kind === 'swarm' ? loadTemplates(cwd, roastHome(), { trusted: isProjectTrusted(cwd) }) : new Map(), [kind, cwd]);
+  const templates = useMemo(() => kind === 'swarm' ? loadStrategies(cwd, roastHome(), { trusted: isProjectTrusted(cwd) }) : new Map(), [kind, cwd]);
   useEffect(() => {
     if (kind !== 'memory') return;
     let cancelled = false;
@@ -51,7 +51,7 @@ export function CommandPanel({ kind, session, store, controller, height }: { kin
   }} />;
   if (kind === 'swarm' || kind === 'skills') {
     if (selected && prompt) return <PromptPanel title={selected.label} label={kind === 'swarm' ? '任务目标' : '技能参数（可留空）'} optional={kind === 'skills'} height={height} onClose={() => setPrompt(false)} onSubmit={(text) => {
-      const result = kind === 'swarm' ? buildSwarmPrompt(templates, text, selected.id) : skillPrompt(selected.id, text);
+      const result = kind === 'swarm' ? missionInput(templates, text, selected.id, session.config.swarm.n) : skillPrompt(selected.id, text);
       close(); controller.submit(result, kind === 'swarm' ? `/swarm ${selected.id} ${text}` : `/${selected.id} ${text}`);
     }} />;
     const entries = kind === 'swarm' ? [{ id: 'models', label: '配置各角色模型与 effort' }, ...[...templates.values()].map((template) => ({ id: template.name, label: `${template.name} · ${template.description}` }))] : session.skills.list().map((skill) => ({ id: skill.name, label: `${skill.name} · ${skill.description}` }));

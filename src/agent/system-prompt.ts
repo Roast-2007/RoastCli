@@ -5,6 +5,8 @@
  * prompt 管理（外部文件覆盖内置 section、版本号）后续在 PromptStore 上扩展。
  */
 
+import { IDENTITY_PROMPT } from '../swarm/prompts.js';
+
 export interface PromptSection {
   name: string;
   /** 排序权重，小的在前 */
@@ -50,13 +52,7 @@ export function registerBaseSections(assembler: SystemPromptAssembler, env: { cw
   assembler.register({
     name: 'identity',
     order: 0,
-    text: `You are Roast, a coding assistant running in a CLI. You help users with software engineering tasks: reading and editing code, running commands, debugging, and explaining.
-
-Guidelines:
-- Use the provided tools to interact with the filesystem and shell instead of asking the user to run commands.
-- Make minimal, focused changes. Match the project's existing conventions.
-- Be concise in your responses; the user reads them in a terminal.
-- Never fabricate file contents or command output — read or run to verify.`,
+    text: IDENTITY_PROMPT,
   });
   assembler.register({
     name: 'environment',

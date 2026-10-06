@@ -107,6 +107,8 @@ export const ConfigSchema = z.object({
   /** Hive 蜂群：按角色路由模型（"provider:model"）与规模上限 */
   swarm: z
     .object({
+      strategy: z.string().min(1).default('auto'),
+      n: z.number().int().min(2).max(8).default(3),
       models: z.record(z.enum(['queen', 'lead', 'worker', 'scout', 'critic', 'judge']), z.string()).optional(),
       efforts: z.record(z.enum(['queen', 'lead', 'worker', 'scout', 'critic', 'judge']), ReasoningEffortSchema.nullable()).optional(),
       maxAgents: z.number().int().min(1).max(64).default(12),
@@ -160,7 +162,9 @@ export const ConfigSchema = z.object({
 
 export type ModelMeta = z.infer<typeof ModelMetaSchema>;
 export type ProviderProfile = z.infer<typeof ProviderProfileSchema>;
-export type RoastConfig = z.infer<typeof ConfigSchema>;
+type ParsedConfig = z.infer<typeof ConfigSchema>;
+/** Programmatic callers may omit Hive preferences; parsed configuration resolves defaults. */
+export type RoastConfig = Omit<ParsedConfig, 'swarm'> & { swarm: Omit<ParsedConfig['swarm'], 'strategy' | 'n'> & { strategy?: string; n?: number } };
 
 export interface ModelRef {
   provider: string;

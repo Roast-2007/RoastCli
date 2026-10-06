@@ -72,6 +72,7 @@ export type SessionEventBody =
   /** 完整请求体（仅 debugLog） */
   | { type: 'request/body'; turn: number; step: number; at: string; request: Omit<GenerateOptions, 'signal'> }
   | { type: 'user/message'; turn: number; at: string; message: Message; source?: UserMessageSource }
+  | { type: 'hive/mission'; turn: number; at: string; missionId: string; goal: string; strategy: string; n: number; brief: string; readOnly?: boolean }
   /** 流式 chunk（仅 debugLog；不参与投影） */
   | { type: 'assistant/chunk'; turn: number; step: number; chunk: StreamChunk }
   | { type: 'assistant/message'; turn: number; step: number; at: string; message: Message; usage?: TokenUsage; finishReason?: string }
@@ -125,6 +126,7 @@ export const KNOWN_EVENT_TYPES: readonly SessionEventType[] = [
   'tools/snapshot',
   'request/body',
   'user/message',
+  'hive/mission',
   'assistant/chunk',
   'assistant/message',
   'tool/call',

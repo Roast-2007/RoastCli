@@ -55,6 +55,7 @@ export const spawnAgentTool = defineTool({
   parameters: z.object({
     role: z.enum(SPAWNABLE),
     task: z.string().min(1).describe('清晰、自包含的任务描述（子 agent 看不到你的对话历史）'),
+    task_id: z.string().min(1).optional().describe('/mission/plan 中的任务 id'),
     refs: z.array(z.string()).optional().describe('参考资料：黑板键、文件路径或 ctx 句柄'),
     model: z.string().optional().describe('可选 provider:model；默认使用用户为该角色设置的模型'),
     reasoning_effort: ReasoningEffortSchema.nullable().optional().describe('只覆盖此子 agent 的推理强度；null 为供应商默认'),
@@ -72,6 +73,7 @@ export const spawnAgentTool = defineTool({
     const r = s.supervisor.spawn(s.agentId, {
       role: args.role,
       task: args.task,
+      ...(args.task_id ? { taskId: args.task_id } : {}),
       ...(args.model ? { model: args.model } : {}),
       ...(args.reasoning_effort !== undefined ? { reasoningEffort: args.reasoning_effort } : {}),
       ...(args.refs ? { refs: args.refs } : {}),
@@ -251,14 +253,14 @@ export const agentsStatusTool = defineTool({
 export const taskTool = defineTool({
   name: 'task',
   description: '派一个一次性子 agent 完成独立任务并等待其结果（适合并行调研或隔离的小改动）。',
-  parameters: z.object({ prompt: z.string().min(1), role: z.enum(['worker', 'scout']).default('worker'), model: z.string().optional(), reasoning_effort: ReasoningEffortSchema.nullable().optional() }),
+  parameters: z.object({ prompt: z.string().min(1), role: z.enum(['worker', 'scout']).default('worker'), task_id: z.string().min(1).optional(), model: z.string().optional(), reasoning_effort: ReasoningEffortSchema.nullable().optional() }),
   isReadOnly: false,
   isConcurrencySafe: true,
   permission: { kind: 'interact' },
   async execute(args, ctx): Promise<ToolResult> {
     const s = access(ctx);
     if (!s) return toolErrorResult('task', NO_SWARM);
-    const spawned = s.supervisor.spawn(s.agentId, { role: args.role, task: args.prompt, model: args.model, reasoningEffort: args.reasoning_effort });
+    const spawned = s.supervisor.spawn(s.agentId, { role: args.role, task: args.prompt, taskId: args.task_id, model: args.model, reasoningEffort: args.reasoning_effort });
     if (!spawned.ok) return toolErrorResult('task', spawned.reason);
     const r = await s.supervisor.wait(s.agentId, [spawned.id], 'all', { signal: ctx.signal });
     if (r.reason === 'aborted') {

@@ -26,5 +26,5 @@ export function modelCatalogSection(config: RoastConfig): string {
   const routes = Object.entries(config.swarm.models ?? {})
     .map(([role, model]) => `${role}=${model}`)
     .join(', ');
-  return `## Available agent models\n${models.join('\n')}\nUser role routes: ${routes || 'none; Queen chooses'}\nRespect explicit user role routes. For roles without a user route, choose a model per task using spawn_agent.model or configure_swarm: prefer cheaper models for simple searches, and stronger reasoning/coding models for complex implementation and review. Use only listed/configured models; when metadata is insufficient, inherit the main model. Briefly explain choices before spawning.`;
+  return `## Available agent models\n${models.join('\n')}\nUser role routes: ${routes || 'none; Queen chooses'}\nRespect user role routes; otherwise choose per task by difficulty and price; when metadata is insufficient, inherit the main model.`;
 }

@@ -4,6 +4,7 @@
  */
 import type { UiEvent } from '../agent/ui-events.js';
 import { terminalText } from '../core/terminal-text.js';
+import type { RuntimeInput } from '../agent/runtime.js';
 
 export interface WritableLike {
   write(chunk: string): unknown;
@@ -11,7 +12,7 @@ export interface WritableLike {
 
 /** 结构上与 AgentLoop 对齐的最小接口（方便测试用 mock） */
 export interface PrintLoop {
-  run(userText: string, signal?: AbortSignal): AsyncGenerator<UiEvent>;
+  run(userText: RuntimeInput, signal?: AbortSignal): AsyncGenerator<UiEvent>;
 }
 
 /**
@@ -24,7 +25,7 @@ export interface PrintLoop {
  */
 export async function runPrintMode(
   loop: PrintLoop,
-  prompt: string,
+  prompt: RuntimeInput,
   out: WritableLike,
   err: WritableLike,
   signal?: AbortSignal,
@@ -58,6 +59,7 @@ export async function runPrintMode(
         out.write(`  ${ev.isError ? '✗' : '✓'} ${ev.preview}\n`);
         break;
       case 'usage':
+      case 'hive/mission':
       case 'turn-start':
       case 'user-injected':
       case 'queue-restored':
@@ -101,7 +103,7 @@ export interface StreamJsonSession {
  * stream-json 输出：每行一个 {"agent": id, "event": UiEvent}，包含主会话与全部子 agent。
  * 返回退出码规则同 runPrintMode。
  */
-export async function runStreamJson(session: StreamJsonSession, prompt: string, out: WritableLike, signal?: AbortSignal): Promise<number> {
+export async function runStreamJson(session: StreamJsonSession, prompt: RuntimeInput, out: WritableLike, signal?: AbortSignal): Promise<number> {
   const write = (agent: string, event: UiEvent) => out.write(JSON.stringify({ agent, event }) + '\n');
   const off = session.onAgentEvent(write);
   let exitCode = 0;

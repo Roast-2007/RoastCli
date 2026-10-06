@@ -56,7 +56,7 @@ export function promptSubmitGuard(runner: HookRunner, onError: OnError): InputGu
   return {
     async check(text, source, opts) {
       if (source !== 'user' || !runner.has('UserPromptSubmit')) return { action: 'pass' };
-      const r = await runner.run('UserPromptSubmit', { prompt: text }, opts?.signal ? { signal: opts.signal } : {});
+      const r = await runner.run('UserPromptSubmit', { prompt: text, ...(opts?.hive ? { hive: opts.hive } : {}) }, opts?.signal ? { signal: opts.signal } : {});
       if (r.errors.length) onError(r.errors);
       if (r.blocked) return { action: 'block', reason: `UserPromptSubmit 钩子拦截：${r.blocked}` };
       return r.output ? { action: 'sanitize', sanitized: `${text}\n\n[UserPromptSubmit 钩子附加的上下文]\n${r.output}` } : { action: 'pass' };

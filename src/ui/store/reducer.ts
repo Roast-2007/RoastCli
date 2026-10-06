@@ -26,6 +26,7 @@ export interface ToolView {
 export type Tone = 'info' | 'warn' | 'error' | 'success';
 
 export type DisplayItem =
+  | { id: number; kind: 'mission'; missionId: string; goal: string; strategy: string; n: number; turn: number }
   | { id: number; kind: 'user'; text: string }
   | { id: number; kind: 'markdown'; text: string }
   | { id: number; kind: 'reasoning'; text: string }
@@ -114,6 +115,7 @@ function appendText(v: AgentView, text: string): AgentView {
 
 export function applyEvent(v: AgentView, ev: UiEvent, now: number): AgentView {
   switch (ev.type) {
+    case 'hive/mission': return pushItems(flushStream(v), { kind: 'mission', missionId: ev.missionId, goal: ev.goal, strategy: ev.strategy, n: ev.n, turn: ev.turn });
     case 'turn-start':
       return { ...v, running: true, turnStartedAt: now, turnUsage: emptyUsage(), step: 0, tools: [] };
     case 'text-delta':
@@ -181,6 +183,7 @@ export function replayView(events: readonly SessionEvent[]): AgentView {
     switch (event.type) {
       case 'turn/start': turns.set(event.turn, view); view = applyEvent(view, { type: 'turn-start', turn: event.turn }, at); break;
       case 'user/message': view = pushItems(flushStream(view), { kind: 'user', text: event.message.content.filter((b) => b.type === 'text').map((b) => b.text).join('\n') }); break;
+      case 'hive/mission': view = applyEvent(view, event, at); break;
       case 'assistant/message':
         for (const block of event.message.content) {
           if (block.type === 'text') view = applyEvent(view, { type: 'text-delta', text: block.text }, at);

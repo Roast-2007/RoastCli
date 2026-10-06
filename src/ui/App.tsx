@@ -50,6 +50,8 @@ function Item({ item, session, columns }: { item: StaticEntry; session: Session;
         />
       );
     }
+    case 'mission':
+      return <Text>⬡ 任务 #{item.missionId.slice(1)} · {item.strategy} · {item.goal}</Text>;
     case 'user':
       return (
         <Box marginTop={1}>
@@ -102,7 +104,7 @@ export interface AppProps {
   /** 外部创建的 store / 控制器（CLI 用，跨屏幕切换保留）；缺省时组件内部创建（测试用） */
   store?: UiStore;
   controller?: UiController;
-  initialPrompt?: string;
+  initialPrompt?: import('../agent/runtime.js').RuntimeInput;
   /** 重新挂载时，已经打印到终端 scrollback 的最后一个条目 id（Static 只输出之后的条目，不重复打印） */
   printedUpTo?: number;
   /** Ctrl+G：请求进入 Mission Control（由 CLI 负责屏幕交接） */
@@ -185,7 +187,7 @@ function Shell({ session, store: externalStore, controller: externalController, 
   useEffect(() => {
     if (!initialPrompt || autoSubmitted.current) return;
     autoSubmitted.current = true;
-    controller.submit(initialPrompt, initialPrompt);
+    controller.submit(initialPrompt, typeof initialPrompt === 'string' ? initialPrompt : 'kind' in initialPrompt ? initialPrompt.goal : '');
   }, [initialPrompt, controller]);
 
   const activity = useCallback(

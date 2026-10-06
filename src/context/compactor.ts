@@ -42,7 +42,8 @@ export function extractSummary(messages: readonly Message[], focus?: string): st
 
   for (const m of messages) {
     if (m.role === 'user') {
-      const text = textOf(m);
+      const raw = textOf(m);
+      const text = /<goal>\s*([\s\S]*?)\s*<\/goal>/.exec(raw)?.[1] ?? raw;
       if (text && !text.startsWith('<summary>')) requests.push(`- ${clip(text)}`);
       if (text.startsWith('<summary>')) requests.push(`- （此前已有摘要）${clip(text.replace(/<\/?summary>/g, ''), 600)}`);
     }

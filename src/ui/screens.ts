@@ -48,7 +48,7 @@ export async function runTrustPrompt(cwd: string): Promise<boolean> {
   return trusted;
 }
 
-export async function runInteractive(session: Session, opts: { initialPrompt?: string } = {}): Promise<void> {
+export async function runInteractive(session: Session, opts: { initialPrompt?: import('../agent/runtime.js').RuntimeInput } = {}): Promise<void> {
   let store = createUiStore();
   let instance: Instance | null = null;
   const activeInstance = () => instance;

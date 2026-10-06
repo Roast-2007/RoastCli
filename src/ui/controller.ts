@@ -11,12 +11,12 @@ import { appendMemory, runSlash, skillPrompt } from './commands.js';
 import { appendHistory } from './input/history.js';
 import type { UiStore } from './store/store.js';
 import { emptyUsage } from '../core/types.js';
-import type { Message } from '../core/types.js';
+import type { RuntimeInput } from '../agent/runtime.js';
 
 const TIMELINE_MAX = 50;
 
 export interface UiController {
-  submit(text: string, raw: string): void;
+  submit(text: RuntimeInput, raw: string): void;
   interrupt(): void;
   respond(req: InteractionRequest, response: InteractionResponse): void;
   cycleMode(): void;
@@ -75,7 +75,7 @@ export function createUiController(session: Session, store: UiStore, opts: { exi
     store.setMeta((m) => ({ interactions: m.interactions.filter((r) => live.has(r.id)) }));
   };
 
-  async function runTurn(text: string | Message): Promise<void> {
+  async function runTurn(text: RuntimeInput): Promise<void> {
     running = true;
     store.setMeta({ running: true });
     const controller = new AbortController();
@@ -124,15 +124,15 @@ export function createUiController(session: Session, store: UiStore, opts: { exi
     }
   }
 
-  function send(text: string | Message): void {
-    const shown = typeof text === 'string' ? text : text.content.filter((b) => b.type === 'text').map((b) => b.text).join('\n');
+  function send(text: RuntimeInput): void {
+    const shown = typeof text === 'string' ? text : 'kind' in text ? text.goal : text.content.filter((b) => b.type === 'text').map((b) => b.text).join('\n');
     if (shellRunning) {
       store.setMeta((m) => ({ inputSeed: { key: m.inputSeed.key + 1, text: shown } }));
       store.addNotice('main', 'shell 正在执行，消息已保留在输入框；结束后可发送', 'info');
       return;
     }
     if (running && session.loop.enqueue(text)) return store.addNotice('main', `⏳ 已排队，将在下一步送达：${shown.slice(0, 200)}`, 'info');
-    store.addUser('main', shown);
+    if (typeof text === 'string' || !('kind' in text)) store.addUser('main', shown);
     pending = runTurn(text);
   }
 
@@ -156,6 +156,7 @@ export function createUiController(session: Session, store: UiStore, opts: { exi
   return {
     submit(text, raw) {
       appendHistory(cwd, raw);
+      if (typeof text !== 'string') return send(text);
       if (text.startsWith('/')) return void slash(text);
       if (text.startsWith('!')) { if (running) { void runShell(text.slice(1).trim()); return; } pending = runShell(text.slice(1).trim()); return; }
       if (text.startsWith('#')) {

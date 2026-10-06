@@ -22,7 +22,7 @@ export interface GuardVerdict {
 
 export interface InputGuard {
   /** 检查一段即将进入上下文的外部文本 */
-  check(text: string, source: 'user' | 'tool-result' | 'file' | 'web', opts?: { signal?: AbortSignal }): Promise<GuardVerdict>;
+  check(text: string, source: 'user' | 'tool-result' | 'file' | 'web', opts?: { signal?: AbortSignal; hive?: { strategy: string; n: number } }): Promise<GuardVerdict>;
 }
 
 export interface OutputGuard {

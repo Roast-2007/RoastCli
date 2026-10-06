@@ -18,14 +18,15 @@ import { parseRoleModels } from '../swarm/model-routing.js';
 import { pickTheme, THEMES } from './theme.js';
 import type { SkillMeta } from '../ext/skills.js';
 import { isProjectTrusted, roastHome, ReasoningEffortSchema } from '../core/config.js';
-import { buildSwarmPrompt, DEFAULT_TEMPLATE, describeTemplates, loadTemplates } from '../swarm/templates.js';
+import { missionInput, DEFAULT_STRATEGY, describeStrategies, loadStrategies } from '../swarm/strategies.js';
+import type { RuntimeInput } from '../agent/runtime.js';
 
 export interface CommandContext {
   session: Session;
   store: UiStore;
   exit(): void;
   /** 作为一条用户消息发给模型（/swarm 等） */
-  send?(text: string): void;
+  send?(text: RuntimeInput): void;
   openProviders?(): void;
   openOverlay?(overlay: OverlayKind): void;
   clearScreen?(): void;
@@ -84,12 +85,12 @@ function swarm(ctx: CommandContext, args: string): void {
   if (roleModels.length) ctx.session.configureSwarmModels?.(parseRoleModels(roleModels));
   if (args === 'models' && ctx.openOverlay) return ctx.openOverlay('hive-models');
   const cwd = ctx.session.log.header.cwd;
-  const templates = loadTemplates(cwd, roastHome(), { trusted: isProjectTrusted(cwd) });
-  if (!args) return ctx.openOverlay ? ctx.openOverlay('swarm') : say(ctx, `策略模板（/swarm <模板> <目标>；省略模板时用 ${DEFAULT_TEMPLATE}）：\n${describeTemplates(templates)}`);
+  const templates = loadStrategies(cwd, roastHome(), { trusted: isProjectTrusted(cwd) });
+  if (!args) return ctx.openOverlay ? ctx.openOverlay('swarm') : say(ctx, describeStrategies(templates));
   const [first = '', ...rest] = args.split(' ');
-  const [name, goal] = templates.has(first) && rest.length > 0 ? [first, rest.join(' ')] : [DEFAULT_TEMPLATE, args];
+  const [name, goal] = templates.has(first) && rest.length > 0 ? [first, rest.join(' ')] : [ctx.session.config.swarm.strategy ?? DEFAULT_STRATEGY, args];
   if (!ctx.send) return say(ctx, '当前界面不支持直接发起蜂群任务', 'warn');
-  ctx.send(buildSwarmPrompt(templates, goal, name));
+  ctx.send(missionInput(templates, goal, name, ctx.session.config.swarm.n));
 }
 
 async function rewind(ctx: CommandContext, arg: string): Promise<void> {

@@ -67,7 +67,7 @@ function Workspace({ session, store: storeProp, controller: controllerProp, inpu
   const leaveReading = () => { readingRef.current = false; setReading(false); };
   const read = () => { readingRef.current = true; setReading(true); };
   const autoSubmitted = useRef(false);
-  useEffect(() => { if (!splash && initialPrompt && !autoSubmitted.current) { autoSubmitted.current = true; controller.submit(initialPrompt, initialPrompt); } }, [splash, initialPrompt, controller]);
+  useEffect(() => { if (!splash && initialPrompt && !autoSubmitted.current) { autoSubmitted.current = true; controller.submit(initialPrompt, typeof initialPrompt === 'string' ? initialPrompt : 'kind' in initialPrompt ? initialPrompt.goal : ''); } }, [splash, initialPrompt, controller]);
   useEffect(() => {
     if (!ready) return;
     const help = (data: Buffer | string) => { if (['\u001bOP', '\u001b[11~', '\u001b[57364u'].includes(data.toString())) store.setMeta({ overlay: 'help' }); };

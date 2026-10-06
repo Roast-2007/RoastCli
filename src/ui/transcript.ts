@@ -21,6 +21,7 @@ function toolRows(tool: ToolView, width: number, ascii: boolean): Row[] {
 
 export function itemRows(item: DisplayItem, width: number, ascii = false, spacing = 1): Row[] {
   switch (item.kind) {
+    case 'mission': return wrapSpans([{ ...s(`${ascii ? '*' : '⬡'} 任务 #${item.missionId.slice(1)} · ${item.strategy} · ${item.goal}`, 'user'), bold: true }], width);
     case 'user': return [[], ...wrapSpans([{ ...s(`${ascii ? '>' : '›'} ${item.text}`, 'user'), bold: true }], width)];
     case 'markdown': return markdownRows(item.text, width, ascii, spacing);
     case 'reasoning': return wrapSpans([s(`${ascii ? '...' : '💭'} ${item.text.replace(/\s+/g, ' ').slice(0, 200)}`, undefined, true)], width);

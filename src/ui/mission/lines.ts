@@ -16,6 +16,7 @@ export interface Line {
 
 function itemLines(item: DisplayItem, ascii = false): Line[] {
   switch (item.kind) {
+    case 'mission': return [{ text: `${ascii ? '*' : '⬡'} 任务 #${item.missionId.slice(1)} · ${item.strategy} · ${item.goal}`, tone: 'user' }];
     case 'user':
       return [{ text: `${ascii ? '>' : '›'} ${item.text.split('\n')[0]}`, tone: 'user' }];
     case 'markdown':

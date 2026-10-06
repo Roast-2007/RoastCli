@@ -36,10 +36,10 @@ describe('swarm templates', () => {
 
   it('ships fanout, best-of-n, critique and research with goal and n substitution', () => {
     const templates = loadTemplates(tempWorkspace().dir, tempWorkspace().dir);
-    expect([...templates.keys()]).toEqual(['fanout', 'best-of-n', 'critique', 'research']);
+    expect([...templates.keys()]).toEqual(['auto', 'fanout', 'best-of-n', 'critique', 'research']);
     const text = buildSwarmPrompt(templates, '实现 LRU 缓存', 'best-of-n', 4);
-    expect(text).toContain('派出 4 个 worker');
-    expect(text).toContain('目标：实现 LRU 缓存');
+    expect(text).toContain('Spawn 4 workers');
+    expect(text).toContain('<goal>\n实现 LRU 缓存\n</goal>');
     expect(text).toContain('discard: true');
     expect(describeTemplates(templates, 5)).toContain('best-of-n  5 个 worker');
     expect(() => buildSwarmPrompt(templates, 'x', 'nope')).toThrow('未知的蜂群模板 nope');
@@ -80,8 +80,8 @@ describe('/swarm command', () => {
     controller.submit('/swarm best-of-n 实现 LRU', '/swarm best-of-n 实现 LRU');
     for (let i = 0; i < 100 && provider.requests.length === 0; i++) await new Promise((r) => setTimeout(r, 20));
     const sent = JSON.stringify(provider.requests[0]!.messages[0]);
-    expect(sent).toContain('best-of-N');
-    expect(sent).toContain('目标：实现 LRU');
+    expect(sent).toContain('best-of-n');
+    expect(sent).toContain('实现 LRU');
     controller.dispose();
     await session.shutdown();
   });

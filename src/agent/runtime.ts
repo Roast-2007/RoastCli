@@ -26,6 +26,11 @@ import { runToolPhase } from './tool-phase.js';
 import { abortable, type BoundaryCtx, type BoundaryHooks } from './boundary.js';
 import type { TurnEndReason, UiEvent } from './ui-events.js';
 import { buildView } from '../context/view.js';
+import { renderBrief, type MissionInput } from '../swarm/strategies.js';
+
+export type RuntimeInput = string | Message | MissionInput;
+function isMission(input: RuntimeInput): input is MissionInput { return typeof input === 'object' && 'kind' in input && input.kind === 'mission'; }
+function inputText(input: RuntimeInput): string { return typeof input === 'string' ? input : isMission(input) ? input.goal : input.content.filter((b) => b.type === 'text').map((b) => b.text).join('\n'); }
 
 export interface AgentRuntimeDeps {
   agentId?: string;
@@ -58,7 +63,8 @@ export class AgentRuntime {
   private readonly maxSteps: number;
   private readonly clock: Clock;
   private turn: number;
-  private inbox: Array<string | Message> = [];
+  private inbox: RuntimeInput[] = [];
+  private missionSeq = 0;
   private active = false;
   private lastSystemHash = '';
   private lastToolsHash = '';
@@ -81,6 +87,7 @@ export class AgentRuntime {
     this.clock = deps.clock ?? realClock;
     this.committer = new Committer(deps.log, deps.initialHistory);
     this.turn = deps.initialHistory?.turn ?? 0;
+    this.missionSeq = deps.initialHistory?.missionSeq ?? 0;
   }
 
   get busy(): boolean {
@@ -90,7 +97,7 @@ export class AgentRuntime {
   /**
    * 运行中排队一条插话（下一个 step 边界送达）。返回 false 表示当前空闲、未入队，调用方应自行 run。
    */
-  enqueue(text: string | Message): boolean {
+  enqueue(text: RuntimeInput): boolean {
     if (!this.active) return false;
     this.inbox.push(text);
     return true;
@@ -103,7 +110,7 @@ export class AgentRuntime {
   }
 
   /** 入队并驱动直到空闲（运行中调用等同于 enqueue，事件由正在进行的 drive 产出） */
-  async *run(userText: string | Message, signal?: AbortSignal): AsyncGenerator<UiEvent> {
+  async *run(userText: RuntimeInput, signal?: AbortSignal): AsyncGenerator<UiEvent> {
     this.inbox.push(userText);
     yield* this.drive(signal);
   }
@@ -120,7 +127,7 @@ export class AgentRuntime {
         yield* this.runTurn(first, signal);
       }
       if (signal.aborted && this.inbox.length > 0) {
-        yield { type: 'queue-restored', texts: this.inbox.map((value) => typeof value === 'string' ? value : value.content.filter((b) => b.type === 'text').map((b) => b.text).join('\n')) };
+        yield { type: 'queue-restored', texts: this.inbox.map(inputText) };
         this.inbox = [];
       }
     } finally {
@@ -137,7 +144,7 @@ export class AgentRuntime {
     return new Date(this.clock.now()).toISOString();
   }
 
-  private async *runTurn(firstText: string | Message, signal: AbortSignal): AsyncGenerator<UiEvent> {
+  private async *runTurn(firstText: RuntimeInput, signal: AbortSignal): AsyncGenerator<UiEvent> {
     const commit = this.committer.commit.bind(this.committer);
     const turn = ++this.turn;
     let usage: TokenUsage = emptyUsage();
@@ -146,15 +153,24 @@ export class AgentRuntime {
     commit({ type: 'turn/start', turn, at: this.now() });
     yield { type: 'turn-start', turn };
     try {
-      const rawText = typeof firstText === 'string' ? firstText : firstText.content.filter((b) => b.type === 'text').map((b) => b.text).join('\n');
-      const text = await this.prepareInput(rawText, signal);
+      const rawText = inputText(firstText);
+      const mission = isMission(firstText) ? firstText : undefined;
+      const text = await this.prepareInput(rawText, signal, mission ? { strategy: mission.strategy.name, n: mission.n } : undefined);
       if (typeof text !== 'string') {
         yield* end('error', new RoastError('INVALID_REQUEST', text.blocked));
         return;
       }
-      const message = userMessage(text);
-      if (typeof firstText !== 'string') message.content.push(...firstText.content.filter((b) => b.type === 'image'));
-      commit({ type: 'user/message', turn, at: this.now(), message, source: 'user' });
+      if (mission) {
+        const missionId = `m${++this.missionSeq}`;
+        const brief = renderBrief({ missionId, goal: mission.goal, strategy: mission.strategy.name, n: mission.n, readOnly: mission.strategy.readOnly, playbook: mission.strategy.playbook });
+        const extra = text === rawText ? '' : text.startsWith(rawText) ? text.slice(rawText.length) : `\n\n[Input context]\n${text}`;
+        const event = commit({ type: 'hive/mission', turn, at: this.now(), missionId, goal: mission.goal, strategy: mission.strategy.name, n: mission.n, brief: brief + extra, ...(mission.strategy.readOnly ? { readOnly: true } : {}) });
+        yield event as Extract<UiEvent, { type: 'hive/mission' }>;
+      } else {
+        const message = userMessage(text);
+        if (typeof firstText !== 'string' && 'content' in firstText) message.content.push(...firstText.content.filter((b) => b.type === 'image'));
+        commit({ type: 'user/message', turn, at: this.now(), message, source: 'user' });
+      }
 
       let overflowRetried = false;
       for (let step = 1; step <= this.maxSteps; step++) {
@@ -243,11 +259,11 @@ export class AgentRuntime {
   }
 
   /** inputGuard（含 UserPromptSubmit 钩子）+ RAG；被拦截返回 { blocked: 理由 } */
-  private async prepareInput(text: string, signal: AbortSignal): Promise<string | { blocked: string }> {
+  private async prepareInput(text: string, signal: AbortSignal, hive?: { strategy: string; n: number }): Promise<string | { blocked: string }> {
     let out = text;
     const guard = this.deps.extensions?.inputGuard;
     if (guard) {
-      const verdict = await guard.check(out, 'user', { signal });
+      const verdict = await guard.check(out, 'user', { signal, ...(hive ? { hive } : {}) });
       if (verdict.action === 'block') return { blocked: verdict.reason ?? '输入被安全守卫拦截' };
       if (verdict.action === 'sanitize' && verdict.sanitized !== undefined) out = verdict.sanitized;
     }
@@ -271,7 +287,7 @@ export class AgentRuntime {
     if (step > 1) {
       while (this.inbox.length > 0) {
         const queued = this.inbox.shift()!;
-        const raw = typeof queued === 'string' ? queued : queued.content.filter((b) => b.type === 'text').map((b) => b.text).join('\n');
+        const raw = inputText(queued);
         // 插话与首条输入同样经过 inputGuard / RAG
         const text = await this.prepareInput(raw, signal);
         if (typeof text !== 'string') {
@@ -279,7 +295,7 @@ export class AgentRuntime {
           continue;
         }
         const message = userMessage(text);
-        if (typeof queued !== 'string') message.content.push(...queued.content.filter((b) => b.type === 'image'));
+        if (typeof queued !== 'string' && 'content' in queued) message.content.push(...queued.content.filter((b) => b.type === 'image'));
         this.committer.commit({ type: 'user/message', turn, at: this.now(), message, source: 'steer' });
         yield { type: 'user-injected', text: raw };
       }

@@ -22,6 +22,7 @@ export interface HistoryState {
   readonly toolKey: string | null;
   readonly turn: number;
   readonly lastSeq: number;
+  readonly missionSeq?: number;
   /** 每个 turn 开始前的消息快照（不可变引用，开销很小），rewind 用 */
   readonly turnStarts: Readonly<Record<number, readonly Message[]>>;
   /** 上下文变换（折叠 / 压缩），视图投影见 context/view.ts */
@@ -67,11 +68,13 @@ function applyMessages(state: HistoryState, ev: SessionEvent): HistoryState {
       const turnStarts = Object.fromEntries(Object.entries(state.turnStarts).filter(([t]) => Number(t) < ev.toTurn));
       return { ...state, messages: target, toolKey: null, lastSeq, turnStarts };
     }
+    case 'hive/mission':
     case 'user/message': {
+      const message: Message = ev.type === 'hive/mission' ? { role: 'user', content: [{ type: 'text', text: ev.brief }] } : ev.message;
       const last = state.messages[state.messages.length - 1];
       const messages =
-        last?.role === 'user' ? appendToTrailingUser(state.messages, ev.message.content) : [...state.messages, ev.message];
-      return { ...state, messages, toolKey: null, lastSeq };
+        last?.role === 'user' ? appendToTrailingUser(state.messages, message.content) : [...state.messages, message];
+      return { ...state, messages, toolKey: null, lastSeq, ...(ev.type === 'hive/mission' ? { missionSeq: Math.max(state.missionSeq ?? 0, Number(ev.missionId.slice(1)) || 0) } : {}) };
     }
     case 'assistant/message':
       return { ...state, messages: [...state.messages, ev.message], toolKey: null, lastSeq };

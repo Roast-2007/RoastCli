@@ -15,7 +15,7 @@ import { Command } from 'commander';
 import { VERSION } from '../core/version.js';
 import { asRoastError, RoastError } from '../core/errors.js';
 import { createSession, type Session } from '../agent/session.js';
-import { deriveMessages, loadRunLog } from '../session/projection.js';
+import { deriveDisplayMessages, deriveMessages, loadRunLog } from '../session/projection.js';
 import type { ContentBlock } from '../core/types.js';
 import { runPrintMode, runStreamJson } from '../cli/print-mode.js';
 import { findRunLog, listRuns, readHeader, resolveLogsRoot } from '../cli/logs.js';
@@ -27,8 +27,9 @@ import { MODE_CYCLE, type PermissionMode } from '../tools/permissions/engine.js'
 import { mcpAdd, mcpList, mcpRemove, type McpAddOptions } from '../cli/mcp.js';
 import { collectChecks, renderChecks } from '../cli/doctor.js';
 import { initConfig, type InitOptions } from '../cli/init.js';
-import { configSources, isProjectTrusted, roastHome } from '../core/config.js';
-import { buildSwarmPrompt, DEFAULT_N, DEFAULT_TEMPLATE, describeTemplates, loadTemplates } from '../swarm/templates.js';
+import { configSources, isProjectTrusted, loadConfig, roastHome } from '../core/config.js';
+import { missionInput, DEFAULT_N, DEFAULT_STRATEGY, describeStrategies, loadStrategies } from '../swarm/strategies.js';
+import type { RuntimeInput } from '../agent/runtime.js';
 import { listWorktrees, pruneWorktrees, savedWorktreesText } from '../cli/worktrees.js';
 import { parseRoleModels } from '../swarm/model-routing.js';
 import type { AgentRole } from '../swarm/types.js';
@@ -43,7 +44,7 @@ function normalizeArgv(argv: string[]): string[] {
   const args = argv.slice(2);
   const first = args[0];
   if (first === undefined) return [...argv.slice(0, 2), 'chat'];
-  if (first === 'chat' || first === 'logs' || first === 'help' || first === 'trust' || first === 'swarm' || first === 'mcp' || first === 'doctor' || first === 'init' || first === 'config' || first === 'worktrees' || first === 'update') return argv;
+  if (first === 'chat' || first === 'logs' || first === 'help' || first === 'trust' || first === 'swarm' || first === 'hive' || first === 'mcp' || first === 'doctor' || first === 'init' || first === 'config' || first === 'worktrees' || first === 'update') return argv;
   if (first.startsWith('-')) {
     // --help / -h / --version 交给 program 级处理，其余选项归 chat
     if (first === '--help' || first === '-h' || first === '--version' || first === '-V') return argv;
@@ -53,7 +54,7 @@ function normalizeArgv(argv: string[]): string[] {
 }
 
 interface ChatOptions {
-  prompt?: string;
+  prompt?: RuntimeInput;
   model?: string;
   roleModels?: Partial<Record<AgentRole, string>>;
   continue?: boolean;
@@ -61,10 +62,12 @@ interface ChatOptions {
   permissionMode?: string;
   outputFormat?: string;
   /** 交互模式启动后自动提交的首条消息（roast swarm） */
-  initialPrompt?: string | (() => string);
+  initialPrompt?: RuntimeInput | (() => RuntimeInput);
 }
 
 interface SwarmOptions {
+  strategy?: string;
+  listStrategies?: boolean;
   template?: string;
   n?: string;
   listTemplates?: boolean;
@@ -77,7 +80,7 @@ interface SwarmOptions {
 
 function swarmTemplates() {
   const cwd = process.cwd();
-  return loadTemplates(cwd, roastHome(), { trusted: isProjectTrusted(cwd) });
+  return loadStrategies(cwd, roastHome(), { trusted: isProjectTrusted(cwd) });
 }
 
 const MIN_N = 2;
@@ -239,7 +242,7 @@ function runLogsShow(runId: string, raw: boolean): void {
     process.stdout.write(`time:  ${header.createdAt}\n`);
     process.stdout.write(`model: ${header.provider}:${header.model}\n`);
     process.stdout.write(`cwd:   ${header.cwd}\n\n`);
-    const messages = deriveMessages(events);
+    const messages = header.version === 0 ? deriveMessages(events) : deriveDisplayMessages(events);
     messages.forEach((msg, i) => {
       process.stdout.write(`[${i}] ${msg.role}\n`);
       for (const block of msg.content) {
@@ -278,26 +281,30 @@ async function main(): Promise<void> {
 
   program
     .command('swarm')
+    .alias('hive')
     .description('以 Hive 蜂群方式完成一个目标（多 agent 并行）')
     .argument('[goal...]', '目标描述')
-    .option('-t, --template <name>', '策略模板：fanout（默认）/ best-of-n / critique / research / 自定义')
+    .option('--strategy <name>', '策略：auto（默认）/ fanout / best-of-n / critique / research / 自定义')
+    .option('-t, --template <name>', '--strategy 的兼容别名')
     .option('-n, --n <count>', 'best-of-n 的候选数 / research 的角度数（默认 3）')
     .option('--list-templates', '列出可用的策略模板')
+    .option('--list-strategies', '列出可用策略')
     .option('-p, --print', '管道模式：不进入 TUI')
     .option('--output-format <format>', 'text（默认）/ stream-json')
     .option('-m, --model <provider:model>', '覆盖默认模型')
     .option('--role-model <role=provider:model>', '指定 Queen / Lead / Worker / Scout / Critic / Judge 的模型，可重复', (value: string, previous: string[]) => [...previous, value], [])
     .option('--permission-mode <mode>', '权限模式：default / acceptEdits / plan / yolo')
     .action(async (goal: string[], opts: SwarmOptions) => {
-      const n = parseN(opts.n);
-      if (opts.listTemplates) return void process.stdout.write(describeTemplates(swarmTemplates(), n) + '\n');
-      if (goal.length === 0) throw new RoastError('INVALID_REQUEST', '请给出目标，例如：roast swarm -t best-of-n "实现 LRU 缓存"');
-      const prompt = () => buildSwarmPrompt(swarmTemplates(), goal.join(' '), opts.template ?? DEFAULT_TEMPLATE, n);
+      const config = loadConfig();
+      const n = opts.n === undefined ? config?.swarm.n : parseN(opts.n);
+      if (opts.listTemplates || opts.listStrategies) return void process.stdout.write(describeStrategies(swarmTemplates(), n) + '\n');
       const headless = opts.print === true || opts.outputFormat !== undefined;
+      if (goal.length === 0 && (headless || !process.stdin.isTTY || !process.stdout.isTTY)) throw new RoastError('INVALID_REQUEST', '非 TTY 环境请提供蜂群目标');
+      const prompt = () => missionInput(swarmTemplates(), goal.join(' '), opts.strategy ?? opts.template ?? config?.swarm.strategy ?? DEFAULT_STRATEGY, n);
       const roleModels = parseRoleModels(opts.roleModel ?? []);
       await runChat({
         roleModels,
-        ...(headless ? { prompt: prompt() } : { initialPrompt: prompt }),
+        ...(goal.length ? headless ? { prompt: prompt() } : { initialPrompt: prompt } : {}),
         ...(opts.model ? { model: opts.model } : {}),
         ...(opts.permissionMode ? { permissionMode: opts.permissionMode } : {}),
         ...(opts.outputFormat ? { outputFormat: opts.outputFormat } : {}),

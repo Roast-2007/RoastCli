@@ -203,7 +203,7 @@ export class Supervisor {
     return { id: `m-${from}-${++this.msgSeq}`, from, to: { agent: to }, kind, subject, body, refs, hop: 0, at: this.now() };
   }
 
-  spawn(parentId: string, opts: { role: AgentRole; task: string; refs?: string[]; isolation?: IsolationMode; model?: string; reasoningEffort?: ReasoningEffort | null }): SpawnResult {
+  spawn(parentId: string, opts: { role: AgentRole; task: string; taskId?: string; refs?: string[]; isolation?: IsolationMode; model?: string; reasoningEffort?: ReasoningEffort | null }): SpawnResult {
     const parent = this.recs.get(parentId);
     if (!parent) return { ok: false, reason: `未知的上级 ${parentId}` };
     if (opts.role === 'queen') return { ok: false, reason: '不能派生 queen' };
@@ -227,6 +227,7 @@ export class Supervisor {
       depth: parent.info.depth + 1,
       state: 'running',
       brief: opts.task,
+      ...(opts.taskId ? { taskId: opts.taskId } : {}),
       model: `${modelRef.provider}:${modelRef.model}`,
       ...(modelRef.reasoningEffort !== undefined ? { reasoningEffort: modelRef.reasoningEffort } : {}),
       startedAt: this.now(),
@@ -235,7 +236,7 @@ export class Supervisor {
     parent.controller.signal.addEventListener('abort', () => rec.controller.abort(), { once: true });
     this.recs.set(id, rec);
     parent.info = { ...parent.info, children: [...parent.info.children, id] };
-    const run = this.run(rec, modelRef, roleCard({ id, role: opts.role, parentId, task: opts.task, refs: opts.refs ?? [] }));
+    const run = this.run(rec, modelRef, roleCard({ id, role: opts.role, parentId, task: opts.task, taskId: opts.taskId, refs: opts.refs ?? [] }));
     rec.finished = run;
     this.runs.add(run);
     void run.finally(() => this.runs.delete(run));
