@@ -32,7 +32,8 @@ async function keys(stdin: { write(text: string): void }, ...inputs: string[]) {
   for (const input of inputs) { stdin.write(input); await tick(); }
 }
 
-describe('ProviderWizard', () => {
+// Full-form walkthroughs render many frames; hosted runners with coverage can exceed the default 5s.
+describe('ProviderWizard', { timeout: 20_000 }, () => {
   it('automatically discovers a blank model, selects multiple IDs and saves only the selected metadata', async () => {
     const fetchMock = vi.fn(async (_url: unknown, _init: RequestInit) => new Response(JSON.stringify({ data: [{ id: 'alpha', context_window: 16000 }, { id: 'beta' }, { id: 'unselected' }] })));
     vi.stubGlobal('fetch', fetchMock);

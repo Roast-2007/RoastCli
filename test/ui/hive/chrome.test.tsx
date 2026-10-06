@@ -8,7 +8,8 @@ import { ThemeContext, THEMES } from '../../../src/ui/theme.js';
 import { emptyUsage } from '../../../src/core/types.js';
 import type { Session } from '../../../src/agent/session.js';
 const tick = (ms = 20) => new Promise((resolve) => setTimeout(resolve, ms));
-describe('quiet Hive chrome', () => {
+// Waits for the real 900ms ignition; hosted runners with coverage can exceed the default 5s.
+describe('quiet Hive chrome', { timeout: 20_000 }, () => {
   it('prioritizes interruption, clears a draft and arms exit for exactly two seconds', () => {
     expect(ctrlC(true, 'draft', 100, 200)).toEqual({ action: 'interrupt', armedAt: null });
     expect(ctrlC(false, 'draft', null, 100)).toEqual({ action: 'clear', armedAt: 100 });

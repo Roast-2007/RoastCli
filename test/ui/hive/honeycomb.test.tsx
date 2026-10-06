@@ -53,7 +53,9 @@ const SAMPLES = {
     "/  \\__/  \\__/  \\__/"
   ]
 };
-describe('full-window ASCII honeycomb', () => {
+// The ignition tests wait for the real 900ms animation; coverage and concurrent
+// workers on hosted runners can push that past the default 5s.
+describe('full-window ASCII honeycomb', { timeout: 20_000 }, () => {
   it('reproduces every source sample character and has no conflicting shared edges', () => {
     for (const tier of ['S', 'M', 'L', 'XL'] as const) {
       const sample = SAMPLES[tier];
