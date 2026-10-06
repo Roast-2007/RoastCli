@@ -53,12 +53,13 @@ describe('slash commands', () => {
     const h = await harness();
     await h.run('/help');
     expect(h.store.getState().meta.overlay).toBe('help');
-    for (const command of ['model', 'theme', 'cost', 'todo', 'logs', 'mcp', 'skills', 'agents', 'board', 'memory', 'swarm', 'init', 'compact'] as const) {
+    for (const command of ['model', 'theme', 'cost', 'todo', 'logs', 'mcp', 'skills', 'agents', 'board', 'memory', 'init', 'compact'] as const) {
       await h.run(`/${command}`);
       expect(h.store.getState().meta.overlay).toBe(command);
     }
     await h.run('/context');
     expect(h.store.getState().meta.overlay).toBe('context');
+    await h.run('/swarm'); expect(h.store.getState().meta.screen).toBe('hive');
     expect(await h.run('/config')).toContain('roast config');
     h.session.swarm.board.write('/example', 'complete value', { author: 'main' });
     expect(await h.run('/board /example')).toContain('complete value');

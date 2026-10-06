@@ -128,6 +128,7 @@ export const ConfigSchema = z.object({
   }).optional(),
   ui: z
     .object({
+      home: z.enum(['hive', 'chat']).optional(),
       /** 主题：ember（默认）/ aurora / daylight（浅色终端）/ mono；环境变量 ROAST_THEME 优先 */
       theme: z.string().optional(),
       motion: z.enum(['full', 'reduced']).optional(),

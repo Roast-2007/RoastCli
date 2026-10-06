@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { displayWidth, truncateDisplay, wrapDisplay } from '../../src/core/text-width.js';
 import { createEditor, editorReducer } from '../../src/ui/input/editor.js';
-import { editorViewport, inlineLayout, missionLayout } from '../../src/ui/layout.js';
+import { editorViewport, inlineLayout } from '../../src/ui/layout.js';
+import { deckLayout } from '../../src/ui/hive/layout.js';
 
 describe('terminal text and layout', () => {
   it('measures graphemes, emoji, combining marks and terminal escapes', () => {
@@ -39,10 +40,10 @@ describe('terminal text and layout', () => {
       const modal = inlineLayout(rows, { tools: 20, todos: 100, agents: 20, interaction: true, detail: true });
       expect(Object.values(modal).reduce((a, b) => a + b, 0)).toBeLessThan(rows);
       for (const columns of [20, 40, 80, 120, 200]) {
-        const mission = missionLayout(columns, rows, 0);
+        const mission = deckLayout(columns, rows);
         expect(mission.height).toBeLessThan(rows);
-        expect(mission.treeWidth + mission.outputWidth + mission.sideWidth).toBeLessThanOrEqual(columns);
-        expect(mission.outputWidth).toBeGreaterThan(0);
+        expect(mission.colony + mission.mission + mission.signals).toBeLessThanOrEqual(columns);
+        expect(mission.mission).toBeGreaterThan(0);
       }
     }
   });

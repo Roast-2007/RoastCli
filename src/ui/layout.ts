@@ -31,13 +31,6 @@ export function fullscreenLayout(rows: number, content: { interaction: boolean; 
   return { height, header, status, input, hint, todos, agents, body: Math.max(0, left) };
 }
 
-export function missionLayout(columns: number, rows: number, footer: number) {
-  const height = Math.max(1, rows - 1);
-  const treeWidth = columns >= 70 ? Math.min(30, Math.floor(columns * 0.24)) : 0;
-  const sideWidth = columns >= 112 ? Math.min(40, Math.floor(columns * 0.27)) : 0;
-  return { height, bodyHeight: Math.max(0, height - 1 - Math.max(1, footer)), treeWidth, sideWidth, outputWidth: Math.max(1, columns - treeWidth - sideWidth) };
-}
-
 export interface EditorRow { text: string; sourceRow: number; start: number }
 
 /** Soft wraps without changing the draft. The visible window follows the caret. */

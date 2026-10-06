@@ -7,7 +7,7 @@ import { createElement, type ReactNode } from 'react';
 import { Box, Text, render, useInput, useWindowSize, type Instance } from 'ink';
 import type { Session } from '../agent/session.js';
 import { App } from './App.js';
-import { MissionControl } from './mission/MissionControl.js';
+import { Deck } from './hive/Deck.js';
 import { createUiController } from './controller.js';
 import { createUiStore } from './store/store.js';
 import { savedWorktreesText } from '../cli/worktrees.js';
@@ -48,7 +48,7 @@ export async function runTrustPrompt(cwd: string): Promise<boolean> {
   return trusted;
 }
 
-export async function runInteractive(session: Session, opts: { initialPrompt?: import('../agent/runtime.js').RuntimeInput } = {}): Promise<void> {
+export async function runInteractive(session: Session, opts: { initialPrompt?: import('../agent/runtime.js').RuntimeInput; home?: 'hive' | 'chat' } = {}): Promise<void> {
   let store = createUiStore();
   let instance: Instance | null = null;
   const activeInstance = () => instance;
@@ -59,10 +59,13 @@ export async function runInteractive(session: Session, opts: { initialPrompt?: i
   let resolveQuit!: () => void;
   const quit = new Promise<void>((r) => (resolveQuit = r));
   const requestExit = () => { quitRequested = true; instance?.unmount(); resolveQuit(); };
-  const makeController = () => createUiController(session, store, { exit: requestExit, openProviders: () => requestSwitch('providers'), clearScreen: () => requestSwitch('inline', true), openSession: (path) => { if (!switching) switchTask = restoreSession(path); } });
+  const makeController = () => createUiController(session, store, { exit: requestExit, openProviders: () => requestSwitch('providers'), openWorkspace: (screen) => requestSwitch(screen), clearScreen: () => requestSwitch(currentScreen === 'hive' ? 'hive' : 'inline', true), openSession: (path) => { if (!switching) switchTask = restoreSession(path); } });
   let controller = makeController();
   const inputDraft: { seed?: number; state?: EditorState } = {};
-  let currentScreen: 'inline' | 'mission' | 'providers' = 'inline';
+  const hiveDraft: { seed?: number; state?: EditorState } = {};
+  const home = opts.home ?? session.config.ui?.home ?? 'hive';
+  let currentScreen: 'inline' | 'hive' | 'providers' = home === 'hive' ? 'hive' : 'inline';
+  let previousWorkspace: 'inline' | 'hive' = currentScreen;
   let printedUpTo: number | undefined;
   let initialPrompt = opts.initialPrompt;
   let firstMount = true;
@@ -96,20 +99,22 @@ export async function runInteractive(session: Session, opts: { initialPrompt?: i
         startup: firstMount,
         ...(initialPrompt ? { initialPrompt } : {}),
         ...(printedUpTo !== undefined ? { printedUpTo } : {}),
-        onMissionControl: () => requestSwitch('mission'),
+        onMissionControl: () => requestSwitch('hive'),
       }));
     firstMount = false;
     initialPrompt = undefined;
   };
 
   const mountMission = () => {
-    show(createElement(MissionControl, { session, store, controller, onExit: () => requestSwitch('inline') }));
+    show(createElement(Deck, { session, store, controller, inputDraft: hiveDraft, startup: firstMount, ...(initialPrompt ? { initialPrompt } : {}), onExit: () => requestSwitch('inline') }));
+    firstMount = false;
+    initialPrompt = undefined;
   };
 
   const mountProviders = () => {
     show(createElement(ProviderWizard, { cwd: session.log.header.cwd, ui: { ...session.config.ui, ...(store.getState().meta.theme ? { theme: store.getState().meta.theme } : {}) }, onExit: (saved: boolean) => {
       if (saved) store.addNotice('main', '供应商配置已保存，下一次启动生效', 'success');
-      requestSwitch('inline');
+      requestSwitch(previousWorkspace);
     } }));
   };
 
@@ -124,8 +129,9 @@ export async function runInteractive(session: Session, opts: { initialPrompt?: i
       store.flush();
       if (clear) printedUpTo = store.getState().agents.main!.items.at(-1)?.id ?? 0;
       currentScreen = screen;
+      if (screen !== 'providers') previousWorkspace = screen;
       controller.setScreen(screen);
-      if (screen === 'mission') mountMission();
+      if (screen === 'hive') mountMission();
       else if (screen === 'providers') mountProviders();
       else mountInline();
     } catch (err) {
@@ -142,6 +148,7 @@ export async function runInteractive(session: Session, opts: { initialPrompt?: i
     if (!instance || switching) return;
     switching = true;
     let candidate: Session | undefined;
+    const returnScreen = currentScreen;
     try {
       store.flush();
       show(createElement(SessionLoading, { onExit: requestExit }));
@@ -156,21 +163,24 @@ export async function runInteractive(session: Session, opts: { initialPrompt?: i
       controller = makeController();
       if (availableUpdate) store.addNotice('main', updateNotice(availableUpdate), 'info');
       delete inputDraft.seed; delete inputDraft.state;
+      delete hiveDraft.seed; delete hiveDraft.state;
       printedUpTo = undefined;
       initialPrompt = undefined;
-      currentScreen = 'inline';
-      mountInline();
+      currentScreen = home === 'hive' ? 'hive' : 'inline';
+      controller.setScreen(currentScreen);
+      if (currentScreen === 'hive') mountMission(); else mountInline();
     } catch (err) {
       if (candidate && candidate !== session) await candidate.shutdown().catch(() => {});
       store.addNotice('main', `恢复会话失败：${err instanceof Error ? err.message : String(err)}`, 'error');
       if (!quitRequested) {
-        currentScreen = 'inline'; controller.setScreen('inline'); mountInline();
+        currentScreen = returnScreen; controller.setScreen(currentScreen); if (currentScreen === 'hive') mountMission(); else mountInline();
       }
     } finally { switching = false; }
   }
 
   try {
-    mountInline();
+    controller.setScreen(currentScreen);
+    if (currentScreen === 'hive') mountMission(); else mountInline();
     void checkForUpdate({ signal: updateAbort.signal }).then((release) => {
       if (quitRequested || updateAbort.signal.aborted || !release) return;
       availableUpdate = release;

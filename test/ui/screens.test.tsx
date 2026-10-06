@@ -5,12 +5,15 @@ import { createSession } from '../../src/agent/session.js';
 import type { RoastConfig } from '../../src/core/config.js';
 import { ProviderRegistry } from '../../src/providers/adapter.js';
 import { App, type AppProps } from '../../src/ui/App.js';
-import { MissionControl, type MissionControlProps } from '../../src/ui/mission/MissionControl.js';
+import { Deck as MissionControl, type DeckProps as MissionControlProps } from '../../src/ui/hive/Deck.js';
 import { ProviderWizard, type ProviderWizardProps } from '../../src/ui/providers/ProviderWizard.js';
 import { releaseScreen, runInteractive } from '../../src/ui/screens.js';
 import { ScriptedProvider } from '../fixtures/scripted-provider.js';
 import { tempWorkspace } from '../fixtures/workspace.js';
 import { checkForUpdate } from '../../src/cli/update.js';
+import { createEditor, editorReducer } from '../../src/ui/input/editor.js';
+import { textScript } from '../fixtures/chunks.js';
+import { loadRunLog } from '../../src/session/projection.js';
 
 vi.mock('../../src/cli/update.js', async (original) => ({
   ...await original<typeof import('../../src/cli/update.js')>(),
@@ -37,11 +40,43 @@ vi.mock('ink', async (original) => ({
   },
 }));
 
-const config: RoastConfig = { providers: { p: { driver: 'openai-compat', apiKeyEnv: 'UNUSED' } }, default: 'p:m', maxSteps: 10, logsDir: 'logs', debugLog: false, context: {}, swarm: { maxAgents: 12, maxDepth: 3, maxMinutes: 60 } };
+const config: RoastConfig = { providers: { p: { driver: 'openai-compat', apiKeyEnv: 'UNUSED' } }, default: 'p:m', maxSteps: 10, logsDir: 'logs', debugLog: false, context: {}, ui: { home: 'chat' }, swarm: { maxAgents: 12, maxDepth: 3, maxMinutes: 60 } };
 const tick = () => new Promise((resolve) => setTimeout(resolve, 20));
 beforeEach(() => { fake.rendered = []; fake.lifecycle = []; vi.mocked(checkForUpdate).mockReset().mockResolvedValue(undefined); });
 
 describe('screen lifecycle', () => {
+  it('defaults to Hive, preserves both drafts and leaves provider prefixes stable across switches', async () => {
+    const providers = new ProviderRegistry(); providers.register('p', new ScriptedProvider([textScript('first'), textScript('second')]));
+    const session = await createSession({ cwd: tempWorkspace().dir, config: { ...config, ui: {} }, providers });
+    const running = runInteractive(session);
+    const hive = fake.rendered[0]!.element as ReactElement<MissionControlProps>;
+    expect(hive.type).toBe(MissionControl);
+    hive.props.inputDraft!.state = editorReducer(createEditor(), { type: 'set', text: '蜂群草稿' });
+    hive.props.controller.submit('目标', '目标'); await hive.props.controller.whenIdle();
+    hive.props.onExit();
+    const chat = fake.rendered.at(-1)!.element as ReactElement<AppProps>;
+    chat.props.inputDraft!.state = editorReducer(createEditor(), { type: 'set', text: '对话草稿' });
+    chat.props.controller!.submit('follow up', 'follow up'); await chat.props.controller!.whenIdle();
+    chat.props.onMissionControl!();
+    const again = fake.rendered.at(-1)!.element as ReactElement<MissionControlProps>;
+    expect(again.props.inputDraft!.state!.lines).toEqual(['蜂群草稿']);
+    again.props.onExit();
+    expect((fake.rendered.at(-1)!.element as ReactElement<AppProps>).props.inputDraft!.state!.lines).toEqual(['对话草稿']);
+    const events = loadRunLog(session.log.path).events;
+    const starts = events.filter((event) => event.type === 'request/digest');
+    expect(starts).toHaveLength(2);
+    expect(starts[0]).toMatchObject({ systemHash: starts[1]!.systemHash, toolsHash: starts[1]!.toolsHash });
+    fake.rendered.at(-1)!.instance.unmount(); await running;
+  });
+  it('honors launch overrides over the configured home', async () => {
+    for (const home of ['chat', 'hive'] as const) {
+      const providers = new ProviderRegistry(); providers.register('p', new ScriptedProvider([]));
+      const session = await createSession({ cwd: tempWorkspace().dir, config: { ...config, ui: { home: home === 'chat' ? 'hive' : 'chat' } }, providers });
+      const running = runInteractive(session, { home });
+      expect(fake.rendered.at(-1)!.element.type).toBe(home === 'hive' ? MissionControl : App);
+      fake.rendered.at(-1)!.instance.unmount(); await running;
+    }
+  });
   it('checks each launch in the background and delivers a notice without changing the draft or model history', async () => {
     let finish!: (release: { version: string }) => void;
     vi.mocked(checkForUpdate).mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));

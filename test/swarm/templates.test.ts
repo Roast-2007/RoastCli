@@ -75,7 +75,7 @@ describe('/swarm command', () => {
 
     controller.submit('/swarm', '/swarm');
     await new Promise((r) => setTimeout(r, 20));
-    expect(store.getState().meta.overlay).toBe('swarm');
+    expect(store.getState().meta.screen).toBe('hive');
 
     controller.submit('/swarm best-of-n 实现 LRU', '/swarm best-of-n 实现 LRU');
     for (let i = 0; i < 100 && provider.requests.length === 0; i++) await new Promise((r) => setTimeout(r, 20));

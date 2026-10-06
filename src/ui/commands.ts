@@ -31,6 +31,7 @@ export interface CommandContext {
   openOverlay?(overlay: OverlayKind): void;
   clearScreen?(): void;
   resumeSession?(logPath: string): void;
+  openWorkspace?(screen: 'inline' | 'hive'): void;
 }
 
 export interface SlashCommand extends CommandInfo {
@@ -86,11 +87,17 @@ function swarm(ctx: CommandContext, args: string): void {
   if (args === 'models' && ctx.openOverlay) return ctx.openOverlay('hive-models');
   const cwd = ctx.session.log.header.cwd;
   const templates = loadStrategies(cwd, roastHome(), { trusted: isProjectTrusted(cwd) });
-  if (!args) return ctx.openOverlay ? ctx.openOverlay('swarm') : say(ctx, describeStrategies(templates));
-  const [first = '', ...rest] = args.split(' ');
-  const [name, goal] = templates.has(first) && rest.length > 0 ? [first, rest.join(' ')] : [ctx.session.config.swarm.strategy ?? DEFAULT_STRATEGY, args];
+  if (!args) return ctx.openWorkspace ? ctx.openWorkspace('hive') : say(ctx, describeStrategies(templates));
+  const [first = '', ...rest] = args.split(/\s+/);
+  const explicit = templates.has(first);
+  const name = explicit ? first : ctx.store.getState().meta.strategy ?? ctx.session.config.swarm.strategy ?? DEFAULT_STRATEGY;
+  let n = ctx.store.getState().meta.n ?? ctx.session.config.swarm.n;
+  if (explicit && /^\d+$/.test(rest[0] ?? '')) n = Number(rest.shift());
+  const goal = explicit ? rest.join(' ') : args;
+  if (!goal) { ctx.store.setMeta({ strategy: name, ...(n !== undefined ? { n } : {}) }); ctx.openWorkspace?.('hive'); return; }
   if (!ctx.send) return say(ctx, '当前界面不支持直接发起蜂群任务', 'warn');
-  ctx.send(missionInput(templates, goal, name, ctx.session.config.swarm.n));
+  ctx.openWorkspace?.('hive');
+  ctx.send(missionInput(templates, goal, name, n));
 }
 
 async function rewind(ctx: CommandContext, arg: string): Promise<void> {
@@ -219,7 +226,15 @@ export const COMMANDS: SlashCommand[] = [
       say(ctx, Object.keys(THEMES).map((n) => `${n === current ? '●' : '○'} ${n}`).join('  '));
     },
   },
-  { name: 'swarm', aliases: ['hive'], description: '选择蜂群策略、输入目标；models 配置角色模型', args: '[模板] <目标>|models', run: swarm },
+  { name: 'hive', aliases: ['swarm'], description: '进入指挥台或发起任务；models 配置角色模型', args: '[策略] [n] [目标]|models', run: swarm },
+  { name: 'chat', description: '切到 Chat', run: (ctx) => ctx.openWorkspace?.('inline') },
+  { name: 'strategy', description: '设置本会话的默认策略和并行数', args: '[名称] [n]', run: (ctx, args) => {
+    if (!args) return ctx.openOverlay?.('strategy');
+    const [name, count] = args.split(/\s+/);
+    const strategies = loadStrategies(ctx.session.log.header.cwd, roastHome(), { trusted: isProjectTrusted(ctx.session.log.header.cwd) });
+    const input = missionInput(strategies, '', name, count === undefined ? ctx.store.getState().meta.n : Number(count));
+    ctx.store.setMeta({ strategy: input.strategy.name, n: input.n });
+  } },
   { name: 'agents', description: '管理蜂群成员、状态和模型', run: (ctx) => ctx.openOverlay ? ctx.openOverlay('agents') : say(ctx, ctx.session.swarm.tree().map((agent) => `${'  '.repeat(agent.depth)}${agent.id} [${agent.role}] ${agent.state} · ${agent.model} · ${agent.brief}`).join('\n')) },
   { name: 'board', description: '列出黑板，或查看指定条目的完整值', args: '[key]', run: (ctx, key) => {
     if (!key && ctx.openOverlay) return ctx.openOverlay('board');

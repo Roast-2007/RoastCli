@@ -54,6 +54,9 @@ function normalizeArgv(argv: string[]): string[] {
 }
 
 interface ChatOptions {
+  chat?: boolean;
+  solo?: boolean;
+  hive?: boolean;
   prompt?: RuntimeInput;
   model?: string;
   roleModels?: Partial<Record<AgentRole, string>>;
@@ -189,7 +192,7 @@ async function runChat(opts: ChatOptions): Promise<void> {
   }
   // 全屏对话 ⇄ Mission Control（Ctrl+G）；退出时中断进行中的 turn 并等它收尾再关日志
   const { runInteractive } = await import('../ui/screens.js');
-  await runInteractive(session, initialPrompt ? { initialPrompt } : {});
+  await runInteractive(session, { ...(initialPrompt ? { initialPrompt } : {}), ...(opts.hive ? { home: 'hive' } : opts.chat || opts.solo ? { home: 'chat' } : {}) });
 }
 
 function runLogsList(): void {
@@ -269,6 +272,9 @@ async function main(): Promise<void> {
     .command('chat', { isDefault: true })
     .description('启动交互式 REPL（默认命令）')
     .option('-p, --prompt <prompt>', '管道模式：直接输出结果，不进 Ink')
+    .option('--chat', '本次启动进入 Chat')
+    .option('--solo', '--chat 的别名')
+    .option('--hive', '本次启动进入 Hive Deck')
     .option('-m, --model <provider:model>', '覆盖 config.default 的模型引用')
     .option('-c, --continue', '继续当前目录最近一次会话')
     .option('-r, --resume [runId]', '恢复指定会话（不带 id 时列出本目录最近会话）')
@@ -303,6 +309,7 @@ async function main(): Promise<void> {
       const prompt = () => missionInput(swarmTemplates(), goal.join(' '), opts.strategy ?? opts.template ?? config?.swarm.strategy ?? DEFAULT_STRATEGY, n);
       const roleModels = parseRoleModels(opts.roleModel ?? []);
       await runChat({
+        hive: true,
         roleModels,
         ...(goal.length ? headless ? { prompt: prompt() } : { initialPrompt: prompt } : {}),
         ...(opts.model ? { model: opts.model } : {}),

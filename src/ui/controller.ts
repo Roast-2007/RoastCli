@@ -12,6 +12,9 @@ import { appendHistory } from './input/history.js';
 import type { UiStore } from './store/store.js';
 import { emptyUsage } from '../core/types.js';
 import type { RuntimeInput } from '../agent/runtime.js';
+import { loadStrategies, missionInput, DEFAULT_STRATEGY, DEFAULT_N } from '../swarm/strategies.js';
+import { isProjectTrusted, roastHome } from '../core/config.js';
+import { agentInstruction } from './hive/focus.js';
 
 const TIMELINE_MAX = 50;
 
@@ -26,14 +29,14 @@ export interface UiController {
   steerAgent(agentId: string, text: string): string;
   cancelAgent(agentId: string): void;
   togglePause(agentId: string): string;
-  setScreen(screen: 'inline' | 'mission' | 'providers'): void;
+  setScreen(screen: 'inline' | 'hive' | 'providers'): void;
   isRunning(): boolean;
   whenIdle(): Promise<void>;
   resumeSession(logPath: string): void;
   dispose(): void;
 }
 
-export function createUiController(session: Session, store: UiStore, opts: { exit(): void; openProviders?(): void; clearScreen?(): void; openSession?(logPath: string): void }): UiController {
+export function createUiController(session: Session, store: UiStore, opts: { exit(): void; openProviders?(): void; clearScreen?(): void; openSession?(logPath: string): void; openWorkspace?(screen: 'inline' | 'hive'): void }): UiController {
   const cwd = session.log.header.cwd;
   let abort: AbortController | null = null;
   let running = false;
@@ -49,7 +52,7 @@ export function createUiController(session: Session, store: UiStore, opts: { exi
   };
   if (session.resumedFrom && store.getState().agents['main']!.items.length === 0) store.restore('main', session.initialEvents);
 
-  store.setMeta({ mode: session.permissions.mode, contextPercent: session.contextStats().percent, swarm: session.swarm.tree(), interactions: session.broker.pending() });
+  store.setMeta({ mode: session.permissions.mode, contextPercent: session.contextStats().percent, swarm: session.swarm.tree(), interactions: session.broker.pending(), strategy: session.config.swarm.strategy ?? DEFAULT_STRATEGY, n: session.config.swarm.n ?? DEFAULT_N });
   const refreshInteractions = () => store.setMeta({ interactions: session.broker.pending() });
   offs.push(session.broker.onRequest(refreshInteractions));
   offs.push(session.broker.onChange(refreshInteractions));
@@ -125,6 +128,7 @@ export function createUiController(session: Session, store: UiStore, opts: { exi
   }
 
   function send(text: RuntimeInput): void {
+    if (running && typeof text !== 'string' && 'kind' in text) text = text.goal;
     const shown = typeof text === 'string' ? text : 'kind' in text ? text.goal : text.content.filter((b) => b.type === 'text').map((b) => b.text).join('\n');
     if (shellRunning) {
       store.setMeta((m) => ({ inputSeed: { key: m.inputSeed.key + 1, text: shown } }));
@@ -138,7 +142,7 @@ export function createUiController(session: Session, store: UiStore, opts: { exi
 
   /** 内置命令优先；否则同名技能 → 作为一条用户消息交给模型 */
   async function slash(text: string): Promise<void> {
-    if (await runSlash(text, { session, store, exit: opts.exit, send, openProviders: opts.openProviders, clearScreen: opts.clearScreen, resumeSession, openOverlay: (overlay) => store.setMeta({ overlay }) })) return;
+    if (await runSlash(text, { session, store, exit: opts.exit, send, openProviders: opts.openProviders, clearScreen: opts.clearScreen, resumeSession, openWorkspace: opts.openWorkspace ?? ((screen) => store.setMeta({ screen })), openOverlay: (overlay) => store.setMeta({ overlay }) })) return;
     const [head = '', ...rest] = text.slice(1).split(' ');
     if (session.mcpPrompts?.().some((prompt) => prompt.command === head) && session.mcpPromptContent) {
       try { return send({ role: 'user', content: await session.mcpPromptContent(head, rest.join(' ').trim()) }); }
@@ -165,6 +169,19 @@ export function createUiController(session: Session, store: UiStore, opts: { exi
           const file = appendMemory(cwd, text.slice(1));
           return store.addNotice('main', `已记住，写入 ${file}（下次会话生效）`, 'success');
         } catch (err) { return store.addNotice('main', `保存记忆失败：${err instanceof Error ? err.message : String(err)}`, 'error'); }
+      }
+      if (store.getState().meta.screen === 'hive') {
+        const instruction = agentInstruction(text, session.swarm.tree().map((agent) => agent.id));
+        if (instruction) {
+          if (instruction.agent === 'main') return send(instruction.body);
+          const result = session.swarm.bus.send('main', { to: { agent: instruction.agent }, kind: 'steer', subject: '用户指示', body: instruction.body });
+          return store.addNotice('main', result.ok ? `已发送给 ${instruction.agent}` : `发送失败：${result.reason}`, result.ok ? 'info' : 'warn');
+        }
+        if (!running) {
+          const meta = store.getState().meta;
+          try { return send(missionInput(loadStrategies(cwd, roastHome(), { trusted: isProjectTrusted(cwd) }), text, meta.strategy, meta.n)); }
+          catch (err) { return store.addNotice('main', err instanceof Error ? err.message : String(err), 'warn'); }
+        }
       }
       send(text);
     },

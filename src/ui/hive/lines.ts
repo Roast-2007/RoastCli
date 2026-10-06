@@ -1,5 +1,5 @@
 /**
- * Mission Control 的紧凑行渲染（纯函数）：把 AgentView 转成定高窗格里的一行行文本，
+ * Hive 的紧凑行渲染（纯函数）：把 AgentView 转成定高窗格里的一行行文本，
  * 便于精确控制高度（全屏布局不能依赖自动换行）。
  */
 import type { AgentView, DisplayItem } from '../store/reducer.js';
@@ -62,6 +62,7 @@ export function treeOrder(agents: AgentInfo[]): AgentInfo[] {
     }
   };
   walk(null);
+  for (const a of agents) if (a.parentId && !agents.some((parent) => parent.id === a.parentId)) { out.push(a); walk(a.id); }
   return out;
 }
 

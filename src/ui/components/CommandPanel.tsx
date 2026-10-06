@@ -26,7 +26,7 @@ export function CommandPanel({ kind, session, store, controller, height }: { kin
   const [confirmCancel, setConfirmCancel] = useState(false);
   const close = () => store.setMeta({ overlay: null });
   const cwd = session.log.header.cwd;
-  const templates = useMemo(() => kind === 'swarm' ? loadStrategies(cwd, roastHome(), { trusted: isProjectTrusted(cwd) }) : new Map(), [kind, cwd]);
+  const templates = useMemo(() => kind === 'swarm' || kind === 'strategy' ? loadStrategies(cwd, roastHome(), { trusted: isProjectTrusted(cwd) }) : new Map(), [kind, cwd]);
   useEffect(() => {
     if (kind !== 'memory') return;
     let cancelled = false;
@@ -49,6 +49,7 @@ export function CommandPanel({ kind, session, store, controller, height }: { kin
     if (existsSync(file)) throw new Error(`ROAST.md 已存在：${file}`);
     writeFileSync(file, INIT_TEMPLATE, { encoding: 'utf8', flag: 'wx' }); store.addNotice('main', `已创建 ${file}（下次会话生效）`, 'success'); close();
   }} />;
+  if (kind === 'strategy') return <SelectPanel title="策略" entries={[...templates.values()].map((strategy) => ({ id: strategy.name, label: `${strategy.name} · ${strategy.description}` }))} height={height} searchable onClose={close} onSelect={(entry) => { store.setMeta({ strategy: entry.id, n: templates.get(entry.id)?.n ?? store.getState().meta.n ?? 3 }); close(); }} />;
   if (kind === 'swarm' || kind === 'skills') {
     if (selected && prompt) return <PromptPanel title={selected.label} label={kind === 'swarm' ? '任务目标' : '技能参数（可留空）'} optional={kind === 'skills'} height={height} onClose={() => setPrompt(false)} onSubmit={(text) => {
       const result = kind === 'swarm' ? missionInput(templates, text, selected.id, session.config.swarm.n) : skillPrompt(selected.id, text);

@@ -8,7 +8,7 @@ import { ProviderRegistry } from '../../src/providers/adapter.js';
 import { createUiController } from '../../src/ui/controller.js';
 import { createUiStore } from '../../src/ui/store/store.js';
 import { App } from '../../src/ui/App.js';
-import { MissionControl } from '../../src/ui/mission/MissionControl.js';
+import { Deck as MissionControl } from '../../src/ui/hive/Deck.js';
 import { RoutedProvider } from '../fixtures/routed-provider.js';
 import { textScript, toolCallScript, toolCallsScript } from '../fixtures/chunks.js';
 import { tempWorkspace } from '../fixtures/workspace.js';

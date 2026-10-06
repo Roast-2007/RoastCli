@@ -10,7 +10,7 @@ import type { PermissionMode } from '../../tools/permissions/engine.js';
 import type { AgentInfo, Envelope } from '../../swarm/types.js';
 
 /** 与具体 agent 无关的界面状态（控制器写入，inline 与 Mission Control 共用） */
-export type OverlayKind = 'help' | 'rewind' | 'context' | 'sessions' | 'theme' | 'mode' | 'model' | 'hive-models' | 'swarm' | 'skills' | 'board' | 'cost' | 'todo' | 'mcp' | 'logs' | 'memory' | 'compact' | 'init' | 'agents';
+export type OverlayKind = 'help' | 'rewind' | 'context' | 'sessions' | 'theme' | 'mode' | 'model' | 'hive-models' | 'swarm' | 'strategy' | 'skills' | 'board' | 'cost' | 'todo' | 'mcp' | 'logs' | 'memory' | 'compact' | 'init' | 'agents';
 export interface UiMeta {
   interactions: InteractionRequest[];
   mode: PermissionMode;
@@ -21,7 +21,9 @@ export interface UiMeta {
   /** 输入框重置种子（中断后放回的排队插话） */
   inputSeed: { key: number; text: string };
   running: boolean;
-  screen: 'inline' | 'mission' | 'providers';
+  screen: 'inline' | 'hive' | 'providers';
+  strategy?: string;
+  n?: number;
   overlay: OverlayKind | null;
   theme?: string;
   toast?: { text: string; tone: Tone } | null;

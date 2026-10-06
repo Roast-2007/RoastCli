@@ -3,7 +3,7 @@ import { PassThrough } from 'node:stream';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { render } from 'ink';
 import { App } from '../../src/ui/App.js';
-import { MissionControl } from '../../src/ui/mission/MissionControl.js';
+import { Deck as MissionControl } from '../../src/ui/hive/Deck.js';
 import { createSession } from '../../src/agent/session.js';
 import { createUiStore } from '../../src/ui/store/store.js';
 import { createUiController } from '../../src/ui/controller.js';

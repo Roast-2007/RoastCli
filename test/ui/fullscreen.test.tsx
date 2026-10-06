@@ -4,7 +4,7 @@ import { stripVTControlCharacters } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, type Instance } from 'ink';
 import { App } from '../../src/ui/App.js';
-import { MissionControl } from '../../src/ui/mission/MissionControl.js';
+import { Deck as MissionControl } from '../../src/ui/hive/Deck.js';
 import { createSession, type Session } from '../../src/agent/session.js';
 import { ConfigSchema } from '../../src/core/config.js';
 import { createUiStore, type OverlayKind } from '../../src/ui/store/store.js';
@@ -56,6 +56,21 @@ async function frameContains(tty: Terminal, text: string) {
 }
 
 describe('fullscreen workspace in real Ink', () => {
+  it.each([[40, 12], [80, 24], [120, 40], [200, 60]])('Hive fits %i×%i, reflows on resize and keeps printable shortcuts in the draft', async (columns, rows) => {
+    const store = createUiStore(); controller = createUiController(session, store, { exit() {} });
+    const tty = new Terminal(columns, rows), stdin = new Input(), draft: { seed?: number; state?: EditorState } = {};
+    instance = render(<MissionControl session={session} store={store} controller={controller} inputDraft={draft} onExit={() => {}} />, { stdout: tty as unknown as NodeJS.WriteStream, stdin: stdin as unknown as NodeJS.ReadStream, interactive: true, patchConsole: false, alternateScreen: true, incrementalRendering: false, exitOnCtrlC: false });
+    await tick(100); await instance.waitUntilRenderFlush(); stdin.write('mpxd123中文👩‍💻'); await tick(100); await instance.waitUntilRenderFlush();
+    expect(draft.state?.lines.join('')).toBe('mpxd123中文👩‍💻');
+    expect(tty.frames().join('\n')).not.toMatch(/开始一个任务|快捷键速查|任意键跳过/);
+    fits(tty); tty.columns = 40; tty.rows = 12; tty.emit('resize');
+    await vi.waitFor(() => expect(tty.frames().at(-1)!.split('\n').length).toBe(11));
+    await instance.waitUntilRenderFlush(); tty.chunks = [];
+    store.setMeta({ toast: { text: 'resize verified', tone: 'info' } }); await frameContains(tty, 'resize verified'); fits(tty);
+    const before = store.getState().focus;
+    stdin.write('\t'); await tick(); stdin.write('\x1b[<64;10;5M'); await tick();
+    expect(store.getState().focus).toBe(before);
+  });
   it('wheel scrolls the chat, accumulates rapid events, preserves the draft and follows the bottom again', async () => {
     const { store, stdin, tty, draft } = workspace();
     store.setMeta({ inputSeed: { key: 1, text: 'pending draft' } });
@@ -161,7 +176,7 @@ describe('fullscreen workspace in real Ink', () => {
     const { store, tty, stdin, draft, app } = workspace();
     store.addNotice('main', 'history-before-switch'); await frameContains(tty, 'history-before-switch');
     stdin.write('draft remains'); await frameContains(tty, 'draft remains');
-    instance!.rerender(<MissionControl session={session} store={store} controller={controller} onExit={() => {}} />); await frameContains(tty, 'MISSION CONTROL');
+    instance!.rerender(<MissionControl session={session} store={store} controller={controller} onExit={() => {}} />); await frameContains(tty, 'ROAST HIVE');
     store.addNotice('main', 'history-during-switch');
     instance!.rerender(app()); await frameContains(tty, 'history-during-switch');
     const frame = tty.frames().at(-1)!;

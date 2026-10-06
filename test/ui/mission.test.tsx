@@ -7,8 +7,8 @@ import { createSession } from '../../src/agent/session.js';
 import type { RoastConfig } from '../../src/core/config.js';
 import { ProviderRegistry } from '../../src/providers/adapter.js';
 import { createUiController } from '../../src/ui/controller.js';
-import { agentLines, treeOrder, windowLines } from '../../src/ui/mission/lines.js';
-import { MissionControl } from '../../src/ui/mission/MissionControl.js';
+import { agentLines, treeOrder, windowLines } from '../../src/ui/hive/lines.js';
+import { Deck as MissionControl } from '../../src/ui/hive/Deck.js';
 import { createUiStore } from '../../src/ui/store/store.js';
 import { RoutedProvider } from '../fixtures/routed-provider.js';
 import { textScript, toolCallScript } from '../fixtures/chunks.js';
@@ -48,6 +48,7 @@ describe('Mission Control', () => {
     const { stdin, lastFrame, unmount } = render(<MissionControl session={session} store={store} controller={controller} onExit={() => {}} />);
     try {
       await sleep(50);
+      stdin.write('\t'); await sleep(20); stdin.write('\t'); await sleep(20); stdin.write('2'); await sleep(20);
       for (let i = 0; i < 20; i++) {
         stdin.write('b');
         await sleep(15);
@@ -88,21 +89,22 @@ describe('Mission Control', () => {
     const { lastFrame, stdin, unmount } = render(<MissionControl session={session} store={store} controller={controller} onExit={onExit} />);
     await sleep(50);
     const frame = lastFrame()!;
-    expect(frame).toContain('MISSION CONTROL');
-    expect(frame).toContain('main [queen]');
+    expect(frame).toContain('ROAST HIVE');
+    expect(frame).toContain('queen [queen]');
     expect(frame).toContain('s1 [scout]');
-    stdin.write('3');
+    stdin.write('\t'); await sleep(30);
+    stdin.write('6');
     await sleep(30);
     expect(lastFrame()).toContain('/mission/login');
-    stdin.write('2');
+    stdin.write('5');
     await sleep(30);
     expect(lastFrame()).toContain('[report]');
-    stdin.write('1');
+    stdin.write('2');
     await sleep(30);
     stdin.write('j');
     await sleep(50);
     expect(lastFrame()).toContain('board_write');
-    stdin.write('q');
+    stdin.write('\u0007');
     await sleep(30);
     expect(onExit).toHaveBeenCalled();
     unmount();

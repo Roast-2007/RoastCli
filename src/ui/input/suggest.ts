@@ -20,6 +20,7 @@ export interface Suggestion {
 export interface SuggestDeps {
   commands: readonly CommandInfo[];
   files(query: string): string[];
+  members?(query: string): string[];
 }
 
 const MAX = 6;
@@ -43,7 +44,7 @@ export function suggestions(state: EditorState, deps: SuggestDeps): Suggestion[]
   if (!m) return [];
   const query = m[2]!;
   const start = before.length - query.length - 1;
-  return deps.files(query).map((file) => ({
+  return [...(deps.members?.(query) ?? []), ...deps.files(query)].slice(0, MAX).map((file) => ({
     label: `@${file}`,
     apply: (s) => {
       const cur = s.lines[s.row]!;
