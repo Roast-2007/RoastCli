@@ -1,3 +1,4 @@
+import { useViewport } from './viewport.js';
 /**
  * Ink 根组件（inline 模式）：
  * - <Static>：横幅 + 已定稿条目（用户消息、markdown 块、思考摘要、工具卡片、提示、回合小结），只渲染一次
@@ -5,7 +6,7 @@
  * 运行时事件 → UI store（合批）→ useSyncExternalStore；输入框支持插话排队、/命令、!命令、#记忆、@文件。
  */
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
-import { Box, Static, Text, useApp, useInput, useStdin, useWindowSize } from 'ink';
+import { Box, Static, Text, useApp, useInput, useStdin } from 'ink';
 import type { Session } from '../agent/session.js';
 import { createUiStore, type UiStore } from './store/store.js';
 import { createUiController, type UiController } from './controller.js';
@@ -158,7 +159,7 @@ function useShellKeys(opts: { controller: UiController; onCtrlC(): void; active:
 
 function Shell({ session, store: externalStore, controller: externalController, initialPrompt, printedUpTo, onMissionControl, inputDraft }: AppProps) {
   const { exit } = useApp();
-  const { rows, columns } = useWindowSize();
+  const { rows, columns } = useViewport(session.config.ui?.gutter);
   const cwd = session.log.header.cwd;
   const localDraft = useRef<{ seed?: number; state?: EditorState }>({});
   const draft = inputDraft ?? localDraft.current;
@@ -218,7 +219,7 @@ function Shell({ session, store: externalStore, controller: externalController, 
   return (
     <ThemeContext.Provider value={theme}><TerminalContext.Provider value={terminal}><Box flexDirection="column">
       <Static items={staticItems}>{(item) => <Item key={item.id} item={item} session={session} columns={columns} />}</Static>
-      <Box flexDirection="column" maxHeight={Math.max(1, rows - 1)} overflow="hidden">
+      <Box flexDirection="column" maxHeight={Math.max(1, rows)} overflow="hidden">
       {meta.overlay && !card ? <Overlay key={meta.overlay} kind={meta.overlay} session={session} store={store} controller={controller} height={Math.max(1, rows - 2)} /> : <>
       {layout.stream > 0 && (view.running || view.pending || view.reasoning) ? <Box flexDirection="column" maxHeight={layout.stream} overflow="hidden" flexShrink={0}>
         {view.reasoning ? <Thinking label={`思考中… ${view.reasoning.length} 字`} /> : null}

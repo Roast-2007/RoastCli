@@ -1,10 +1,12 @@
+import { bindResizeRepaint } from './resize.js';
+import { useViewport } from './viewport.js';
 /**
  * One alternate-screen renderer for the whole interactive workspace.
  * Screen changes replace its React tree without leaving/re-entering the terminal buffer.
  * The controller, conversation history and editor draft survive every handoff.
  */
 import { createElement, type ReactNode } from 'react';
-import { Box, Text, render, useInput, useWindowSize, type Instance } from 'ink';
+import { Box, Text, render, useInput, type Instance } from 'ink';
 import type { Session } from '../agent/session.js';
 import { App } from './App.js';
 import { Deck } from './hive/Deck.js';
@@ -29,23 +31,27 @@ export async function releaseScreen(instance: Instance, inline: boolean, onFlush
 
 export async function runProviderWizard(cwd: string): Promise<boolean> {
   let saved = false;
-  const instance = render(createElement(ProviderWizard, { cwd, onExit: (result: boolean) => { saved = result; instance.unmount(); } }), {
+  const element = createElement(ProviderWizard, { cwd, onExit: (result: boolean) => { saved = result; instance.unmount(); } });
+  const instance = render(element, {
     exitOnCtrlC: false,
     alternateScreen: true,
     kittyKeyboard: { mode: 'auto' },
   });
-  await instance.waitUntilExit();
+  const stop = bindResizeRepaint(process.stdout, instance, () => element);
+  try { await instance.waitUntilExit(); } finally { stop(); }
   return saved;
 }
 
 export async function runTrustPrompt(cwd: string): Promise<boolean> {
   let trusted = false;
-  const instance = render(createElement(TrustPanel, { cwd, onExit: (result: boolean) => { trusted = result; instance.unmount(); } }), {
+  const element = createElement(TrustPanel, { cwd, onExit: (result: boolean) => { trusted = result; instance.unmount(); } });
+  const instance = render(element, {
     exitOnCtrlC: false,
     alternateScreen: true,
     kittyKeyboard: { mode: 'auto' },
   });
-  await instance.waitUntilExit();
+  const stop = bindResizeRepaint(process.stdout, instance, () => element);
+  try { await instance.waitUntilExit(); } finally { stop(); }
   return trusted;
 }
 
@@ -54,6 +60,8 @@ export async function runInteractive(session: Session, opts: { initialPrompt?: i
   const effects = terminalEffects(process.stdout, session.log.header.cwd, session.config.ui);
   effects.bind(store);
   let instance: Instance | null = null;
+  let displayed: ReactNode;
+  let stopResize = () => {};
   const activeInstance = () => instance;
   let instanceExit: Promise<unknown> = Promise.resolve();
   let switching = false;
@@ -84,10 +92,12 @@ export async function runInteractive(session: Session, opts: { initialPrompt?: i
   };
 
   const show = (element: ReactNode) => {
+    displayed = element;
     if (instance) instance.rerender(element);
     else {
       instance = render(element, { exitOnCtrlC: false, alternateScreen: true, maxFps: 30, incrementalRendering: true, kittyKeyboard: { mode: 'auto' } });
       watch(instance);
+      stopResize = bindResizeRepaint(process.stdout, instance, () => displayed);
     }
   };
 
@@ -154,7 +164,7 @@ export async function runInteractive(session: Session, opts: { initialPrompt?: i
     const returnScreen = currentScreen;
     try {
       store.flush();
-      show(createElement(SessionLoading, { onExit: requestExit }));
+      show(createElement(SessionLoading, { onExit: requestExit, gutter: session.config.ui?.gutter }));
       const next = await session.resume(logPath);
       candidate = next;
       if (quitRequested) { await next.shutdown(); return; }
@@ -195,6 +205,7 @@ export async function runInteractive(session: Session, opts: { initialPrompt?: i
     quitRequested = true;
     updateAbort.abort();
     await switchTask;
+    stopResize();
     const active = activeInstance();
     active?.unmount();
     await instanceExit.catch(() => {});
@@ -207,8 +218,8 @@ export async function runInteractive(session: Session, opts: { initialPrompt?: i
   }
 }
 
-function SessionLoading({ onExit }: { onExit(): void }) {
-  const { rows, columns } = useWindowSize();
+function SessionLoading({ onExit, gutter }: { onExit(): void; gutter?: number }) {
+  const { rows, columns } = useViewport(gutter);
   useInput((input, key) => { if (key.escape || (key.ctrl && input === 'c')) onExit(); });
-  return createElement(Box, { height: Math.max(1, rows - 1), width: columns, overflow: 'hidden', alignItems: 'center', justifyContent: 'center' }, createElement(Text, { dimColor: true, wrap: 'truncate-end' }, '正在恢复会话… · Esc / Ctrl+C 退出'));
+  return createElement(Box, { height: rows, width: columns, overflow: 'hidden', alignItems: 'center', justifyContent: 'center' }, createElement(Text, { dimColor: true, wrap: 'truncate-end' }, '正在恢复会话… · Esc / Ctrl+C 退出'));
 }

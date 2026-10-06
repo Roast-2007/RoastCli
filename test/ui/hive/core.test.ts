@@ -14,7 +14,7 @@ describe('Hive projection boundaries', () => {
   it('allocates four sizes and tiny screens without losing the input', () => {
     for (const [columns, rows] of [[40, 12], [80, 24], [120, 40], [200, 60], [20, 5]]) {
       for (const interaction of [false, true]) {
-        const l = deckLayout(columns!, rows!, interaction);
+        const l = deckLayout(columns!, rows! - 1, interaction);
         expect(l.header + l.body + l.input + l.status).toBe(l.height);
         expect(l.colony + l.mission + l.signals).toBe(columns);
         expect(l.input).toBeGreaterThan(0);

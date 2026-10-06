@@ -1,6 +1,7 @@
+import { useViewport } from '../viewport.js';
 import path from 'node:path';
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
-import { Box, Text, useApp, useInput, useWindowSize } from 'ink';
+import { Box, Text, useApp, useInput } from 'ink';
 import type { Session } from '../../agent/session.js';
 import type { RuntimeInput } from '../../agent/runtime.js';
 import type { UiController } from '../controller.js';
@@ -41,7 +42,7 @@ export function Deck(props: DeckProps) {
 }
 function Workspace({ session, store, controller, onExit, inputDraft, initialPrompt, startup }: DeckProps) {
   const { exit } = useApp(), theme = useTheme(), { ascii, motion } = useTerminal();
-  const { rows, columns } = useWindowSize();
+  const { rows, columns } = useViewport();
   const ui = useSyncExternalStore(store.subscribe, store.getState), main = ui.agents.main!;
   const localDraft = useRef<{ seed?: number; state?: EditorState }>({}), draft = inputDraft ?? localDraft.current;
   const [splash, setSplash] = useState(Boolean(startup && motion && !initialPrompt));
@@ -57,6 +58,7 @@ function Workspace({ session, store, controller, onExit, inputDraft, initialProm
   const agents = useMemo(() => treeOrder(ui.meta.swarm), [ui.meta.swarm]);
   const current = agents.find((agent) => agent.id === selected) ?? agents[0];
   const card = ui.meta.interactions[0], layout = deckLayout(columns, rows, Boolean(card));
+  useEffect(() => { if (focus === 'signals' && !layout.signals) changeFocus('mission'); }, [focus, layout.signals]);
   const branch = useMemo(() => gitBranch(cwd), [cwd, main.running]);
   const mission = latestMission(main), phase = missionPhase(main, agents);
   useDiffReviews(session, store, ui, current?.id ?? 'main', !splash && tab === 2 && !card && !ui.meta.overlay);
@@ -125,16 +127,16 @@ function Workspace({ session, store, controller, onExit, inputDraft, initialProm
     if (key.end || input === 'G') move(-(focusRef.current === 'signals' ? signalMax : maxOffset));
   }, { isActive: !splash && !card && !ui.meta.overlay });
   const cost = session.cost(), runningChildren = agents.filter((agent) => agent.parentId && ['queued', 'running', 'waiting', 'paused'].includes(agent.state)).length;
-  const center = <MissionPane session={session} ui={ui} tab={tab} selected={current?.id ?? 'main'} height={layout.body} width={layout.mission} focused={focus === 'mission'} offset={offset} narrow={layout.narrow} signals={!layout.signals && !layout.narrow} />;
+  const center = <MissionPane session={session} ui={ui} tab={tab} selected={current?.id ?? 'main'} height={layout.body} width={layout.mission} focused={focus === 'mission'} offset={Math.min(offset, maxOffset)} narrow={layout.narrow} signals={!layout.signals && !layout.narrow} />;
   const header = `ROAST HIVE v${VERSION} · ${session.providerName}:${session.model} · ${path.basename(cwd)} ${branch ? `⎇ ${branch}` : ''} · ${phase}${mission ? ` #${mission.missionId.slice(1)} · ${mission.strategy} · ${mission.goal}` : ''}`;
   if (splash) return <Ignition session={session} height={layout.height} columns={columns} landingHeader={layout.header ? header : undefined} onExit={exit} onDone={(text) => { if (text) { draft.seed = ui.meta.inputSeed.key; draft.state = editorReducer(draft.state ?? createEditor(history), { type: 'insert', text }); } setSplash(false); }} />;
   return <Box height={layout.height} width={columns} flexDirection="column" overflow="hidden">
     {layout.header ? <Text bold color={theme.accent} wrap="truncate-end">{header}</Text> : null}
     {ui.meta.overlay && !card ? <Overlay kind={ui.meta.overlay} session={session} store={store} controller={controller} height={layout.body + layout.input} /> : <>
       {layout.body ? detail && !card ? <Box height={layout.body} overflow="hidden"><ToolDetail tool={tool} width={columns} maxLines={layout.body} active /></Box> : layout.compact ? <Text wrap="truncate-end">HIVE {runningChildren}/{session.config.swarm.maxAgents} · {phase}</Text> : <Box height={layout.body} flexShrink={0}>
-        {layout.colony > 0 ? <ColonyPane agents={agents} views={ui.agents} selected={current?.id ?? 'main'} height={layout.body} width={layout.colony} focused={focus === 'colony'} offset={colonyOffset} /> : null}
-        {layout.narrow && (narrow === 0 || focus === 'colony') ? <Pane title="蜂群 计划 输出 改动 信号" lines={colonyLines(agents, ui.agents, current?.id ?? 'main', ascii)} width={columns} height={layout.body} focused={focus === 'colony'} offset={colonyOffset} fromTop /> : center}
-        {layout.signals > 0 ? <SignalsPane session={session} ui={ui} height={layout.body} width={layout.signals} focused={focus === 'signals'} offset={signalOffset} /> : null}
+        {layout.colony > 0 ? <ColonyPane agents={agents} views={ui.agents} selected={current?.id ?? 'main'} height={layout.body} width={layout.colony} focused={focus === 'colony'} offset={Math.min(colonyOffset, colonyMax)} /> : null}
+        {layout.narrow && (narrow === 0 || focus === 'colony') ? <Pane title="蜂群 计划 输出 改动 信号" lines={colonyLines(agents, ui.agents, current?.id ?? 'main', ascii)} width={columns} height={layout.body} focused={focus === 'colony'} offset={Math.min(colonyOffset, colonyMax)} fromTop /> : center}
+        {layout.signals > 0 ? <SignalsPane session={session} ui={ui} height={layout.body} width={layout.signals} focused={focus === 'signals'} offset={Math.min(signalOffset, signalMax)} /> : null}
       </Box> : null}
       <Box height={layout.input} flexShrink={0} flexDirection="column" overflow="hidden">
         {card ? <InteractionCard key={card.id} request={card} maxHeight={layout.input} onInterrupt={() => controller.ctrlC('')} onRespond={(response) => controller.respond(card, response)} /> : <>

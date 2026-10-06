@@ -1,5 +1,6 @@
+import { useViewport } from '../viewport.js';
 import { useRef, useState } from 'react';
-import { Box, Text, useInput, useWindowSize } from 'ink';
+import { Box, Text, useInput } from 'ink';
 import { terminalText } from '../../core/terminal-text.js';
 import { wrapDisplay } from '../../core/text-width.js';
 import { useTheme } from '../theme.js';
@@ -9,7 +10,7 @@ import { panelLayout, useScroll } from '../scroll.js';
 import { motionColor, useEntrance } from '../motion.js';
 
 export function MessagePanel({ title, text, height, onClose }: { title: string; text: string; height: number; onClose(): void }) {
-  const theme = useTheme(), { ascii } = useTerminal(), { columns } = useWindowSize();
+  const theme = useTheme(), { ascii } = useTerminal(), { columns } = useViewport();
   const layout = panelLayout(height, columns), { border, count } = layout;
   const lines = wrapDisplay(terminalText(text), layout.width);
   const scroll = useScroll(lines.length, count), { start } = scroll;
@@ -28,7 +29,7 @@ export function MessagePanel({ title, text, height, onClose }: { title: string; 
 
 export function PromptPanel({ title, height, label, optional, onSubmit, onClose }: { title: string; height: number; label: string; optional?: boolean; onSubmit(text: string): void | Promise<void>; onClose(): void }) {
   const theme = useTheme();
-  const { columns } = useWindowSize();
+  const { columns } = useViewport();
   const accent = motionColor(theme.border, theme.accent, useEntrance(title));
   const [value, setValue] = useState(''), [error, setError] = useState(''), [busy, setBusy] = useState(false);
   const valueRef = useRef(value); valueRef.current = value;

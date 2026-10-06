@@ -34,13 +34,13 @@ describe('terminal text and layout', () => {
   });
   it('budgets every visible region below the screen height', () => {
     for (const rows of [5, 10, 16, 24, 40, 80]) {
-      const layout = inlineLayout(rows, { tools: 20, todos: 100, agents: 20, interaction: false, detail: false });
+      const layout = inlineLayout(rows - 1, { tools: 20, todos: 100, agents: 20, interaction: false, detail: false });
       expect(Object.values(layout).reduce((a, b) => a + b, 0)).toBeLessThan(rows);
       expect(layout.input).toBeGreaterThan(0);
-      const modal = inlineLayout(rows, { tools: 20, todos: 100, agents: 20, interaction: true, detail: true });
+      const modal = inlineLayout(rows - 1, { tools: 20, todos: 100, agents: 20, interaction: true, detail: true });
       expect(Object.values(modal).reduce((a, b) => a + b, 0)).toBeLessThan(rows);
       for (const columns of [20, 40, 80, 120, 200]) {
-        const mission = deckLayout(columns, rows);
+        const mission = deckLayout(columns, rows - 1);
         expect(mission.height).toBeLessThan(rows);
         expect(mission.colony + mission.mission + mission.signals).toBeLessThanOrEqual(columns);
         expect(mission.mission).toBeGreaterThan(0);

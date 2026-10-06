@@ -1,8 +1,9 @@
+import { useViewport } from '../viewport.js';
 /**
  * 工具卡片：一行摘要（状态图标 · 工具名 · 关键参数 · 耗时），
  * 写类工具附带 diff，bash 运行中显示实时输出尾部，失败显示错误预览。
  */
-import { Box, Text, useInput, useWindowSize } from 'ink';
+import { Box, Text, useInput } from 'ink';
 import type { DiffMeta } from '../../tools/file-ops.js';
 import type { ToolView } from '../store/reducer.js';
 import { useTheme } from '../theme.js';
@@ -107,7 +108,7 @@ function StatusIcon({ status }: { status: ToolView['status'] }) {
 export function ToolDetail({ tool, maxLines, active = false, width }: { tool: ToolView | undefined; maxLines: number; active?: boolean; width?: number }) {
   const theme = useTheme();
   const { ascii } = useTerminal();
-  const { columns } = useWindowSize();
+  const { columns } = useViewport();
   const layout = panelLayout(maxLines, width ?? columns), { count, border } = layout;
   const lines = wrapDisplay(terminalText(tool?.output ?? tool?.preview ?? ''), layout.width);
   const scroll = useScroll(lines.length, count), { start } = scroll;

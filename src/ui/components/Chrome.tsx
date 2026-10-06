@@ -1,7 +1,8 @@
+import { useViewport } from '../viewport.js';
 /**
  * 界面"外壳"组件：启动横幅、状态栏（模式胶囊 / 模型 / 上下文量规 / 缓存 / 用量 / 计时）、待办面板、回合小结。
  */
-import { Box, Text, useWindowSize } from 'ink';
+import { Box, Text } from 'ink';
 import type { TokenUsage } from '../../core/types.js';
 import type { PermissionMode } from '../../tools/permissions/engine.js';
 import type { TodoItem } from '../../tools/interact/index.js';
@@ -18,7 +19,7 @@ import { statusText } from '../hive/status.js';
 
 export function Banner({ model, cwd }: { model: string; cwd: string; resumed?: string; warnings: string[] }) {
   const theme = useTheme();
-  const { columns } = useWindowSize();
+  const { columns } = useViewport();
   const branch = gitBranch(cwd);
   return (
     <Text color={theme.accent} bold wrap="truncate-end">{truncateDisplay(terminalText(`ROAST v${VERSION} · ${model} · ${path.basename(cwd)}${branch ? ` ⎇ ${branch}` : ''}`), columns)}</Text>
@@ -71,7 +72,7 @@ export interface StatusLineProps {
 
 export function StatusLine(p: StatusLineProps) {
   const theme = useTheme();
-  const { columns } = useWindowSize();
+  const { columns } = useViewport();
   const frame = useSpinner(p.running);
   const glyph = useGlyphs();
   const { ascii } = useTerminal();

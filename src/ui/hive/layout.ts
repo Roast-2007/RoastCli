@@ -1,5 +1,5 @@
 export function deckLayout(columns: number, rows: number, interaction = false) {
-  const height = Math.max(1, rows - 1);
+  const height = Math.max(1, rows);
   const header = rows >= 12 ? 1 : 0;
   const status = height > 1 ? 1 : 0;
   const available = height - header - status;

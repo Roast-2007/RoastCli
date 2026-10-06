@@ -1,5 +1,7 @@
+import { loadConfig } from '../../core/config.js';
+import { useViewport } from '../viewport.js';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Box, Text, useBoxMetrics, useCursor, useInput, usePaste, useWindowSize, type DOMElement } from 'ink';
+import { Box, Text, useBoxMetrics, useCursor, useInput, usePaste, type DOMElement } from 'ink';
 import { resolveApiKey, reasoningEfforts, type ReasoningEffort, type RoastConfig } from '../../core/config.js';
 import { terminalText } from '../../core/terminal-text.js';
 import { displayWidth, graphemes, nextBoundary, previousBoundary, wrapDisplay } from '../../core/text-width.js';
@@ -29,7 +31,7 @@ function cleanInput(text: string): string {
 export function Field({ label, value, secret, active, onChange, showLabel = true, acceptInput }: { label: string; value: string; secret?: boolean; active: boolean; onChange(value: string): void; showLabel?: boolean; acceptInput?(): boolean }) {
   const theme = useTheme();
   const glyph = useGlyphs();
-  const { columns } = useWindowSize();
+  const { columns } = useViewport();
   const [cursor, setCursor] = useState(value.length);
   const inputState = useRef({ value, cursor });
   inputState.current.value = value;
@@ -85,14 +87,17 @@ function credentialStatus(settings: ProviderSettings, name: string): string {
 
 export function ProviderWizard(props: ProviderWizardProps) {
   const theme = useMemo(() => pickTheme(process.env, props.ui?.theme), [props.ui?.theme]);
-  const terminal = useMemo(() => terminalPreferences(process.env, props.ui), [props.ui]);
+  const terminal = useMemo(() => {
+    try { return terminalPreferences(process.env, props.ui ?? loadConfig(props.cwd)?.ui); }
+    catch { return terminalPreferences(process.env, props.ui); }
+  }, [props.ui, props.cwd]);
   return <ThemeContext.Provider value={theme}><TerminalContext.Provider value={terminal}><Wizard {...props} /></TerminalContext.Provider></ThemeContext.Provider>;
 }
 
 function Wizard({ cwd, onExit }: ProviderWizardProps) {
   const theme = useTheme();
   const glyph = useGlyphs();
-  const { rows, columns } = useWindowSize();
+  const { rows, columns } = useViewport();
   const compact = rows < 18;
   const read = (): { settings: ProviderSettings; error?: string } => {
     try { return { settings: readProviderSettings(cwd) }; }
@@ -160,7 +165,7 @@ function Wizard({ cwd, onExit }: ProviderWizardProps) {
     catch (err) { setError(err instanceof Error ? err.message : '无法读取配置'); }
   };
   const gap = rows >= 8 ? 1 : 0;
-  const bodyHeight = Math.max(1, rows - 1 - 2 - (compact ? 0 : 1) - gap - 1 - (error ? Math.min(2, Math.max(1, rows - 7)) : 0));
+  const bodyHeight = Math.max(1, rows - 2 - (compact ? 0 : 1) - gap - 1 - (error ? Math.min(2, Math.max(1, rows - 7)) : 0));
   const reviewText = draft ? [
     `${settings.providers[draft.name] ? '更新已有供应商' : '添加供应商'}：${draft.name}`,
     `协议：${draft.driver}`, `地址：${draft.baseURL}`, `模型：${draft.model}`,
@@ -254,14 +259,14 @@ function Wizard({ cwd, onExit }: ProviderWizardProps) {
   const note = presets.find((p) => p.name === draft?.name)?.note;
   if (step === 'models' && draft) {
     const ids = draftModelIds(draft);
-    return <SelectPanel title="模型列表 · 可选择多个模型" height={Math.max(1, rows - 1)} searchable message={modelMessage} onClose={() => go('credential')} onRefresh={() => setRefresh((value) => value + 1)} entries={[{ id: ':done', label: `完成选择 · ${ids.length} 个模型（首个为默认）` }, ...remoteModels.map((model) => ({ id: model.id, label: `${ids.includes(model.id) ? '[x]' : '[ ]'} ${model.id}${model.meta.name ? ` · ${model.meta.name}` : ''}` }))]} onSelect={(entry) => {
+    return <SelectPanel title="模型列表 · 可选择多个模型" height={rows} searchable message={modelMessage} onClose={() => go('credential')} onRefresh={() => setRefresh((value) => value + 1)} entries={[{ id: ':done', label: `完成选择 · ${ids.length} 个模型（首个为默认）` }, ...remoteModels.map((model) => ({ id: model.id, label: `${ids.includes(model.id) ? '[x]' : '[ ]'} ${model.id}${model.meta.name ? ` · ${model.meta.name}` : ''}` }))]} onSelect={(entry) => {
       if (stepRef.current !== 'models') return;
       if (entry.id === ':done') { if (!ids.length) throw new Error('请先选择模型，或 Esc 返回手动输入'); return go('credential'); }
       const next = ids.includes(entry.id) ? ids.filter((id) => id !== entry.id) : [...ids, entry.id];
       update({ model: next.join(', '), reasoningEffort: draft.existing?.models?.[next[0]!]?.reasoningEffort ?? draft.modelMeta?.[next[0]!]?.reasoningEffort });
     }} />;
   }
-  return <Box flexDirection="column" height={Math.max(1, rows - 1)} overflow="hidden" paddingX={1}>
+  return <Box width={columns} flexDirection="column" height={rows} overflow="hidden" paddingX={1}>
     <Box flexDirection="column" flexShrink={0}>
     <Text bold color={accent} wrap="truncate-end">ROAST · 供应商配置</Text>
     <Text bold wrap="truncate-end">{title}</Text>

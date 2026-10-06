@@ -1,5 +1,6 @@
+import { useViewport } from '../viewport.js';
 import { useRef, useState } from 'react';
-import { Box, Text, useInput, useWindowSize } from 'ink';
+import { Box, Text, useInput } from 'ink';
 import type { InteractionRequest, InteractionResponse } from '../../core/interaction.js';
 import { terminalText } from '../../core/terminal-text.js';
 import { wrapDisplay } from '../../core/text-width.js';
@@ -16,7 +17,7 @@ export function InteractionCard({ request, onRespond, onInterrupt, maxHeight = 1
   const theme = useTheme();
   const { ascii } = useTerminal();
   const glyph = useGlyphs();
-  const { columns } = useWindowSize();
+  const { columns } = useViewport();
   const [selected, setSelected] = useState(0);
   const [draft, setDraft] = useState('');
   const [full, setFull] = useState(false);

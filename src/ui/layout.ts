@@ -3,7 +3,7 @@ import type { EditorState } from './input/editor.js';
 
 /** Allocate physical rows, keeping the footer and editor reachable before optional panels. */
 export function inlineLayout(rows: number, content: { tools: number; todos: number; agents: number; interaction: boolean; detail: boolean }) {
-  let left = Math.max(1, rows - 1);
+  let left = Math.max(1, rows);
   const take = (want: number) => { const n = Math.min(left, Math.max(0, want)); left -= n; return n; };
   const status = take(left >= 4 ? 1 : 0);
   const interaction = content.interaction ? take(Math.min(16, left)) : 0;
@@ -18,7 +18,7 @@ export function inlineLayout(rows: number, content: { tools: number; todos: numb
 
 /** Fullscreen keeps one spare terminal row so Windows never scrolls a painted frame. */
 export function fullscreenLayout(rows: number, content: { interaction: boolean; detail: boolean; todos: boolean; agents: boolean }) {
-  const height = Math.max(1, rows - 1);
+  const height = Math.max(1, rows);
   const header = height >= 5 ? 1 : 0;
   const status = height >= 3 ? 1 : 0;
   let left = height - header - status;

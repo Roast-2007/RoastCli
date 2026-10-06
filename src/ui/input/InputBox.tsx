@@ -1,10 +1,11 @@
+import { useViewport } from '../viewport.js';
 /**
  * 输入框：多行编辑（editor reducer）+ 历史 + 粘贴折叠 + 斜杠命令 / @ 文件建议。
  * 按键：Enter 提交（行尾为 \ 时换行）· Shift+Enter / Ctrl+J / Alt+Enter 换行 · ↑↓ 移行或翻历史 ·
  * Tab 应用首个建议 · Ctrl+A/E 行首/行尾 · Ctrl+U 删到行首 · Ctrl+W 删词。
  */
 import { useLayoutEffect, useReducer, useRef, useState } from 'react';
-import { Box, Text, useBoxMetrics, useCursor, useInput, usePaste, useWindowSize, type DOMElement } from 'ink';
+import { Box, Text, useBoxMetrics, useCursor, useInput, usePaste, type DOMElement } from 'ink';
 import { createEditor, editorReducer, expand, textOf, type EditorAction, type EditorState } from './editor.js';
 import { suggestions, type SuggestDeps } from './suggest.js';
 import { absoluteOrigin } from './cursor.js';
@@ -41,7 +42,7 @@ export function InputBox({ active, placeholder, initialHistory, initialText, ini
   const theme = useTheme();
   const { ascii } = useTerminal();
   const glyph = useGlyphs();
-  const { columns } = useWindowSize();
+  const { columns } = useViewport();
   const [state, renderAction] = useReducer(reducer, initialHistory, (h) =>
     initialState ?? (initialText ? editorReducer(createEditor(h), { type: 'set', text: initialText }) : createEditor(h)),
   );

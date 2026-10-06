@@ -37,7 +37,7 @@ describe('fullscreen transcript', () => {
   });
   it('budgets every combination of panels for tiny through large screens', () => {
     for (const rows of [2, 3, 4, 5, 8, 10, 16, 24, 40, 80]) for (let flags = 0; flags < 16; flags++) {
-      const layout = fullscreenLayout(rows, { interaction: Boolean(flags & 1), detail: Boolean(flags & 2), todos: Boolean(flags & 4), agents: Boolean(flags & 8) });
+      const layout = fullscreenLayout(rows - 1, { interaction: Boolean(flags & 1), detail: Boolean(flags & 2), todos: Boolean(flags & 4), agents: Boolean(flags & 8) });
       const { height, ...parts } = layout;
       expect(Object.values(parts).reduce((a, b) => a + b, 0)).toBe(height);
       expect(height).toBeLessThan(rows);

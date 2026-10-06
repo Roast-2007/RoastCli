@@ -1,6 +1,7 @@
+import { useViewport } from './viewport.js';
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import path from 'node:path';
-import { Box, Text, useApp, useInput, useStdin, useWindowSize } from 'ink';
+import { Box, Text, useApp, useInput, useStdin } from 'ink';
 import type { AppProps } from './App.js';
 import { createUiStore } from './store/store.js';
 import { createUiController } from './controller.js';
@@ -41,7 +42,7 @@ export function FullScreen(props: AppProps) {
 
 function Workspace({ session, store: storeProp, controller: controllerProp, inputDraft, initialPrompt, printedUpTo = 0, onMissionControl, startup }: AppProps) {
   const store = storeProp!, controller = controllerProp!;
-  const { exit } = useApp(), { stdin } = useStdin(), { rows, columns } = useWindowSize();
+  const { exit } = useApp(), { stdin } = useStdin(), { rows, columns } = useViewport();
   const theme = useTheme(), { ascii, motion } = useTerminal();
   const ui = useSyncExternalStore(store.subscribe, store.getState), view = ui.agents.main!, meta = ui.meta;
   const localDraft = useRef<{ seed?: number; state?: EditorState }>({});

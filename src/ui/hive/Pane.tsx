@@ -18,6 +18,7 @@ export function Pane({ title, lines, height, width, focused, offset = 0, fromTop
   const accent = motionColor(theme.border, theme.accent, useEntrance(focused ? 'focus' : 'blur'));
   const count = Math.max(0, height - (border ? 3 : 1));
   const wrapped = paneLines(lines, width, height);
+  offset = Math.max(0, Math.min(offset, Math.max(0, wrapped.length - count)));
   const view = fromTop ? { shown: wrapped.slice(offset, offset + count), offset: 0 } : windowLines(wrapped, count, offset);
   const color = (tone: LineTone) => tone === 'user' ? theme.user : tone === 'accent' || tone === 'tool' ? theme.accent : tone === 'ok' ? theme.success : tone === 'error' ? theme.danger : tone === 'warn' ? theme.warn : undefined;
   return <Box width={width} height={height} flexShrink={0} overflow="hidden" flexDirection="column" borderStyle={border ? ascii ? 'classic' : 'round' : undefined} borderColor={focused ? accent : theme.border} paddingX={border ? 1 : 0}>

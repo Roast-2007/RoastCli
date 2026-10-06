@@ -1,5 +1,6 @@
+import { useViewport } from '../viewport.js';
 import { useRef, useState } from 'react';
-import { Box, Text, useInput, usePaste, useWindowSize } from 'ink';
+import { Box, Text, useInput, usePaste } from 'ink';
 import { terminalText } from '../../core/terminal-text.js';
 import { previousBoundary } from '../../core/text-width.js';
 import { useTheme } from '../theme.js';
@@ -17,7 +18,7 @@ export function SelectPanel({ title, entries, height, onSelect, onClose, initial
   initialId?: string; message?: string; footer?: string; onRefresh?(): void; searchable?: boolean;
 }) {
   const theme = useTheme(), glyph = useGlyphs(), { ascii } = useTerminal();
-  const { columns } = useWindowSize();
+  const { columns } = useViewport();
   const [query, setQuery] = useState('');
   const [selected, setSelected] = useState(initialId ?? entries[0]?.id ?? '');
   const inputState = useRef({ query, selected });
