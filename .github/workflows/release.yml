@@ -34,6 +34,15 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - name: Check release version
         run: node -e 'if ("v" + require("./package.json").version !== process.env.GITHUB_REF_NAME) process.exit(1)'
+      - name: Extract release notes
+        run: |
+          version="$(node -p 'require("./package.json").version')"
+          notes="$RUNNER_TEMP/release-notes.md"
+          awk -v v="$version" '/^## /{p = ($2 == v); next} p' CHANGELOG.md > "$notes"
+          grep -q '[^[:space:]]' "$notes" || {
+            echo "CHANGELOG.md has no section for $version."
+            exit 1
+          }
       - run: pnpm typecheck
       - run: pnpm test
       - run: pnpm build
@@ -49,9 +58,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          version="$(node -p 'require("./package.json").version')"
-          notes="docs/RELEASE-${version}.md"
-          test -f "$notes"
+          notes="$RUNNER_TEMP/release-notes.md"
           if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
             test "$(gh release view "$GITHUB_REF_NAME" --json isDraft --jq .isDraft)" = "true" || {
               echo "This release is already public; its assets will not be overwritten."

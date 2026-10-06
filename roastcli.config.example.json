@@ -1,5 +1,4 @@
 {
-  "$schema": "复制为 roastcli.config.json 后运行 roast config 输入 API Key。密钥存用户 credentials.json，配置只记录引用。",
   "providers": {
     "deepseek": {
       "driver": "openai-compat",

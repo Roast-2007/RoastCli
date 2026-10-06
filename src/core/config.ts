@@ -88,7 +88,7 @@ export const ConfigSchema = z.object({
   maxSteps: z.number().int().positive().default(50),
   logsDir: z.string().default('logs'),
   temperature: z.number().min(0).max(2).optional(),
-  /** 上下文引擎参数（见 docs/DESIGN.md §3） */
+  /** 上下文引擎参数（见 docs/DESIGN.md「上下文引擎」） */
   context: z
     .object({
       compactAt: z.number().min(0.3).max(0.98),

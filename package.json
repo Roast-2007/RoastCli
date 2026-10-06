@@ -12,7 +12,7 @@
   "bugs": {
     "url": "https://github.com/Roast-2007/RoastCli/issues"
   },
-  "files": ["dist", "docs/INSTALL.md", "docs/USAGE.md", "LICENSE"],
+  "files": ["dist", "docs/USAGE.md", "LICENSE"],
   "keywords": ["cli", "coding-agent", "tui", "ai", "mcp"],
   "type": "module",
   "bin": {

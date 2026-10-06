@@ -10,7 +10,7 @@ const output = process.platform === 'win32'
   : execFileSync('npm', npmArgs, { encoding: 'utf8' });
 const [pack] = JSON.parse(output);
 const paths = pack.files.map((file) => file.path);
-const allowed = /^(dist\/|docs\/(INSTALL|USAGE)\.md$|README\.md$|LICENSE$|package\.json$)/;
+const allowed = /^(dist\/|docs\/USAGE\.md$|README\.md$|LICENSE$|package\.json$)/;
 assert.ok(paths.includes('dist/cli.js'), 'Missing compiled CLI');
 assert.ok(paths.includes('LICENSE'), 'Missing license');
 for (const path of paths) {

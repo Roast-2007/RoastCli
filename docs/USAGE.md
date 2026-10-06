@@ -1,232 +1,647 @@
-# RoastCli 使用指南
+# 使用指南
 
-安装步骤见 [INSTALL.md](INSTALL.md)，项目介绍见 [README](../README.md)。
+安装和入门见 [README](../README.md)。本文按功能说明 RoastCli 的全部用法。
 
-一个终端里的 coding agent。主打三件事：
+## 配置供应商
 
-- **无损上下文**：旧内容不删，折叠成带句柄的存根 `⟦ctx:id⟧`，模型随时可以用 `recall` 取回原文。压缩只在安全切点进行，并且会考虑前缀缓存。
-- **Hive 蜂群**：Queen → Lead → Worker 多层智能体，配合 scout、critic 等专家角色。agent 之间通过消息总线和版本化黑板协作，等待子任务时不耗 token。在 git 仓库中，写代码的子 agent 各自在独立的 worktree 中并行修改，上级审阅后用 `merge_worktree` 合并，冲突会被检出而不会写坏文件。按 Ctrl+G 进入全屏 Mission Control 实时指挥。
-- **可证明一致**：所有模型可见的内容都先写进 JSONL 日志。实时运行和 `-c` 恢复走同一套 reducer，每次请求都会校验视图 hash。
+运行 `roast config` 打开配置向导（对话中用 `/provider` 或 `/config`）。依次选择供应商、填写地址和模型、输入 API Key 和推理强度，最后确认保存。
 
-此外还提供：权限引擎与检查点回退、skills、MCP、用户钩子、本地 / Mem0 长期记忆、BM25 / embeddings 混合代码检索，以及支持中文和 emoji 编辑的 Ink TUI。
+| 预设 | 默认地址 | 默认模型 |
+|---|---|---|
+| DeepSeek | `https://api.deepseek.com` | `deepseek-chat` |
+| 通义千问 | `https://dashscope.aliyuncs.com/compatible-mode/v1` | `qwen-plus` |
+| 智谱 | `https://open.bigmodel.cn/api/paas/v4` | `glm-4-plus` |
+| Kimi / Moonshot | `https://api.moonshot.cn/v1` | `kimi-k2` |
+| Kimi Code | `https://api.kimi.com/coding/v1` | `kimi-for-coding` |
+| 豆包 | `https://ark.cn-beijing.volces.com/api/v3` | 无，需填写 |
+| 腾讯混元 | `https://api.hunyuan.cloud.tencent.com/v1` | `hunyuan-turbos-latest` |
+| 硅基流动 | `https://api.siliconflow.cn/v1` | `Qwen/Qwen3-32B` |
+| OpenAI | `https://api.openai.com/v1` | `gpt-5` |
+| Claude | `https://api.anthropic.com` | `claude-sonnet-5-5` |
+| Gemini | `https://generativelanguage.googleapis.com/v1beta/openai` | `gemini-2.5-pro` |
+| OpenRouter | `https://openrouter.ai/api/v1` | `openai/gpt-5` |
+| 自定义 | 自填 | 自填 |
 
-## 快速开始
+Claude 使用 Anthropic 协议，其余都是 OpenAI 兼容协议。自定义端点可以选择其中任一种。预设里的模型只是建议，以你账号实际可用的为准。豆包需要填写控制台里的模型 ID 或 Endpoint ID（`ep-…`）。
 
-```bash
-pnpm install && pnpm build        # 或开发时用 pnpm dev 代替下文的 roast
-roast config                      # 终端向导：选择供应商、填写密钥和模型、确认保存
-roast doctor                      # 自检：配置、凭据、shell、git、ripgrep、扩展
-roast                             # 交互式 TUI
+向导操作：
+
+- `Tab`/`Shift+Tab` 或 `↑↓` 切换字段，`←→` 或空格切换推理强度、默认模型和认证方式，`Esc` 返回。
+- 模型可以填多个 ID，用逗号分隔，第一个作为默认模型。留空时，输入密钥后会自动获取模型列表；也可以在密钥页或确认页按 `Ctrl+L` 打开列表。在列表中输入文字搜索，`Enter` 勾选，`Ctrl+R` 刷新，选完后选"完成选择"。
+- 本地服务不需要密钥时，在密钥页把认证设为"无密钥"。
+- 同一个供应商可以添加多次（比如两个自定义端点），向导会分配不同的 ID。
+- 窗口很小时只显示当前字段，确认页用 `PgUp`/`PgDn` 翻页。
+
+配置默认保存在 `~/.roast/config.json`，设置了 `ROASTCLI_CONFIG` 时保存到那个文件，页首和确认页会显示实际路径。修改在下次启动时生效。没有任何配置时，交互式启动会自动打开向导。
+
+### API Key
+
+密钥保存在 `~/.roast/credentials.json`，格式是 `{"引用 ID": "密钥"}`，**明文存储**。配置文件里只记录引用 `apiKeyRef`。macOS 和 Linux 上这个文件的权限是 `0600`，Windows 上继承用户目录的权限。密钥不会出现在对话历史和日志里。
+
+旧版本中的 `apiKeyEnv`（从环境变量读取密钥）已经不再用于供应商认证，请在向导中重新输入密钥。
+
+### 推理强度
+
+推理强度按模型保存在 `models.<模型>.reasoningEffort`。选"自动"时不发送这个参数，由服务端决定。OpenAI 兼容协议发送 `reasoning_effort`，Anthropic 发送 `output_config.effort`。
+
+可选值取决于模型。可以在模型配置中用 `reasoningEfforts: ["low", "high"]` 限定选项，或用 `reasoning: false` 隐藏这一项。Kimi Code 提供 none、low、high、max。参数说明见 [OpenAI](https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create)、[Anthropic](https://platform.claude.com/docs/en/build-with-claude/effort) 和 [Kimi Code](https://www.kimi.com/code/docs/kimi-code/models.html) 的文档。
+
+### 模型列表
+
+OpenAI 兼容协议请求 `GET <baseURL>/models`，Anthropic 请求 `GET <baseURL>/v1/models`（地址已经以 `/v1` 结尾也可以）。请求超时 10 秒，结果在会话内缓存 5 分钟，不跟随重定向。
+
+标准接口通常只返回模型 ID，不包含上下文长度、是否支持推理等信息，这些以配置中填写的为准。获取失败、接口不支持或项目连接未受信任时，可以手动输入模型 ID。
+
+### 不用向导
+
+在脚本或非交互环境中可以用 `roast init` 生成配置：
+
+```sh
+roast init --provider kimi-code --reasoning-effort high
+roast config                                        # 之后再输入密钥
+echo "$API_KEY" | roast init --provider deepseek --api-key-stdin   # 或者从标准输入读取密钥
 ```
 
-Windows 上 bash 工具优先使用 Git Bash（`C:\Program Files\Git\bin\bash.exe`），找不到时退回 cmd。
+`roast init` 默认写入用户配置，加 `--project` 写入 `.roast/config.json`，文件已存在时需要加 `--force`。`--model` 指定模型，豆包必须指定；自定义端点请用 `roast config`。
 
-## 命令
+## 文件夹信任
+
+第一次在某个目录交互启动 `roast` 或 `roast swarm` 时，会询问是否信任这个文件夹：`↑↓` 选择，`Enter` 确认，`Esc` 或 `Ctrl+C` 退出。确认前可以查看完整路径和项目配置。在确认之前，RoastCli 不会创建会话，也不会加载项目的扩展。
+
+信任记录保存在 `~/.roast/trusted.json`，同时记下项目配置中敏感部分的 hash。以下内容发生变化后会再次询问：
+
+- 供应商的连接字段：`driver`、`baseURL`、`headers`、`auth`、`apiKeyRef`。这是为了防止一个仓库把你的密钥发到别的地址。
+- hooks、MCP 服务器和 `permissions.allow`。
+- `memory`、`rag`、`webSearch`、`debugLog`，以及指向项目目录之外的 `logsDir`。未受信任时这些设置会被忽略。
+
+未受信任的项目也不能覆盖同名的 prompt、skill 和蜂群模板。deny 和 ask 规则不需要信任，始终生效。
+
+非交互模式（`-p`）不会询问，也不会自动信任；如果项目配置改了供应商连接，会直接拒绝启动。脚本中可以先运行 `roast trust`，它会列出信任后将启用的内容。
+
+## 命令行
 
 | 命令 | 说明 |
 |---|---|
-| `roast` | 交互式 TUI |
-| `roast -p "<任务>"` | 管道模式：直接输出结果。可加 `--output-format stream-json` 输出全部事件（包括子 agent） |
-| `roast -c` / `roast -r [runId]` | 继续本目录最近一次会话 / 恢复指定会话 |
-| `roast -m provider:model` | 临时换模型 |
-| `roast --permission-mode <mode>` | `default` / `acceptEdits` / `plan` / `yolo` |
-| `roast swarm "<目标>" [-t 模板] [-n 数量] [-p]` | 以蜂群方式完成目标。模板：`fanout`（默认，拆分并行）、`best-of-n`（N 个独立方案，由 Judge 择优合并）、`critique`（实现、评审、修正循环）、`research`（多角度只读调研）；`--list-templates` 列出全部，可在 `.roast/templates/*.yaml` 自定义 |
-| `roast init` / `roast doctor` | 生成配置 / 环境自检 |
-| `roast config` | 供应商配置向导：添加、编辑、选择默认模型与推理强度，保存到当前生效配置 |
-| `roast trust` | 信任当前项目（允许项目配置设置 provider 连接信息、钩子、MCP 服务器） |
-| `roast mcp add <名称> -- <命令> [参数…]` | 添加 stdio MCP 服务器。也可用 `--url <地址>` 添加 http / sse 服务器；`-e K=V`、`-H K=V`；`--project` 写入项目级配置 |
-| `roast mcp list` / `roast mcp remove <名称>` | 列出 / 移除 MCP 服务器 |
-| `roast logs list` / `roast logs show <runId> [--raw]` | 浏览运行日志，从日志重建会话 |
-| `roast worktrees list` / `roast worktrees prune` | 查看当前仓库保留的蜂群工作区 / 清理已结束且相对基线无改动的工作区；有未合并改动、仍在运行或缺少基线记录的工作区会保留 |
+| `roast` | 打开对话界面 |
+| `roast -p "<任务>"` | 非交互执行，输出结果后退出。加 `--output-format stream-json` 以 JSON 行输出所有事件，包括子 agent |
+| `roast -c` | 继续当前目录最近的会话 |
+| `roast -r [runId]` | 恢复指定会话；不带 ID 时列出当前目录最近 20 个会话 |
+| `roast -m provider:model` | 本次使用指定的模型 |
+| `roast --permission-mode <模式>` | 以指定权限模式启动：`default`、`acceptEdits`、`plan`、`yolo` |
+| `roast swarm "<目标>"` | 用蜂群完成目标，见[蜂群](#蜂群) |
+| `roast config` | 配置向导 |
+| `roast init` | 不经向导生成配置，见[不用向导](#不用向导) |
+| `roast doctor` | 检查 Node.js 版本、配置、密钥、信任状态、shell、git、ripgrep、项目说明、skills、hooks 和 MCP |
+| `roast trust` | 信任当前目录 |
+| `roast mcp add` / `list` / `remove` | 管理 MCP 服务器，见 [MCP](#mcp) |
+| `roast logs list` | 列出最近 20 次运行 |
+| `roast logs show <runId> [--raw]` | 从日志还原某次运行的对话，`--raw` 输出原始事件 |
+| `roast worktrees list` / `prune` | 查看或清理蜂群保留下来的 worktree |
+| `roast --version` | 显示版本 |
 
-非 TTY 环境必须提供 `-p "任务"`，蜂群使用 `roast swarm --print "目标"`；缺少任务会在创建会话前报出明确用法。
+在 CI、管道等非 TTY 环境中必须用 `-p` 提供任务，蜂群用 `roast swarm --print "<目标>"`，否则直接报错。非交互模式下，需要用户确认的操作一律拒绝。按一次 `Ctrl+C` 中断当前任务，再按一次退出。
 
-## TUI
+退出码：`2` 缺少配置，`3` 项目配置未受信任，`130` 被中断，其他错误为 `1`。
 
-**按键**
+Windows 上 bash 工具和 `!命令` 优先使用 Git Bash（`C:\Program Files\Git\bin\bash.exe`），找不到时使用 cmd。
+
+## 对话界面
+
+交互启动后进入全屏界面，输入框和状态栏固定在底部。启动动画按任意键跳过，按下的字符会进入输入框。
+
+### 按键
 
 | 按键 | 作用 |
 |---|---|
-| Enter / Shift+Enter、Ctrl+J、行尾 `\` | 发送 / 换行 |
-| Esc / Ctrl+C | 中断当前回合（空闲时连按两次 Esc 打开回退列表，Ctrl+C 退出） |
-| Ctrl+O | 查看最近工具的完整输出；↑↓ 按行滚动，Home/End 到首尾，Ctrl+O / Esc 返回 |
-| Shift+↑↓ / PgUp | 进入连续阅读；↑↓ 滚动，Home 到顶部，End / Enter / Esc 返回输入 |
-| 鼠标滚轮 | 在全屏 chat、正文和选择面板滚动；chat 每次移动 3 行，草稿和输入历史选择保持不变；回到底部后跟随新输出 |
-| Shift+Tab | 切换权限模式 default → acceptEdits → plan → yolo |
-| Ctrl+G | 进入 / 退出全屏 Mission Control |
-| Tab / ↑↓ | 补全命令或 `@文件` / 选择补全项；`/` 或命令前缀可直接 Enter 打开选中命令 |
-| ↑ / ↓、Ctrl+R | 浏览输入历史 / 反向搜索；再次 Ctrl+R 切换匹配，Enter 载入，Esc 返回草稿 |
-| 空输入时 `?` / F1 | 打开可滚动帮助，Esc 关闭并保留草稿 |
+| `Enter` | 发送 |
+| `Shift+Enter`、`Alt+Enter`、`Ctrl+J`，或在行尾输入 `\` | 换行 |
+| `Esc` | 运行中：中断。空闲时在 600 毫秒内按两次：打开回退菜单 |
+| `Ctrl+C` | 运行中：中断。空闲时：退出 |
+| `Shift+Tab` | 切换权限模式：default → acceptEdits → plan → yolo |
+| `Ctrl+O` | 查看最近一个工具的完整输出，再按一次或 `Esc` 返回 |
+| `Shift+↑↓`、`Ctrl+↑↓`、`PgUp` | 进入阅读模式 |
+| 鼠标滚轮 | 滚动对话，每格 3 行 |
+| `↑↓` | 有补全候选时选择候选，否则移动光标或翻看输入历史 |
+| `Tab` | 应用补全 |
+| `Ctrl+R` | 搜索输入历史；再按一次找更早的匹配，`Enter` 载入，`Esc` 取消 |
+| `Ctrl+A` / `Ctrl+E` | 移到行首 / 行尾 |
+| `Ctrl+U` / `Ctrl+W` | 删除到行首 / 删除前一个词 |
+| `Ctrl+G` | 打开 Mission Control |
+| `F1`，或输入框为空时按 `?` | 帮助 |
 
-**输入前缀**：`/` 命令，`@路径` 引用文件，`!命令` 直接执行 shell（结果不发给模型），`#内容` 记到 ROAST.md。agent 运行时输入的内容会排队，在下一步送达，不需要先中断。
+阅读模式下，`↑↓` 或 `j`/`k` 逐行滚动，`PgUp`/`PgDn` 翻页，`Home` 或 `g` 到顶部，`End`、`G`、`Enter` 或 `Esc` 回到输入框。阅读时新的输出不会把视图拉回底部，回到底部后恢复跟随。
 
-`!命令` 默认最多运行 600 秒，可设置 `ui.shellTimeoutMs`（毫秒，1 秒至 24 小时）。开始时提示期限，超时会明确显示；输出保存在 Ctrl+O 工具详情中（底层保留有大小上限的输出），聊天只显示简短状态。输入历史在磁盘上保留最近 500 条；会话、回退与 agent 列表支持输入搜索。蜂群自带初始目标时跳过 704ms 启动动画直接提交。
+为了支持滚轮，RoastCli 会开启终端的鼠标报告，这会影响用鼠标选择文字。大多数终端里按住 `Shift` 再拖动就能正常选择。
 
-**斜杠命令**：`/help /provider`（别名 `/config`）、`/clear /resume [runId] /context [pin|unpin|drop <id>] /compact [关注点] /rewind [N] /mode /model [provider:model] [effort|auto] /cost /todo /init /swarm [模板] <目标> /agents /board [key] /theme [名称] /skills /memory [关键词] /mcp /logs /exit`。`/hive` 是 `/swarm` 的别名，`/hive models` 打开角色模型配置。另外，每个 skill 都可以用 `/技能名 参数` 直接调用。
+### 输入
 
-交互启动默认全屏，展示可跳过的 ROAST 字符动画；输入框与状态栏固定在底部。长回答和计划用 Shift+↑↓ / PgUp 进入连续阅读，↑↓ / j/k 逐行滚动，Home 到顶部，End / Enter / Esc 返回输入。阅读期间新输出保留当前视口，返回输入后继续跟随最新内容。
+- `/` 开头是斜杠命令。输入命令前缀后可以直接按 `Enter` 执行高亮的候选。
+- `@` 补全文件路径。它只插入路径文本，不附带文件内容，模型需要时会自己读取。
+- `!` 开头直接在当前目录执行 shell 命令，结果只显示在界面上，**不会发给模型**。默认超时 600 秒，可以用 `ui.shellTimeoutMs` 调整（1 秒到 24 小时）。完整输出在 `Ctrl+O` 里查看。agent 运行时不能执行。
+- `#` 开头会把这句话追加到当前目录 `ROAST.md` 的 `## 记忆` 一节，下次会话生效。
+- 超过 5 行的粘贴会折叠成 `[粘贴 N 行]`，发送时展开。
 
-不带参数的选择与配置命令打开菜单，↑↓ 选择、Enter 确认、Esc 返回；/help、费用、日志与正文面板直接阅读，↑↓ 按行滚动，Home/End 到两端。/help 的 Enter 只返回对话，不执行命令。/context 默认阅读统计，按 m 管理工具结果，只选择实际可钉住或折叠的条目。`/model` 自动获取供应商列表，直接输入搜索，Ctrl+R 刷新；选定模型后再选择 effort。失败、接口不支持 `/models` 或项目连接未信任时保留已配置模型并提示原因，可选择“手动输入自定义模型”。模型与 effort 在主会话和子 agent 空闲时即时切换，写入会话日志并在恢复时保留；不改全局默认模型，费用按各次实际使用的模型累计。也可直接 `/model custom:model-a high` 或 `/model custom:model-a auto`。
+agent 运行时输入的消息会排队，在下一个 step 送达，不用先中断。中断时，排队的内容会放回输入框。
 
-`/clear` 清空显示并保留上下文与草稿，`/resume` 打开最近活动优先的会话菜单。回退菜单用 ↑↓ 选择、两次 Enter 确认。`/skills` 选择技能并输入参数，`/board` 阅读完整值，`/agents` 查看任务与报告、暂停 / 恢复、发送指示或确认取消子树，`/swarm` 选择策略后输入目标。
+输入历史按项目保存，最多 500 条。
 
-**Mission Control**（Ctrl+G）：宽终端展示 agent 树、输出、消息和黑板；窄终端自动改为两栏或单栏。`j/k` 在输出视图选择 agent（其他视图按行滚动），`Tab` / `1–4` 查看输出、消息正文、黑板内容、上下文，`↑↓` 连续滚动正文，`b/f` 或 PgUp/PgDn 快速滚动、Home 到顶部、`G` / End 回到底部，`m` 给主会话或子 agent 发指示，`p` 暂停 / 恢复，`x` 两次确认取消子树，`q` / `Esc` 返回。暂停在步骤边界生效，执行中的工具会正常收尾。
+### 斜杠命令
 
-界面按终端行数分配输入、工具与审批面板，长输入软换行且光标始终可见。运行状态动画共用计时器，面板颜色过渡在约 224ms 后停止，启动动画约 704ms；事件约 30Hz 合批。`NO_COLOR` 使用 mono 主题，`TERM=dumb` 自动使用 ASCII 装饰并停止动画。也可设置 `ROAST_ASCII=1`、`ROAST_REDUCED_MOTION=1`，或配置 `ui.ascii: true`、`ui.motion: "reduced"`（直接进入工作区）。`/theme` 用菜单即时选择并保存 ember / aurora / daylight / mono；`ROAST_THEME` 优先；全屏对话历史随主题一起更新。
+| 命令 | 作用 |
+|---|---|
+| `/help` | 快捷键和命令说明 |
+| `/model [provider:model] [effort\|auto]` | 切换模型和推理强度，只对当前会话有效 |
+| `/provider`（`/config`） | 配置向导 |
+| `/mode [模式]` | 切换权限模式 |
+| `/theme [名称]` | 切换主题。在面板中选择会保存到配置，带名称时只对当前会话有效 |
+| `/clear` | 清空屏幕，保留上下文和输入框内容 |
+| `/resume [runId]` | 恢复会话，不带参数时打开会话列表 |
+| `/rewind [N]` | 回退到第 N 个 turn 开始之前，见[检查点与回退](#检查点与回退) |
+| `/context [pin\|unpin\|drop <id>…]` | 查看上下文占用和缓存命中率，按 `m` 管理工具结果 |
+| `/compact [关注点]` | 立即压缩上下文，关注点会交给摘要模型 |
+| `/cost` | 费用明细 |
+| `/todo` | 任务清单 |
+| `/init` | 在当前目录创建 `ROAST.md` 模板 |
+| `/memory [关键词]` | 查看或搜索长期记忆 |
+| `/skills` | 选择并运行技能 |
+| `/mcp` | MCP 服务器的连接状态 |
+| `/logs` | 运行日志 |
+| `/swarm [模板] <目标>`（`/hive`） | 启动蜂群；`/hive models` 设置各角色的模型 |
+| `/agents` | 蜂群成员：查看任务和报告，暂停、发送指示或取消 |
+| `/board [key]` | 查看黑板 |
+| `/exit`（`/quit`） | 退出 |
 
-Markdown 在常规终端左右留 2 列空白，窄屏自动缩减；段落与标题之间增加空行，代码保持原有缩进，引用支持行内样式。可配置 `ui.markdown: { "padding": 2, "spacing": 1 }`；padding 范围 0–8，spacing 范围 0–2。全屏视口的流式文本和已定稿文本使用一致的间距，便于连续阅读。
+每个技能都可以用 `/技能名 参数` 调用（和内置命令重名时内置命令优先），MCP prompt 用 `/mcp__<服务器>__prompt_<名称>` 调用。
 
-只读调研可用 `/swarm research <目标>`。scout / critic / judge 可以阅读、搜索和验证；无法确认是否只读的 shell 命令会显示审批卡片及 agent 名称，可批准本次执行或拒绝，不能记住为永久例外。等待期间 agent 标为“等待用户授权”，取消后审批卡片会移除。新读取及验证结果算作进展，长调研不会因为没有修改文件而触发停滞提醒；默认连续 12 个已完成步骤没有新结果才提醒 Queen 检查。配置 deny 和 plan 模式的拒绝仍生效；非交互 `-p` 模式没有审批界面，无法确认的操作会明确返回拒绝结果。
+不带参数的命令大多会打开面板：`↑↓` 选择，`Enter` 确认，`Esc` 返回，列表中可以直接输入文字搜索。
 
-## 配置
+`/model` 面板会自动获取供应商的模型列表，可以搜索，`Ctrl+R` 刷新，选好模型后再选推理强度。也可以直接输入 `/model deepseek:deepseek-chat high`，只写模型名时使用当前供应商。主会话和子 agent 都空闲时才能切换。切换会写入会话日志，恢复会话时沿用，但不会修改配置中的默认模型。
 
-运行 `roast config`（会话内使用 `/provider`）打开终端向导。支持 DeepSeek、通义千问、智谱、Kimi / Moonshot、Kimi Code、豆包、腾讯混元、硅基流动、OpenAI、Claude、Gemini、OpenRouter，以及自定义 OpenAI 兼容 / Anthropic 端点。地址和模型均可编辑，豆包需填写控制台实际模型或 Endpoint ID，Gemini 使用 OpenAI 兼容接口。预设模型是建议，请按账号实际可用模型调整。
+### 外观
 
-向导按“供应商 → 连接与模型 → API Key 与推理强度 → 确认保存”引导配置。模型字段可填多个逗号分隔的 ID，首个模型用于默认选择；留空时确认密钥后自动获取列表，也可在密钥或确认页按 Ctrl+L。模型列表用 Enter 勾选多个 ID，再选择“完成选择”；只保存所选模型的元数据，失败可 Esc 返回手填。新建同类供应商自动生成独立 ID，也可自行命名多个自定义端点。本地接口可在密钥页把“认证”设为“无密钥”。
+- 主题：`ember`（默认）、`aurora`、`daylight`（适合浅色终端）、`mono`。环境变量 `ROAST_THEME` 优先于配置。设置了 `NO_COLOR`、`FORCE_COLOR=0` 或 `TERM=dumb` 时使用 `mono`。
+- `ui.ascii: true` 或 `ROAST_ASCII=1`：边框和装饰只用 ASCII 字符。
+- `ui.motion: "reduced"` 或 `ROAST_REDUCED_MOTION=1`：关闭动画，不播放启动动画。`TERM=dumb` 会同时开启这两项。
+- `ui.markdown.padding`：回答左右的留白，0–8 列，默认 2，窗口窄时自动减小。`ui.markdown.spacing`：段落之间的空行数，0–2，默认 1。
 
-密钥页直接聚焦 API Key，输入后 Enter 确认，下一页 Enter 保存。Tab / Shift+Tab 或 ↑↓ 切换字段，推理强度、默认模型和认证用 ←→ 选择，Esc 返回或取消；小屏只显示当前字段，长确认页用 PgUp/PgDn 翻页。向导默认保存到用户目录 `~/.roast/config.json`（Windows 为 `%USERPROFILE%\.roast\config.json`），配置一次后所有项目复用；`/theme` 和 `/hive models` 也保存到全局配置。项目文件只补充全局没有设置的值，同名供应商连接、默认模型与偏好以全局配置为准。只有显式设置 `ROASTCLI_CONFIG` 时才读写指定文件，实际保存位置始终显示在页首及确认页。修改在下一次启动生效。缺少配置时，交互式启动会自动打开向导。
+## 权限与回退
 
-首次启动交互式 `roast` / `roast swarm` 时，自动显示文件夹信任面板：↑↓ 选择、Enter 确认、Esc / Ctrl+C 退出，也可先查看完整目录与项目配置。确认后保存到 `~/.roast/trusted.json`，同一目录以后直接启动；项目中的连接信息、钩子、MCP、权限 allow 等相关配置变化后重新提示。确认前不创建会话或启动项目扩展。脚本 / `-p` 模式不显示面板，也不会自动授予信任；仍可显式运行 `roast trust`。全局供应商的连接不会继承项目中的 URL、headers、认证方式或密钥引用，项目独有的供应商仍需信任。
+### 权限模式
 
-密钥直接输入并保存在 `~/.roast/credentials.json`（**用户目录中的本地明文文件**），配置只记录 `apiKeyRef`。供应商环境变量认证已弃用，旧配置仍可打开修改，但 `apiKeyEnv` 不再用于认证；请重新输入并保存 API Key，已有本地密钥仍可使用。`ROAST_HOME` 可覆盖用户目录。POSIX 下凭据文件权限为 `0600`，Windows 继承用户目录权限；密钥输入不进入聊天历史和日志。更换密钥使用新引用，当前会话仍使用原来的引用。
+| 模式 | 行为 |
+|---|---|
+| `default` | 读取工作区内的文件和执行只读命令不询问，修改文件、执行其他命令时询问 |
+| `acceptEdits` | 在 default 的基础上，自动允许修改工作区内的文件 |
+| `plan` | 只允许只读操作。模型用 `exit_plan_mode` 提交计划，你批准后才能修改 |
+| `yolo` | 除了高危命令，全部自动允许 |
 
-`Reasoning effort` 按模型保存为 `models.<模型>.reasoningEffort`，“自动”保存为 `null` 并清除覆盖层继承的设置，请求不发送额外参数。OpenAI 兼容协议发送 `reasoning_effort`，Anthropic 发送 `output_config.effort`。选项需实际模型支持；Kimi Code 提供自动 / none / low / high / max，默认端点为 `https://api.kimi.com/coding/v1`，模型为 `kimi-for-coding`，工具循环保留当前回合的 reasoning 内容。参数依据：[OpenAI 官方文档](https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create)、[Anthropic effort](https://platform.claude.com/docs/en/build-with-claude/effort)、[Kimi Code 模型配置](https://www.kimi.com/code/docs/kimi-code/models.html)。
+审批时，`1` 或 `y` 允许一次，`2` 本会话内始终允许，`3` 本项目始终允许，`4`、`n` 或 `Esc` 拒绝；也可以用 `↑↓` 选择后按 `Enter`。高危操作只能选允许一次或拒绝。本会话的授权写在会话日志里，恢复会话后仍然有效。本项目的授权保存在 `~/.roast/projects/<hash>/settings.json`，不会进入仓库。
 
-列表通过 OpenAI 兼容 `GET <baseURL>/models` 或 Anthropic `GET <baseURL>/v1/models` 获取，Anthropic 也接受已带 `/v1` 的基础地址。发现有 10 秒超时、5 分钟会话缓存、取消与分页上限，沿用供应商 headers 与凭据，不追随重定向、不显示远端错误正文。标准 [OpenAI 模型列表](https://developers.openai.com/api/reference/resources/models/methods/list)只提供 ID 等基本字段，不能据此保证上下文、推理强度或聊天能力；服务返回相关元数据时使用它，显式配置优先。可配置 `reasoning: false` 隐藏 effort，或 `reasoningEfforts: ["low", "high"]` 限定该模型的选项。
+### 规则
 
-Hive 用 `/hive models` 为 lead / worker / scout / critic / judge 选择模型和 effort，保存后对新派生的子代理生效。配置字段为 `swarm.models` 与 `swarm.efforts`；`models.<角色>: "inherit"` 明确要求跟随主会话。Queen 可用 `/model` 或启动参数 `--role-model queen=provider:model` 选择。CLI 可重复使用 `--role-model worker=provider:model`；会话内支持 `/swarm research 目标 --role-model scout=provider:model`，这些临时路由不写入全局配置。
+在配置中写 `permissions`：
 
-用户的角色路由优先（包括 `inherit`）。未指定的角色由 Queen 根据已配置模型的价格、上下文与任务选择，可通过 `configure_swarm` 设置角色默认值，或在 `spawn_agent` / `task` 的 `model` 参数中指定一次性模型。模型信息不足时跟随主会话；不能覆盖用户锁定的角色。各子代理还支持 `reasoning_effort: "high"`（`null` 为自动），连接仍须可信。
-
-脚本或非交互终端可用 `roast init --provider kimi-code --reasoning-effort high` 生成配置，然后运行 `roast config` 输入密钥；也可加 `--api-key-stdin` 从标准输入读取并保存密钥，无需设置供应商环境变量。
-
-配置分层合并，后者优先；项目配置作为全局配置的补充：
-
-```
-.roast/config.json → roastcli.config.json（旧版）→ ~/.roast/config.json → $ROASTCLI_CONFIG（显式指定）
-```
-
-```jsonc
+```json
 {
-  "providers": {
-    // pricing 为示例数值（美元 / 百万 tokens），请按服务商当前官方定价填写
-    "deepseek": { "driver": "openai-compat", "baseURL": "https://api.deepseek.com", "apiKeyRef": "<向导生成的密钥引用>",
-                  "models": { "deepseek-chat": { "contextWindow": 131072, "pricing": { "input": 0.27, "output": 1.1, "cacheRead": 0.07 } } } },
-    "claude":   { "driver": "anthropic", "apiKeyRef": "<向导生成的密钥引用>" }
-  },
-  "default": "deepseek:deepseek-chat",
-  "ui": { "theme": "ember", "motion": "full", "ascii": false, "markdown": { "padding": 2, "spacing": 1 } },
-  "swarm": { "models": { "worker": "deepseek:deepseek-chat", "scout": "claude:claude-sonnet-4-5" }, "efforts": { "worker": null, "scout": "low" }, "maxAgents": 12, "maxDepth": 3, "maxMinutes": 60 },
-  "hooks": { "PostToolUse": [{ "matcher": "edit|write|multi_edit", "command": "pnpm prettier --write ." }] },
-  "mcp": { "servers": { "github": { "command": "npx", "args": ["-y", "@modelcontextprotocol/server-github"],
-                                    "env": { "GITHUB_TOKEN": "${GITHUB_TOKEN}" } } } }
+  "permissions": {
+    "allow": ["bash(git status:*)", "bash(pnpm test)", "edit(src/**)", "mcp__github__*"],
+    "ask": ["bash(git push:*)"],
+    "deny": ["web_fetch(domain:example.com)"]
+  }
 }
 ```
 
-**安全**
+- `bash(git status:*)` 匹配以 `git status` 开头的命令（按整词匹配），`bash(pnpm test)` 只匹配这条命令，`*` 是通配符。只写 `bash` 表示所有 bash 命令。
+- 路径规则使用 glob，相对路径相对于当前目录。
+- `domain:example.com` 匹配该域名及其子域名。
+- 包含 `&&`、`|`、`;` 的复合命令会拆开判断，每一段都必须被允许，并且不能含子 shell。
+- 判断顺序是 deny → plan 模式 → 强制询问 → yolo → allow → ask → 默认。高危命令和直接修改 `.git/` 内文件的编辑属于强制询问，在 yolo 模式下或匹配了 allow 规则也会询问。
+- 仓库配置中的 allow 规则需要信任后才生效。`permissions.defaultMode` 只在用户配置中生效。
 
-- 供应商密钥通过 `apiKeyRef` 用户凭据引用提供，不放入普通配置文件。MCP 的 env / headers 用 `${VAR}` 引用。
-- 仓库内的 provider 连接信息、钩子、MCP、Mem0、embeddings 与 webSearch 设置需要先运行 `roast trust` 才会生效。信任与相关配置内容绑定，之后修改需重新确认。
+### 检查点与回退
 
-## 缓存、摘要与费用
+每个 turn 第一次修改文件之前，RoastCli 会给工作目录打一个快照：
 
-`/context` 显示按输入 token 加权的缓存命中率、请求次数（含重试）和上下文前缀调整次数。单次请求没有先前请求可复用，命中率低不能单独证明引擎有问题；供应商 TTL、最小缓存长度与实际服务策略也影响命中。
+- 有 git 时使用影子仓库 `.roast/shadow.git`，不影响项目自己的仓库、索引和分支。
+- 没有 git 时把文件按字节保存到 `.roast/snapshots/`，二进制内容和 CRLF 都原样保留。跳过符号链接、依赖目录和日志，单次最多 128 MiB。
+- yolo 模式下每条 bash 命令执行前都会打快照，因为无法可靠判断一条命令会不会改文件。
 
-0.4.0 修正 DeepSeek 的 `prompt_cache_miss_tokens` 重复计费，将其作为普通输入。`reasoningReplay: "field"` 稳定保留历史 `reasoning_content`，避免新 turn 到来时改写旧前缀；要求只回传当前回合推理的兼容服务可设为 `"current"`，默认 `"drop"` 不回传。OpenAI 官方端点自动发送稳定 `prompt_cache_key`，其他兼容端点需在 provider 中显式设置 `promptCaching: true` 才发送；设为 false 关闭。Anthropic 自动标记上次仍相同的请求边界和当前尾部。折叠默认在 70% 窗口后择机批量应用，压缩和回退后重新检查缓存边界。
+`/rewind` 或空闲时连按两次 `Esc` 打开回退菜单，选择要回到的 turn，按两次 `Enter` 确认。`/rewind N` 直接回到第 N 个 turn 开始之前。文件和对话会一起回退，回退前会先备份当前状态，期间新建的文件会被删除。回退不会退还已经消耗的费用。
 
-压缩默认调用已配置、有定价模型中 input + output 最低的模型，保留目标、决策、文件、错误与下一步；没有价格信息时用当前主模型。可指定摘要模型或关闭模型调用：
+## 蜂群
 
-```json
-{ "context": { "summaryModel": "provider:cheap-model", "summaryMaxTokens": 2048 } }
+```sh
+roast swarm "给登录接口加上限流"
+roast swarm -t best-of-n -n 4 "实现一个 LRU 缓存"
+roast swarm -t research --print "调研项目里的错误处理方式"
 ```
 
-`summaryModel: "auto"` 使用自动选择，`"extractive"` 使用零模型调用的抽取式摘要。摘要只在压缩时生成，输入和输出均受限；失败回退抽取式摘要，原文仍可 `recall`。摘要请求也计入费用。`/cost` 按 turn、agent、provider、模型展示主会话、子代理和摘要费用，按请求原模型定价，恢复日志保留支出，rewind 不退款；缺失定价时显示未知。
+对话中用 `/swarm [模板] <目标>`。
 
-## 图片、网页与语义工具
+Queen 负责拆解任务、派生子 agent 和汇总结果。子 agent 的角色有：
 
-让模型用 `read_image({"path":"截图.png"})` 读取截图或 UI 稿。支持 PNG/JPEG/GIF/WebP，单张最多 5 MiB；MCP 图片也会以真实图像传入。需要支持视觉的模型，纯文本模型不会因此获得视觉能力。
+| 角色 | 职责 |
+|---|---|
+| lead | 负责一块子任务，可以继续派生 worker |
+| worker | 写代码 |
+| scout | 只读调研 |
+| critic | 只读评审 |
+| judge | 只读，比较多个方案 |
 
-`web_search({"query":"报错或文档关键词","limit":5})` 返回来源 URL、标题和摘要，再用 `web_fetch` 读取正文。默认 DuckDuckGo 无需密钥；验证码或限流会明确失败，可切换 Brave、Tavily 或自有 SearXNG：
+agent 之间通过消息和黑板（一个共享的键值存储）协作。等待子 agent 时不消耗 token。
 
-```json
-{ "webSearch": { "driver": "searxng", "baseURL": "https://search.example/search", "timeoutMs": 30000 } }
+### 模板
+
+| 模板 | 做法 |
+|---|---|
+| `fanout`（默认） | 拆成互不依赖的子任务并行完成，审阅后合并 |
+| `best-of-n` | N 个 worker 各自独立实现同一个任务，judge 比较后合并最好的一个 |
+| `critique` | worker 实现，critic 评审，不通过就派新的 worker 修改，最多 3 轮 |
+| `research` | N 个 scout 从不同角度只读调研，把结果写到黑板上，由 Queen 汇总 |
+
+`-n` 设置并行数量，默认 3，范围 2–8。`roast swarm --list-templates` 列出所有模板。
+
+模板只是交给 Queen 的一段指令，Queen 会按实际情况调整。自定义模板放在 `~/.roast/templates/*.yaml` 或 `.roast/templates/*.yaml`：
+
+```yaml
+name: bug-hunt
+description: 先分头定位问题，再派 worker 修复
+prompt: |
+  目标：{{goal}}
+  先派 {{n}} 个 scout 分别排查不同模块，把怀疑点写到黑板 /bugs/ 下，
+  确认原因后再派 worker 修复，最后让 critic 评审。
 ```
 
-Brave / Tavily 需要 `webSearch.apiKeyRef` 指向已有用户凭据，密钥不写普通配置。网络访问沿用权限规则，结果经过注入警示。
+### Mission Control
 
-`find_references({"path":"src/a.ts","line":1,"column":14})` 使用 TypeScript 语言服务查找真实引用；`rename_symbol` 传入同样位置与 `new_name`，默认预览，`apply:true` 校验所有文件权限和内容后应用，保留 CRLF、导入别名，跳过注释和字符串。位置为 1-based，列按 UTF-16 计数。内置支持 TS/JS、tsconfig/jsconfig；其他语言需通过相应 MCP 语义服务器提供工具。
-- 权限规则写在配置的 `permissions: { allow, ask, deny }` 中，格式如 `bash(git status:*)`、`edit(src/**)`、`mcp__github__create_issue`。仓库层的 allow 规则需要先 trust；在卡片上选"始终允许"会写入 `~/.roast/projects/<hash>/settings.json`，不进仓库。复合命令会拆开逐段判断，高危命令即使在 yolo 模式下也会询问。
-- worktree 的文件编辑限制在它自己的目录内。`node_modules` 使用独立副本，内部 pnpm 链接也映射到副本；复制依赖会增加启动时间和磁盘用量，支持时采用 copy-on-write。worktree 提供 Git 改动隔离；shell 和外部执行工具仍能访问其他目录，因此每次执行都需明确批准，`yolo` 和 allow 规则不能跳过。管道模式没有审批界面时会拒绝，验证可由主会话在合并后执行。
-- 会话退出时会在 stderr 列出仍保留的 worktree 路径，纯文本回答和 stream-json 输出格式不受影响。可以进入工作区检查改动；`worktrees prune` 只处理当前仓库，不会删除未合并代码。
+按 `Ctrl+G` 打开。窗口宽度不少于 112 列时分三栏：agent 树、当前视图和侧栏；70 列以上去掉侧栏；更窄时只显示当前视图。
+
+| 按键 | 作用 |
+|---|---|
+| `1`–`4` 或 `Tab` | 切换视图：输出、消息、黑板、上下文 |
+| `j`/`k` | 在输出视图中选择 agent，在其他视图中滚动 |
+| `↑↓` | 滚动 |
+| `b`/`f` 或 `PgUp`/`PgDn` | 翻页 |
+| `Home` / `G` 或 `End` | 到顶部 / 底部 |
+| `m` | 给选中的 agent 发送指示 |
+| `p` | 暂停或继续 |
+| `x` 按两次 | 取消选中的 agent 及其所有子 agent |
+| `q`、`Esc` 或 `Ctrl+G` | 返回对话 |
+| `Ctrl+C` | 中断主 agent 并返回对话 |
+
+暂停在两个 step 之间生效，正在执行的工具会正常完成。
+
+### 角色模型
+
+可以为每个角色指定模型：
+
+- `/hive models` 打开面板，为 lead、worker、scout、critic、judge 选择模型和推理强度，保存在配置的 `swarm.models` 和 `swarm.efforts` 中。值为 `inherit` 表示跟随主会话。
+- 命令行临时指定，可以重复使用，不写入配置：
+
+  ```sh
+  roast swarm "修复测试并评审" --role-model worker=deepseek:deepseek-chat --role-model critic=claude:claude-sonnet-5-5
+  ```
+
+  `/swarm` 里同样可以加 `--role-model`。Queen 的模型用 `-m`、`/model` 或 `--role-model queen=…` 设置。
+
+没有指定模型的角色，由 Queen 根据已配置模型的价格和上下文长度选择，信息不够时跟随主会话。你指定过的角色（包括 `inherit`）Queen 不能更改。
+
+### worktree
+
+在 git 仓库中，worker 和 lead 默认各自在独立的 worktree 里改代码，完成后由上级审阅合并。合并前会先检查冲突，有冲突时一个文件也不会写入。只读角色和非 git 项目共用工作目录，通过文件租约避免两个 agent 同时改同一个文件。设置 `swarm.worktrees: false` 可以关闭 worktree。
+
+- worktree 位于 `~/.roast/worktrees/<runId>/<agentId>`，基于父 agent 工作区的当前状态创建，包括未提交的改动。整个过程不会动你的分支、索引和 HEAD。
+- 顶层的 `node_modules` 会复制一份到 worktree（文件系统支持时使用写时复制），这会增加启动时间和磁盘占用。
+- worktree 只隔离文件修改，不是沙箱，shell 等外部命令仍然能访问其他目录。所以在 worktree 中执行命令每次都需要你批准，yolo 模式和 allow 规则也不例外。非交互模式下这类命令会被拒绝，可以等合并后由主会话验证。
+- 会话结束时，没有改动的 worktree 会被删除，有未合并改动的会保留，并在 stderr 列出路径。`roast worktrees list` 查看保留的 worktree，`roast worktrees prune` 删除已结束且没有改动的。正在使用、有未合并改动或缺少基线记录的不会被删除。
+
+### 只读角色
+
+scout、critic 和 judge 不能直接修改文件。它们执行的命令中，能确认是只读的（如 `git log`、`rg`、`cat`）按普通规则处理；无法确认的每次都要你批准，不能设为始终允许。MCP 等其他执行类工具也一样。等待批准时，agent 在蜂群树中显示为"等待用户授权"。deny 规则和 plan 模式仍然有效。
+
+一个 agent 连续 12 个 step 没有新进展（重复同样的调用，或者一直失败）时，会提醒它的上级检查。读取、搜索和验证得到新结果都算作进展，所以长时间的调研不会被误判。
+
+### 限制
+
+- `swarm.maxAgents`：一次会话最多派生的 agent 数（包括已结束的），默认 12。
+- `swarm.maxDepth`：最大层级，默认 3。
+- `swarm.maxMinutes`：单个子 agent 的最长运行时间，默认 60 分钟，超时后取消它和它的子 agent。
+- 不限制 token 用量。
+
+供应商的 `maxConcurrency` 是主会话和蜂群共享的并发上限，默认是 16 和 `maxAgents + 1` 中较小的一个。实际并发从最多 4 个开始，遇到 429 减半并遵守 `retry-after`，连续成功 10 次后加 1。等待中的 agent 不占用并发名额。
+
+黑板只保存在内存中，恢复会话后为空。
+
+## 上下文、缓存与费用
+
+上下文快满时，RoastCli 分两步处理：
+
+1. **折叠旧的工具输出。** 被同一文件后续读取或修改取代的读取结果，以及 8 个 turn 之前、超过 2000 tokens 的输出，会换成一行占位符；后者保留头尾各 20 行预览。为了不频繁改写前缀，折叠会先攒着，等能省下至少 4000 tokens，并且占用超过窗口的 70% 时再一起应用。如果距上次请求已超过 5 分钟（缓存已经过期），占用超过 56% 就会应用。
+2. **压缩。** 占用超过 80% 时，保留最近 3 个 turn，把更早的对话换成一份摘要。
+
+折叠和压缩掉的原文都还在，模型可以用 `recall` 按句柄或关键词取回。`/context` 查看占用情况，`/context pin <id>` 防止某个工具结果被折叠，`/context drop <id>` 手动折叠，`/compact` 立即压缩。
+
+摘要默认由已配置、有定价的模型中最便宜的一个生成，都没有定价时使用当前模型。也可以指定：
+
+```json
+{ "context": { "summaryModel": "deepseek:deepseek-chat", "summaryMaxTokens": 2048 } }
+```
+
+`summaryModel` 设为 `"extractive"` 时不调用模型，直接从原文中抽取用户请求、涉及的文件、命令、错误和最近的结论。模型摘要失败时也会退回这种方式。其他参数见[配置参考](#配置参考)。
+
+### 缓存
+
+- OpenAI 官方端点会自动发送稳定的 `prompt_cache_key`，其他 OpenAI 兼容端点需要在供应商配置中设置 `promptCaching: true`。
+- Anthropic 默认开启缓存断点，设置 `promptCaching: false` 关闭。
+- `reasoningReplay` 控制 OpenAI 兼容模型的推理内容如何回传：`drop`（默认，不回传）、`field`（通过 `reasoning_content` 字段回传全部历史推理，前缀稳定，对缓存友好）、`current`（只回传当前回合，适用于要求丢弃旧推理的服务）。
+
+`/context` 显示按 token 加权的缓存命中率、请求次数（含重试）和前缀变化次数。只有一次请求的会话没有可复用的前缀，命中率为 0 是正常的。供应商的缓存有效期和最小缓存长度也会影响命中率。
+
+### 费用
+
+在模型配置中填写定价（美元 / 百万 tokens），状态栏和 `/cost` 就会显示费用：
+
+```json
+"models": {
+  "deepseek-chat": { "pricing": { "input": 0.27, "output": 1.1, "cacheRead": 0.07 } }
+}
+```
+
+上面是示例数值，请按供应商当前的价格填写。`/cost` 按 turn、agent、供应商和模型列出主会话、子 agent 和摘要的费用，每次请求按当时使用的模型计价。恢复会话后累计费用不变，回退不会扣减。只要有一个用过的模型缺少定价，总价就显示为未知，不会给出一个偏低的数字。
+
+## 工具
+
+| 工具 | 作用 |
+|---|---|
+| `read`、`glob`、`grep`、`ls` | 读取和搜索文件 |
+| `read_image` | 读取 PNG、JPEG、GIF、WebP 图片，单张最多 5 MiB，需要模型支持视觉 |
+| `edit`、`multi_edit`、`write` | 修改文件，保持原有的换行风格。修改前必须先读过该文件，且文件没有被外部改动 |
+| `bash`、`bash_output`、`kill_shell` | 执行命令，支持后台运行 |
+| `search_code` | 代码检索，见[代码检索](#代码检索) |
+| `find_references`、`rename_symbol` | TS/JS 的引用查找和重命名 |
+| `web_fetch`、`web_search` | 抓取网页、网页搜索 |
+| `todo_write`、`ask_user`、`exit_plan_mode` | 任务清单、向你提问、提交计划 |
+| `skill`、`memory`、`recall` | 加载技能、长期记忆、取回被折叠的上下文 |
+| `spawn_agent`、`task`、`send_message` 等 | 蜂群协作 |
+
+### 网页搜索
+
+`web_search` 默认使用 DuckDuckGo，不需要密钥，遇到验证码或限流时会报错。可以换成自建的 SearXNG，`baseURL` 要写完整的 `/search` 地址：
+
+```json
+{ "webSearch": { "driver": "searxng", "baseURL": "https://search.example.com/search", "timeoutMs": 30000 } }
+```
+
+Brave 和 Tavily 需要密钥。目前没有命令可以添加，需要手动在 `~/.roast/credentials.json` 中加一项，比如 `"brave-search": "你的密钥"`，再在配置中引用它：
+
+```json
+{ "webSearch": { "driver": "brave", "apiKeyRef": "brave-search" } }
+```
+
+搜索返回标题、链接和摘要，模型再用 `web_fetch` 读取正文。网络访问受权限规则控制。
+
+### 引用查找与重命名
+
+`find_references` 和 `rename_symbol` 使用 TypeScript 语言服务，支持 TS/JS 文件和 tsconfig/jsconfig 项目。位置参数 `line` 和 `column` 从 1 开始，列按 UTF-16 计。
+
+`rename_symbol` 默认只预览改动，`apply: true` 时先检查所有文件的权限和内容，再一起写入，任何一个文件失败都会全部回滚。重命名会保持 CRLF 和导入别名，跳过注释和字符串里的同名文本。
+
+其他语言可以通过 MCP 接入对应的语义工具。
+
+### 提示注入检查
+
+`read`、`grep`、`bash`、`bash_output`、`web_fetch`、`web_search`、`search_code` 和所有 MCP 工具的结果中，如果出现疑似提示注入的内容，会在结果后面附加警告。只提示，不拦截。
 
 ## 扩展
 
-| 扩展 | 用法 |
-|---|---|
-| 项目说明 | `ROAST.md` / `AGENTS.md` / `CLAUDE.md`（项目级 + `~/.roast` 用户级），放进稳定的 system 前缀 |
-| Skills | `.roast/skills/<名称>/SKILL.md`、`~/.roast/skills/…`，兼容 `.claude/skills/…`。frontmatter 写 name / description / allowed-tools。system prompt 只列摘要，模型用 `skill` 工具按需读取正文 |
-| 长期记忆 | `memory` 工具；默认本地 JSONL，也可使用 Mem0 平台 / 自托管服务。按项目隔离，最近事实在下次会话开始时进入稳定 system prompt |
-| 代码检索 | `search_code`：默认 BM25，支持自然语言、标识符、camelCase 子词及增量索引；可选 embeddings 混合排序，失败明确回退 BM25 |
-| 用户钩子 | `PreToolUse` / `PostToolUse` / `UserPromptSubmit` / `Stop` / `SessionStart`，JSON 经 stdin 传入。退出码 2 表示阻止（stderr 作为理由）。PreToolUse 在权限检查之前运行 |
-| MCP | stdio / streamable-http / sse；支持 tools、resources/URI templates 与 prompts。`/mcp` 查看连接状态，资源通过 `mcp__<服务器>__list_resources` / `read_resource` 读取，prompt 通过 `/mcp__<服务器>__prompt_<名称>` 调用 |
-| Prompt 覆盖 | `.roast/prompts/<section>.md` 覆盖同名的内置 system section，支持 `{{cwd}} {{date}} {{platform}}` |
-| 注入防护 | 读取网页、文件或命令输出时，如果发现疑似提示注入，会在结果后追加警示 |
+### 项目说明
 
-例如 `/mcp__docs__prompt_review topic="cache engine" tone=brief`。prompt 支持位置参数、`name=value` 和带引号的文本，缺失必填参数会提示用法；所有列表在启动时发现并分页获取，工具 schema 在会话内保持稳定。只有 resources/prompts 的 MCP 服务也可连接。图片结果单次累计最多 5 MiB，超限或不支持的媒体显示占位说明。
+从 git 根目录到当前目录，每一层取第一个存在的 `ROAST.md`、`AGENTS.md` 或 `CLAUDE.md`，再加上用户级的 `~/.roast/ROAST.md`，一起放进 system prompt，总共最多 4 万字符。`/init` 可以生成一个 `ROAST.md` 模板。
 
-Mem0 与 embeddings 均为可选能力，未配置时保持本地记忆与 BM25。下面的设置合并进已有配置；`rag.embeddings.provider` 引用已配置的 OpenAI 兼容供应商（支持其 `baseURL`、凭据与自定义 headers），并使用该供应商实际支持的 embedding 模型：
+### Skills
+
+技能放在 `.roast/skills/<名称>/SKILL.md` 或 `~/.roast/skills/<名称>/SKILL.md`，也兼容 `.claude/skills/`。同名时项目级优先，但未受信任的项目不能覆盖用户级技能。
+
+```markdown
+---
+name: release-notes
+description: 根据 git 提交整理版本说明
+allowed-tools: bash, read
+---
+读取上一个 tag 以来的提交……
+```
+
+system prompt 里只列出技能的名称和描述，模型需要时用 `skill` 工具读取正文。你也可以用 `/技能名 参数` 直接调用，或在 `/skills` 中选择。
+
+### MCP
+
+```sh
+roast mcp add github -e GITHUB_TOKEN='${GITHUB_TOKEN}' -- npx -y @modelcontextprotocol/server-github
+roast mcp add docs --url https://example.com/mcp
+roast mcp add old-server --url https://example.com/sse --transport sse
+roast mcp list
+roast mcp remove github
+```
+
+默认写入用户配置，加 `--project` 写入项目配置（需要信任）。有 `--url` 时默认使用 streamable HTTP，否则为 stdio。`-H KEY=VALUE` 添加请求头。对应的配置：
 
 ```json
 {
-  "memory": {
-    "driver": "mem0", "baseURL": "https://api.mem0.ai",
-    "apiKeyEnv": "MEM0_API_KEY", "mode": "platform", "apiVersion": "v3"
-  },
-  "rag": {
-    "embeddings": {
-      "provider": "openai", "model": "text-embedding-3-small",
-      "batchSize": 32, "maxChunks": 2000
+  "mcp": {
+    "servers": {
+      "github": {
+        "command": "npx",
+        "args": ["-y", "@modelcontextprotocol/server-github"],
+        "env": { "GITHUB_TOKEN": "${GITHUB_TOKEN}" }
+      }
     }
   }
 }
 ```
 
-Mem0 平台用 `Authorization: Token`；自托管设置 `mode: "self-hosted"` 和实例地址，凭据通过 `X-API-Key`。保存保留原文，删除前检查项目归属；请求可以中断并有超时。代码向量按内容哈希缓存于 `~/.roast/indexes/`，首次检索才分批生成；`maxChunks` 限制语义索引成本，BM25 仍覆盖全部索引。向量维度变化自动重建缓存。
+`env`、`headers` 和 `args` 中的 `${VAR}` 会在启动时替换为环境变量的值。
 
-供应商的 `maxConcurrency` 控制主会话与蜂群共享的并发上限；默认从最多 4 个并发开始，429 时减半，遵守 `retry-after`，连续 10 次成功后加 1。等待请求可中断，执行工具或等待子任务期间不占请求名额。
+- 工具名为 `mcp__<服务器>__<工具>`，在会话启动时一次性注册，之后不变。MCP 工具默认按执行类处理，调用前询问，可以用 `mcp__github__*` 这样的规则放行。在服务器配置中设置 `trustAnnotations: true` 后，服务器标记为只读（`readOnlyHint`）的工具按读取处理。
+- resources 通过 `mcp__<服务器>__list_resources` 和 `mcp__<服务器>__read_resource` 读取。
+- prompt 作为斜杠命令调用，比如 `/mcp__docs__prompt_review topic="cache engine" tone=brief`，支持位置参数、`name=value` 和带引号的文本。
+- 工具返回的图片会传给模型，单次累计最多 5 MiB。
+- `/mcp` 查看各服务器的连接状态。
 
-检查点优先使用影子 Git；没有 Git 时使用 `.roast/snapshots/` 文件快照，保持二进制和 CRLF，回退前另存备份。文件快照不跟随符号链接，默认跳过依赖、日志及 Roast 自身状态，单次上限 128 MiB。
+### Hooks
 
-yolo 模式在每条 bash 前创建工作区快照，覆盖命令启发式漏判的情况；同一 turn 的 rewind 始终恢复第一次快照，恢复日志时也保持该基线。
-
-## 架构
-
-```
-src/
-  core/       类型、错误分类、分层配置与 trust、EventHub、InteractionBroker
-  providers/  provider 中立的流协议；openai-compat、anthropic（thinking 签名、cache_control）
-  agent/      AgentRuntime（turn/step 状态机、边界钩子、重试）、Committer（先写日志再 reduce）、会话装配
-  session/    v1 事件日志（批量写、锁、断尾修复）、history reducer、resume
-  context/    无损上下文：折叠 / 去重 / 老化 / 安全切点压缩 / recall / 缓存规划
-  tools/      执行管线（pre 钩子 → zod 校验 → 执行 → post 钩子）、内置工具、权限引擎
-  swarm/      Supervisor、mailbox、消息总线、黑板、租约锁、角色、蜂群工具
-  ext/        instructions、audit（影子 git 检查点）、skills、memory、prompts、guard、hooks、rag、mcp
-  ui/         store（按 agent 分片、30Hz 合批）、控制器、markdown、输入框、Mission Control
-  cli/        管道模式、logs、mcp、doctor、init
+```json
+{
+  "hooks": {
+    "PreToolUse": [{ "matcher": "bash", "command": "node scripts/check-command.js", "timeoutMs": 30000 }],
+    "PostToolUse": [{ "matcher": "edit|write|multi_edit", "command": "pnpm prettier --write ." }]
+  }
+}
 ```
 
-设计文档：[docs/DESIGN.md](docs/DESIGN.md)；当前进度与交接说明：[docs/STATUS.md](docs/STATUS.md)；路线图：[docs/ROADMAP.md](docs/ROADMAP.md)。
+`matcher` 是匹配工具名的正则，省略或写 `*` 表示所有工具。钩子从 stdin 收到 JSON，包含 `hook_event_name`、`session_id`、`cwd`，工具类事件还有 `tool_name`、`tool_input`、`agent_id`，PostToolUse 另有 `tool_response: {is_error, text}`。语义和 Claude Code 的 hooks 接近，但字段不完全相同。退出码 0 表示通过，2 表示阻止或反馈（stderr 作为内容），其他退出码视为钩子出错但不阻止。
 
-## 开发
+| 事件 | 时机和作用 |
+|---|---|
+| `PreToolUse` | 工具执行前、权限检查之前。退出码 2 阻止这次调用 |
+| `PostToolUse` | 工具执行后。退出码 2 时 stderr 作为反馈附加到工具结果，退出码 0 的输出会被忽略 |
+| `UserPromptSubmit` | 用户发送消息时。可以拦截，stdout 会作为附加上下文 |
+| `Stop` | agent 准备结束 turn 时。退出码 2 让它继续，每个 turn 最多 3 次 |
+| `SessionStart` | 会话开始时，stdout 加入 system prompt |
 
-```bash
-pnpm dev                 # 从源码运行（tsx）
-pnpm test                # vitest（脚本化 provider + ink-testing-library，不依赖网络）
-pnpm test:coverage       # 最新测试数量与覆盖率见 STATUS.md
-pnpm lint                # Biome 正确性检查；CI 运行 lint 与覆盖率
-pnpm format              # 按 Biome 配置格式化源码、测试和脚本
-pnpm typecheck && pnpm build
-pnpm tsx scripts/smoke.ts deepseek:deepseek-chat "hi"   # 只冒烟 provider 层（需要真实密钥）
+各配置层的 hooks 会叠加。仓库配置中的 hooks 需要信任。`Stop` 和 `UserPromptSubmit` 只作用于主会话，其他钩子对子 agent 同样生效。
+
+### 长期记忆
+
+模型用 `memory` 工具保存和检索跨会话的事实，按项目隔离。默认存在本地 `~/.roast/memory/` 下，最近的 20 条会在下次会话开始时加入 system prompt。`/memory` 查看和搜索。注意 `#` 写入的是 `ROAST.md`，和这里的记忆是两回事。
+
+也可以使用 [Mem0](https://mem0.ai)：
+
+```json
+{ "memory": { "driver": "mem0", "baseURL": "https://api.mem0.ai", "mode": "platform", "apiVersion": "v3", "apiKeyEnv": "MEM0_API_KEY" } }
 ```
 
-自动化终端验收覆盖 40×10、60×16、80×24、120×40，运行中缩到 25×8，以及 2000 行流式输出和 20-agent 负载。Windows Terminal / conhost 的真实 IME 候选框和 Shift+Enter 仍需人工验收；供应商认证、端点和请求参数使用受控测试，未对用户的在线账户发起请求。Mem0 / embeddings 使用受控 HTTP 测试。
+自托管时设置 `mode: "self-hosted"` 并填写实例地址。密钥可以用 `apiKeyEnv` 指定环境变量，或用 `apiKeyRef` 引用 `credentials.json` 中的一项，都不设置时读取 `MEM0_API_KEY`。
+
+### 代码检索
+
+`search_code` 默认用 BM25 检索，支持自然语言、完整标识符以及 camelCase、snake_case 拆出的子词。第一次检索时建立索引，之后按文件修改时间增量更新。
+
+可以加上向量检索，和 BM25 的结果合并排序：
+
+```json
+{ "rag": { "embeddings": { "provider": "openai", "model": "text-embedding-3-small", "batchSize": 32, "maxChunks": 2000 } } }
+```
+
+`provider` 引用一个已配置的 OpenAI 兼容供应商，沿用它的地址、密钥和 headers。向量按内容 hash 缓存在 `~/.roast/indexes/`。`maxChunks` 限制向量化的代码块数量，BM25 仍然覆盖全部代码。向量服务出错时退回 BM25 并给出提示。
+
+### Prompt 覆盖
+
+`.roast/prompts/<名称>.md` 或 `~/.roast/prompts/<名称>.md` 会替换同名的 system prompt 分段，项目级优先。可以替换的分段有 `identity`（身份和总体准则）、`environment`（工作目录、平台、日期）、`swarm`（蜂群说明）、`agent-models`（可用模型），以及存在时的 `instructions`（项目说明）、`skills` 和 `memory`。其他名字会作为新的分段追加到末尾。文件中可以使用 `{{cwd}}`、`{{date}}`、`{{platform}}`。
+
+## 配置参考
+
+### 配置文件
+
+按优先级从低到高合并：
+
+1. `.roast/config.json`（项目）
+2. `roastcli.config.json`（项目，旧位置）
+3. `~/.roast/config.json`（用户）
+4. `ROASTCLI_CONFIG` 指定的文件
+
+对象逐键合并，数组和其他值整体覆盖。也就是说，用户配置优先，项目配置只补充用户配置中没有的项。如果用户配置定义了某个供应商的 `driver`，它的连接字段完全以用户配置为准，不会继承项目里的地址或密钥引用。
+
+完整示例见仓库中的 [roastcli.config.example.json](https://github.com/Roast-2007/RoastCli/blob/main/roastcli.config.example.json)。
+
+| 字段 | 说明 |
+|---|---|
+| `providers.<id>.driver` | `openai-compat` 或 `anthropic` |
+| `providers.<id>.baseURL` | 接口地址 |
+| `providers.<id>.auth` | 设为 `"none"` 表示不需要密钥 |
+| `providers.<id>.apiKeyRef` | `credentials.json` 中的密钥引用，由向导生成 |
+| `providers.<id>.headers` | 额外的请求头 |
+| `providers.<id>.promptCaching` | 见[缓存](#缓存) |
+| `providers.<id>.maxConcurrency` | 并发上限，1–64 |
+| `providers.<id>.streamIdleTimeoutMs` | 流式响应的空闲超时 |
+| `providers.<id>.models.<模型>` | `contextWindow`、`maxTokens`、`pricing`、`reasoning`、`reasoningEffort`、`reasoningEfforts`、`reasoningReplay`；Anthropic 另有 `thinkingBudget`，OpenAI 兼容另有 `maxTokensField` |
+| `default` | 默认模型，格式为 `provider:model` |
+| `maxSteps` | 每个 turn 最多的 step 数，默认 50 |
+| `temperature` | 0–2 |
+| `logsDir` | 运行日志目录，默认 `logs`，**相对于当前目录**。记得加进项目的 `.gitignore`，或改成绝对路径 |
+| `debugLog` | 记录完整的请求体，也可以用环境变量 `ROAST_DEBUG_LOG=1` 开启 |
+| `context` | `compactAt`（默认 0.8）、`elideAt`（0.7）、`minSavings`（4000）、`keepTurns`（3）、`agingTurns`（8）、`agingMinTokens`（2000）、`previewLines`（20）、`cacheTtlMs`（300000）、`summaryModel`、`summaryMaxTokens`（2048） |
+| `swarm` | `models`、`efforts`、`maxAgents`、`maxDepth`、`maxMinutes`、`worktrees` |
+| `ui` | `theme`、`motion`、`ascii`、`shellTimeoutMs`、`markdown` |
+| `webSearch` | `driver`、`baseURL`、`apiKeyRef`、`timeoutMs` |
+| `memory` | 见[长期记忆](#长期记忆) |
+| `rag.embeddings` | 见[代码检索](#代码检索) |
+| `permissions` | `allow`、`ask`、`deny`、`defaultMode` |
+| `hooks` | 见 [Hooks](#hooks) |
+| `mcp.servers` | 见 [MCP](#mcp) |
+
+### 环境变量
+
+| 变量 | 作用 |
+|---|---|
+| `ROAST_HOME` | 用户目录，默认 `~/.roast` |
+| `ROASTCLI_CONFIG` | 优先级最高的配置文件。指向项目目录内的文件时按项目配置处理，需要信任 |
+| `ROAST_THEME` | 主题，优先于配置 |
+| `NO_COLOR`、`FORCE_COLOR=0` | 使用无色主题 |
+| `TERM=dumb` | 无色主题、ASCII 字符、关闭动画 |
+| `ROAST_ASCII=1` | 只用 ASCII 字符 |
+| `ROAST_REDUCED_MOTION=1` | 关闭动画 |
+| `ROAST_RG_PATH` | 指定 ripgrep 路径。默认依次查找 PATH、安装包自带的 ripgrep，都没有时使用较慢的内置搜索 |
+| `ROAST_DEBUG_LOG=1` | 记录完整请求体 |
+| `MEM0_API_KEY` | Mem0 密钥的默认来源 |
+
+### 文件位置
+
+用户目录（`~/.roast`，Windows 为 `%USERPROFILE%\.roast`）：
+
+| 路径 | 内容 |
+|---|---|
+| `config.json` | 用户配置 |
+| `credentials.json` | API Key（明文） |
+| `trusted.json` | 已信任的文件夹 |
+| `ROAST.md` | 用户级项目说明 |
+| `projects/<hash>/` | 每个项目的输入历史和"本项目始终允许"的授权 |
+| `memory/` | 长期记忆 |
+| `indexes/` | 代码向量缓存 |
+| `worktrees/` | 蜂群 worktree |
+| `skills/`、`prompts/`、`templates/` | 用户级技能、prompt 覆盖和蜂群模板 |
+
+项目目录：
+
+| 路径 | 内容 |
+|---|---|
+| `.roast/config.json` | 项目配置 |
+| `.roast/shadow.git`、`.roast/snapshots/` | 检查点 |
+| `.roast/skills/`、`.roast/prompts/`、`.roast/templates/` | 项目级技能、prompt 覆盖和蜂群模板 |
+| `ROAST.md` | 项目说明，`#` 写入的记忆也在这里 |
+| `logs/` | 运行日志（默认位置） |
+
+`.roast/` 和 `logs/` 都不应该提交到仓库。
+
+## 常见问题
+
+**PowerShell 提示无法加载 npm.ps1 或 roast.ps1**
+
+这是 PowerShell 的执行策略导致的，改用 `npm.cmd` 和 `roast.cmd` 即可。
+
+**安装后找不到 roast 命令**
+
+重新打开终端。如果还是不行，运行 `npm prefix -g` 查看 npm 的全局目录：Windows 上把这个目录加入 PATH，macOS 和 Linux 上把它下面的 `bin` 目录加入 PATH。
+
+**macOS / Linux 安装时报 EACCES**
+
+把 npm 的全局目录改到用户目录下：
+
+```sh
+npm install -g --prefer-online --prefix "$HOME/.local" https://github.com/Roast-2007/RoastCli/releases/latest/download/roastcli.tgz
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+把 `export` 这一行加到 shell 的配置文件里，以后打开终端都会生效。
+
+**需要安装 git 吗**
+
+不是必须的，但建议安装。没有 git 时检查点改用文件快照，蜂群不能使用 worktree。Windows 上建议安装 [Git for Windows](https://git-scm.com/download/win)，bash 工具会使用其中的 Git Bash。ripgrep 已经包含在安装包里，不用单独安装。
+
+**Shift+Enter 没有换行**
+
+部分终端不会把 `Shift+Enter` 和 `Enter` 区分开，改用 `Ctrl+J` 或在行尾输入 `\`。
+
+**缓存命中率很低**
+
+先看会话是否只有很少几次请求，单次请求没有可以复用的前缀。其次检查供应商是否支持前缀缓存、缓存有效期多长、OpenAI 兼容端点是否设置了 `promptCaching: true`。
+
+**网页搜索失败**
+
+DuckDuckGo 有时会要求验证码或限流，换成 Brave、Tavily 或 SearXNG，见[网页搜索](#网页搜索)。
+
+## 已知限制
+
+- 没有在 Windows Terminal 和 conhost 中手工验证过中文输入法候选框的位置，以及 `Shift+Enter` 的行为。
+- 内置的语义工具只支持 TS/JS。
+- 终端窗口缩小时，界面可能整屏重绘一次。
+- 黑板不随会话保存，恢复会话后为空。
