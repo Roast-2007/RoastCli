@@ -1,8 +1,9 @@
+import { displayWidth } from '../../core/text-width.js';
 import type { DeckFocus } from './focus.js';
 import type { deckLayout } from './layout.js';
 import type { Line } from './lines.js';
 import { paneLines, paneMetrics } from './Pane.js';
-import { missionTabs } from './tabs.js';
+import { missionTabs, tabMemberSuffix } from './tabs.js';
 export type Target =
   | { kind: 'pane'; pane: DeckFocus }
   | { kind: 'agent'; id: string }
@@ -16,7 +17,7 @@ export interface Region { x: number; y: number; w: number; h: number; target: Ta
 export interface HitModel {
   focus: DeckFocus; narrow: number; tab: number; agents: string[]; colonyOffset: number;
   offset: number; signalOffset: number; missionLines: Line[]; signalLines: Line[];
-  modeWidth: number; strategyWidth: number; interaction?: boolean;
+  memberLabel?: string; modeWidth: number; strategyWidth: number; interaction?: boolean;
   hints?: { x: number; width: number; action: string }[];
 }
 export function hitTest(regions: Region[], x: number, y: number, panesOnly = false): Region | undefined {
@@ -51,7 +52,7 @@ export function deckRegions(layout: ReturnType<typeof deckLayout>, model: HitMod
   }
   if (!layout.compact && (!layout.narrow || !colonyVisible)) {
     const visible = content(layout.colony, layout.mission, model.missionLines, model.offset, false, model.tab === 0);
-    missionTabs(visible.metrics.width, model.tab, !layout.signals && !layout.narrow).forEach(item => add(visible.x + item.x, layout.header + visible.metrics.titleRow, item.width, 1, { kind: 'tab', index: item.tab }));
+    missionTabs(Math.max(0, visible.metrics.width - 2 - displayWidth(tabMemberSuffix(visible.metrics.width - 2, model.tab, model.memberLabel))), model.tab, !layout.signals && !layout.narrow).forEach(item => add(visible.x + 2 + item.x, layout.header + visible.metrics.titleRow, item.width, 1, { kind: 'tab', index: item.tab }));
     visible.shown.forEach((line, index) => { if (line.target) add(visible.x, visible.y + index, visible.metrics.width, 1, line.target); });
   }
   if (!layout.compact && layout.signals) {

@@ -1,3 +1,6 @@
+import { KeyBar, keyHints } from './components/KeyBar.js';
+import type { InputActions } from './input/InputBox.js';
+import type { ApprovalActions } from './components/InteractionCard.js';
 import { useViewport } from './viewport.js';
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import path from 'node:path';
@@ -27,7 +30,6 @@ import { AgentsPanel, StatusLine, TodoPanel } from './components/Chrome.js';
 import { InteractionCard } from './components/InteractionCard.js';
 import { ToolDetail } from './components/ToolCard.js';
 import { formatCost, gitBranch } from './status-info.js';
-import { useSpinner } from './components/useSpinner.js';
 
 export function FullScreen(props: AppProps) {
   const { exit } = useApp();
@@ -43,8 +45,9 @@ export function FullScreen(props: AppProps) {
 function Workspace({ session, store: storeProp, controller: controllerProp, inputDraft, initialPrompt, printedUpTo = 0, onMissionControl, startup }: AppProps) {
   const store = storeProp!, controller = controllerProp!;
   const { exit } = useApp(), { stdin } = useStdin(), { rows, columns } = useViewport();
-  const theme = useTheme(), { ascii, motion, mouse } = useTerminal();
+  const theme = useTheme(), { ascii, motion, mouse, hints } = useTerminal();
   const ui = useSyncExternalStore(store.subscribe, store.getState), view = ui.agents.main!, meta = ui.meta;
+  const inputActions = useRef<InputActions | null>(null), approvalActions = useRef<ApprovalActions | null>(null), toolScroll = useRef<(() => void) | null>(null);
   const localDraft = useRef<{ seed?: number; state?: EditorState }>({});
   const draft = inputDraft ?? localDraft.current;
   const [splash, setSplash] = useState(Boolean(startup && motion && !initialPrompt));
@@ -59,7 +62,7 @@ function Workspace({ session, store: storeProp, controller: controllerProp, inpu
   const deps = useMemo(() => ({ commands: [...COMMANDS, ...skillCommands(session.skills.list()), ...mcpPromptCommands(session)], files: (q: string) => files.match(q) }), [session, files]);
   const branch = useMemo(() => gitBranch(cwd), [cwd, view.running]);
   const card = meta.interactions[0];
-  const layout = fullscreenLayout(rows, { interaction: Boolean(card), detail, todos: view.todos.some((t) => t.status !== 'completed'), agents: meta.swarm.some((a) => a.parentId && ['queued', 'running', 'waiting', 'paused'].includes(a.state)) });
+  const layout = fullscreenLayout(rows, { interaction: Boolean(card), hints: hints !== 'off', detail, todos: view.todos.some((t) => t.status !== 'completed'), agents: meta.swarm.some((a) => a.parentId && ['queued', 'running', 'waiting', 'paused'].includes(a.state)) });
   const padding = Math.min(session.config.ui?.markdown?.padding ?? (columns >= 60 ? 2 : columns >= 30 ? 1 : 0), Math.max(0, Math.floor((columns - 12) / 2)));
   const width = Math.max(1, columns - padding * 2);
   const transcript = useMemo(createTranscript, []);
@@ -112,7 +115,20 @@ function Workspace({ session, store: storeProp, controller: controllerProp, inpu
     }
   }, { isActive: ready });
   const accent = motionColor(theme.border, theme.accent, useEntrance(meta.overlay ?? (detail ? 'detail' : card?.id ?? 'conversation')));
-  const spinner = useSpinner(view.running && !splash);
+  const hintItems = keyHints({ screen: 'chat', running: view.running, reading, detail, card });
+  const runHint = (action: string) => {
+    if (card) { if (action.startsWith('approve:')) approvalActions.current?.choose(Number(action.slice(8))); else if (action === 'approval-next') approvalActions.current?.next(); return; }
+    if (action === 'submit') inputActions.current?.enter();
+    if (action === 'newline') inputActions.current?.newline();
+    if (action === 'commands' || action === 'mention') inputActions.current?.insert(action === 'commands' ? '/' : '@');
+    if (action === 'switch') onMissionControl?.();
+    if (action === 'help') store.setMeta({ overlay: 'help' });
+    if (action === 'interrupt') controller.interrupt();
+    if (action === 'tool-scroll') toolScroll.current?.();
+    if (action === 'tool-open' || action === 'tool-close') { leaveReading(); detailRef.current = action === 'tool-open'; setDetail(detailRef.current); }
+    if (action === 'read-close') leaveReading();
+    if (action === 'read-scroll' || action === 'read-page') { scroll.move((readingRef.current ? scroll.position() : scroll.max) - (action === 'read-page' ? Math.max(1, count - 1) : 1)); read(); }
+  };
   const cost = session.cost();
   const tool = useMemo(() => {
     if (view.tools[0]) return view.tools[0];
@@ -134,14 +150,15 @@ function Workspace({ session, store: storeProp, controller: controllerProp, inpu
     </Box> : null}
     {meta.overlay && !card ? <Overlay key={meta.overlay} kind={meta.overlay} session={session} store={store} controller={controller} height={layout.height - layout.header - layout.status} /> : <>
       <Box height={layout.body} flexShrink={0} flexDirection="column" overflow="hidden" paddingX={padding}>
-        {detail && !card ? <ToolDetail key={tool?.callId} tool={tool} maxLines={layout.body} width={width} active={ready} /> : transcriptRows.length ? transcriptRows.slice(start, start + count).map((row, index) => <Text key={index} wrap="truncate-end">{row.length ? row.map((span, i) => <Text key={i} color={span.color ? theme[span.color] as string | undefined : undefined} bold={span.bold} dimColor={span.dim} italic={span.italic} underline={span.underline} strikethrough={span.strike}>{span.text}</Text>) : ' '}</Text>) : <Welcome height={layout.body} columns={width} warnings={session.startupWarnings} />}
+        {detail && !card ? <ToolDetail scrollAction={toolScroll} key={tool?.callId} tool={tool} maxLines={layout.body} width={width} active={ready} /> : transcriptRows.length ? transcriptRows.slice(start, start + count).map((row, index) => <Text key={index} wrap="truncate-end">{row.length ? row.map((span, i) => <Text key={i} color={span.color ? theme[span.color] as string | undefined : undefined} bold={span.bold} dimColor={span.dim} italic={span.italic} underline={span.underline} strikethrough={span.strike}>{span.text}</Text>) : ' '}</Text>) : <Welcome height={layout.body} columns={width} warnings={session.startupWarnings} />}
       </Box>
       {layout.agents ? <AgentsPanel onOpenDeck={onMissionControl} agents={meta.swarm} activity={(id) => ui.agents[id]?.tools[0]?.name ?? '运行中'} maxHeight={layout.agents} /> : null}
       {layout.todos ? <TodoPanel todos={view.todos} maxHeight={layout.todos} /> : null}
-      {layout.hint ? meta.queued.length ? <QueueLine texts={meta.queued} /> : <Text color={reading ? theme.info : theme.muted} wrap="truncate-end">{detail ? '工具详情 · ↑↓ 滚动 · Ctrl+O 返回' : reading ? `阅读 · ${start + 1}–${Math.min(transcriptRows.length, start + count)}/${transcriptRows.length} · ↑↓ 滚动 · End/Enter/Esc 返回输入` : view.running ? `${spinner} 运行中` : ' '}</Text> : null}
       <Box height={layout.input} flexShrink={0} overflow="hidden" flexDirection="column">
-        {card ? <InteractionCard key={card.id} request={card} maxHeight={layout.input} onInterrupt={() => controller.ctrlC('')} onRespond={(response) => controller.respond(card, response)} /> : <InputBox key={meta.inputSeed.key} active={ready && !reading && !detail} maxHeight={layout.input} acceptInput={() => !readingRef.current && !detailRef.current && !store.getState().meta.overlay && store.getState().meta.interactions.length === 0} placeholder={view.running ? '插话' : '输入消息'} initialHistory={history} initialText={meta.inputSeed.screen && meta.inputSeed.screen !== 'inline' ? '' : meta.inputSeed.text} initialState={draft.seed === meta.inputSeed.key || (meta.inputSeed.screen && meta.inputSeed.screen !== 'inline') ? draft.state : undefined} onStateChange={(state) => { draft.seed = meta.inputSeed.key; draft.state = state; }} deps={deps} onHelp={() => store.setMeta({ overlay: 'help' })} onSubmit={(text, raw) => { leaveReading(); controller.submit(text, raw); }} />}
+        {!card && (meta.queued.length || reading) && layout.input >= 2 ? <Text color={theme.muted} wrap="truncate-end">{reading ? `阅读 · ${start + 1}–${Math.min(transcriptRows.length, start + count)}/${transcriptRows.length}` : ''}{meta.queued.length ? <QueueLine texts={meta.queued} /> : null}</Text> : null}
+        {card ? <InteractionCard actions={approvalActions} key={card.id} request={card} maxHeight={layout.input} onInterrupt={() => controller.ctrlC('')} onRespond={(response) => controller.respond(card, response)} /> : <InputBox actions={inputActions} key={meta.inputSeed.key} active={ready && !reading && !detail} maxHeight={Math.max(1, layout.input - Number(Boolean(meta.queued.length || reading) && layout.input >= 2))} acceptInput={(input) => input !== '\ue014' && !readingRef.current && !detailRef.current && !store.getState().meta.overlay && store.getState().meta.interactions.length === 0} placeholder={view.running ? '插话' : '输入消息'} initialHistory={history} initialText={meta.inputSeed.screen && meta.inputSeed.screen !== 'inline' ? '' : meta.inputSeed.text} initialState={draft.seed === meta.inputSeed.key || (meta.inputSeed.screen && meta.inputSeed.screen !== 'inline') ? draft.state : undefined} onStateChange={(state) => { draft.seed = meta.inputSeed.key; draft.state = state; }} deps={deps} onHelp={() => store.setMeta({ overlay: 'help' })} onSubmit={(text, raw) => { leaveReading(); controller.submit(text, raw); }} />}
       </Box>
+      {layout.keybar ? <KeyBar items={hintItems} columns={columns} onAction={runHint} /> : null}
     </>}
     {layout.status ? <StatusLine onMode={() => controller.cycleMode()} onHelp={() => store.setMeta({ overlay: 'help' })} mode={meta.mode} model={`${session.providerName}:${session.model}`} contextPercent={meta.contextPercent} total={view.totalUsage} last={view.lastUsage} running={view.running} elapsedMs={view.turnStartedAt ? now - view.turnStartedAt : 0} step={view.step} branch={branch} cost={cost === null ? null : formatCost(cost)} toast={meta.toast} agents={meta.swarm.filter((a) => a.parentId && ['queued', 'running', 'waiting', 'paused'].includes(a.state)).length} /> : null}
   </Box>;

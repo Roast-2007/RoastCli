@@ -4,7 +4,7 @@ import { useViewport } from '../viewport.js';
  * 按键：Enter 提交（行尾为 \ 时换行）· Shift+Enter / Ctrl+J / Alt+Enter 换行 · ↑↓ 移行或翻历史 ·
  * Tab 应用首个建议 · Ctrl+A/E 行首/行尾 · Ctrl+U 删到行首 · Ctrl+W 删词。
  */
-import { useLayoutEffect, useReducer, useRef, useState } from 'react';
+import { useLayoutEffect, useReducer, useRef, useState, type RefObject } from 'react';
 import { Box, Text, useBoxMetrics, useCursor, useInput, usePaste, type DOMElement } from 'ink';
 import { createEditor, editorReducer, expand, textOf, type EditorAction, type EditorState } from './editor.js';
 import { suggestions, type SuggestDeps } from './suggest.js';
@@ -15,7 +15,9 @@ import { editorViewport } from '../layout.js';
 import { graphemes, nextBoundary, previousBoundary, truncateDisplay } from '../../core/text-width.js';
 import { isMouseInput } from '../mouse.js';
 
+export interface InputActions { enter(): void; newline(): void; insert(text: string): void }
 interface Props {
+  actions?: RefObject<InputActions | null>;
   active: boolean;
   placeholder: string;
   initialHistory: string[];
@@ -38,7 +40,7 @@ function reducer(s: EditorState, a: Action): EditorState {
   return a.type === 'replace' ? a.state : editorReducer(s, a);
 }
 
-export function InputBox({ active, placeholder, initialHistory, initialText, initialState, onStateChange, deps, onSubmit, maxHeight = 9, onHelp, acceptInput }: Props) {
+export function InputBox({ active, placeholder, initialHistory, initialText, initialState, onStateChange, deps, onSubmit, maxHeight = 9, onHelp, acceptInput, actions }: Props) {
   const theme = useTheme();
   const { ascii } = useTerminal();
   const glyph = useGlyphs();
@@ -70,6 +72,29 @@ export function InputBox({ active, placeholder, initialHistory, initialText, ini
   const origin = active ? absoluteOrigin(boxRef.current) : null;
   if (active) setCursorPosition(origin ? { x: origin.x + (border ? 4 : 2) + viewport.caret.x, y: origin.y + (border ? 1 : 0) + viewport.caret.y } : undefined);
 
+  const submit = () => {
+    if (!active || acceptInput?.() === false) return;
+    if (search !== null) { if (match) dispatch({ type: 'set', text: match }); setSearch(null); return; }
+    const state = editorRef.current, hints = suggestions(state, deps);
+    const chosen = Math.min(selectedRef.current, Math.max(0, hints.length - 1));
+    const line = state.lines[state.row]!;
+    if (line.endsWith('\\') && state.col === line.length) { dispatch({ type: 'backspace' }); dispatch({ type: 'newline' }); return; }
+    const raw = textOf(state);
+    if (!raw.trim()) return;
+    if (/^\/\S*$/.test(raw) && hints[chosen] && !deps.commands.some((command) => `/${command.name}` === raw)) {
+      const completed = expand(hints[chosen].apply(state)).trim();
+      onSubmit(completed, completed);
+      setSelected(0);
+      return dispatch({ type: 'commit' });
+    }
+    onSubmit(expand(state).trim(), expand(state));
+    return dispatch({ type: 'commit' });
+  };
+  useLayoutEffect(() => {
+    if (!actions) return;
+    actions.current = { enter: submit, newline: () => { if (active && acceptInput?.() !== false) dispatch({ type: 'newline' }); }, insert: text => { if (active && acceptInput?.() !== false) dispatch({ type: 'insert', text }); } };
+    return () => { actions.current = null; };
+  });
   usePaste((text) => { if (acceptInput?.() !== false) dispatch({ type: 'paste', text }); }, { isActive: active });
   useInput(
     (input, key) => {
@@ -97,22 +122,8 @@ export function InputBox({ active, placeholder, initialHistory, initialText, ini
       }
       if (input === '?' && textOf(state) === '' && onHelp) return onHelp();
       if (key.return) {
-        const line = state.lines[state.row]!;
         if (key.shift || key.meta) return dispatch({ type: 'newline' });
-        if (line.endsWith('\\') && state.col === line.length) {
-          dispatch({ type: 'backspace' });
-          return dispatch({ type: 'newline' });
-        }
-        const raw = textOf(state);
-        if (!raw.trim()) return;
-        if (/^\/\S*$/.test(raw) && hints[chosen] && !deps.commands.some((command) => `/${command.name}` === raw)) {
-          const completed = expand(hints[chosen].apply(state)).trim();
-          onSubmit(completed, completed);
-          setSelected(0);
-          return dispatch({ type: 'commit' });
-        }
-        onSubmit(expand(state).trim(), expand(state));
-        return dispatch({ type: 'commit' });
+        return submit();
       }
       if (key.ctrl && input === 'j') return dispatch({ type: 'newline' });
       if (key.tab && !key.shift && hints[chosen]) { setSelected(0); return dispatch({ type: 'replace', state: hints[chosen].apply(state) }); }

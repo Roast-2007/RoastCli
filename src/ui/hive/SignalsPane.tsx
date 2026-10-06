@@ -1,3 +1,4 @@
+import { useTerminal } from '../terminal.js';
 import type { Session } from '../../agent/session.js';
 import type { UiStoreState } from '../store/store.js';
 import { Pane } from './Pane.js';
@@ -12,5 +13,6 @@ export function signalLines(session: Session, ui: UiStoreState): Line[] {
   ];
 }
 export function SignalsPane({ session, ui, height, width, focused, offset }: { session: Session; ui: UiStoreState; height: number; width: number; focused: boolean; offset: number }) {
-  return <Pane title="信号" lines={signalLines(session, ui)} height={height} width={width} focused={focused} offset={offset} />;
+  const { hints } = useTerminal(), lines = signalLines(session, ui);
+  return <Pane title="信号" lines={lines.length || hints !== 'full' ? lines : [{ text: '审批请求、成员消息和黑板更新会显示在这里', tone: 'muted' }]} height={height} width={width} focused={focused} offset={offset} />;
 }

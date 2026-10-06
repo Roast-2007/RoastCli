@@ -42,8 +42,8 @@ describe('real Ink Hive mouse control', () => {
       f.session.swarm.board.write('/mission/plan',JSON.stringify({tasks:[{id:'t1',title:'test plan',role:'worker',acceptance:'pass',dependsOn:[]}]}),{author:'main'}); await tick();
       const v = viewport(f.tty.columns,f.tty.rows), l = deckLayout(v.columns,v.rows), m = paneMetrics(l.mission,l.body);
       await f.send(press(l.colony + m.inset,l.header + m.titleRow + 1)); expect(f.store.getState().focus).toBe('w1'); expect(f.tty.frame()).toContain('test plan');
-      const tab = missionTabs(m.width,0).find(tab => tab.tab === 3)!;
-      await f.send(press(l.colony + m.inset + tab.x,l.header + m.titleRow)); expect(f.tty.frame()).toContain('4消息*');
+      const tab = missionTabs(m.width-2,0).find(tab => tab.tab === 3)!;
+      await f.send(press(l.colony + m.inset + 2 + tab.x,l.header + m.titleRow)); expect(f.tty.frame()).toContain('成员之间的消息');
       const mode = vi.spyOn(f.controller,'cycleMode'); await f.send(press(1,l.height-1)); expect(mode).toHaveBeenCalledOnce();
       await f.send(press(v.columns-5,l.header+l.body)); expect(f.store.getState().meta.overlay).toBe('strategy');
       await f.send('\x1b'); f.controller.runCommand('/mouse off'); await tick(); expect(f.tty.chunks.join('')).toContain('\x1b[?1006l');
@@ -61,7 +61,7 @@ describe('real Ink Hive mouse control', () => {
       await f.send('pending draft'); await f.send('\x1b[17~'); await f.send('\t'); await f.send('2');
       await f.send('\x1b[<65;3;5M'); expect(f.tty.frame()).toContain('w4 [worker]'); expect(f.store.getState().focus).toBe('main');
       const v=viewport(f.tty.columns,f.tty.rows), l=deckLayout(v.columns,v.rows);
-      await f.send(press(l.colony+3,5,64)); expect(f.tty.frame()).toContain('已上翻 3 行');
+      await f.send(press(l.colony+3,5,64)); expect(f.tty.frame()).toContain('output-96'); expect(f.tty.frame()).not.toContain('output-99');
       expect(f.draft.state?.lines.join('')).toBe('pending draft'); expect(f.store.getState().focus).toBe('main');
     } finally { await f.close(); }
   });

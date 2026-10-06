@@ -14,7 +14,7 @@ export function createDeckMouse() {
       const region = hitTest(regions, event.x, event.y);
       if (!region) continue;
       const target = region.target;
-      if (approval && !(target.kind === 'signal' && target.type === 'approval')) continue;
+      if (approval && !(target.kind === 'signal' && target.type === 'approval' || target.kind === 'hint' && (target.action.startsWith('approve:') || target.action === 'approval-next'))) continue;
       if (event.kind === 'wheel') {
         const pane = hitTest(regions, event.x, event.y, true)?.target;
         if (pane?.kind === 'pane') actions.scroll(pane.pane === 'input' ? 'mission' : pane.pane, event.delta ?? 0);

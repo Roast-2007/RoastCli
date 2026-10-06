@@ -1,3 +1,6 @@
+import { KeyBar, keyHints, fitKeyHints } from '../components/KeyBar.js';
+import type { InputActions } from '../input/InputBox.js';
+import type { ApprovalActions } from '../components/InteractionCard.js';
 import { deckRegions } from './hitmap.js';
 import { createDeckMouse } from './deck-mouse.js';
 import { AgentMenu } from './AgentMenu.js';
@@ -46,7 +49,7 @@ export function Deck(props: DeckProps) {
   return <ThemeContext.Provider value={theme}><TerminalContext.Provider value={terminal}><Workspace {...props} /></TerminalContext.Provider></ThemeContext.Provider>;
 }
 function Workspace({ session, store, controller, onExit, inputDraft, initialPrompt, startup }: DeckProps) {
-  const { exit } = useApp(), theme = useTheme(), { ascii, motion, mouse } = useTerminal();
+  const { exit } = useApp(), theme = useTheme(), { ascii, motion, mouse, hints } = useTerminal();
   const { rows, columns } = useViewport();
   const ui = useSyncExternalStore(store.subscribe, store.getState), main = ui.agents.main!;
   const localDraft = useRef<{ seed?: number; state?: EditorState }>({}), draft = inputDraft ?? localDraft.current;
@@ -54,6 +57,7 @@ function Workspace({ session, store, controller, onExit, inputDraft, initialProm
   const [focus, setFocus] = useState<DeckFocus>('input'), focusRef = useRef(focus);
   const changeFocus = (next: DeckFocus) => { focusRef.current = next; setFocus(next); };
   const [menu, setMenu] = useState<string | null>(null);
+  const inputActions = useRef<InputActions | null>(null), approvalActions = useRef<ApprovalActions | null>(null), toolScroll = useRef<(() => void) | null>(null);
   const handleMouse = useRef(createDeckMouse());
   const [selected, setSelected] = useState('main'), [tab, setTab] = useState(0), [narrow, setNarrow] = useState(1);
   const [offset, setOffset] = useState(0), [signalOffset, setSignalOffset] = useState(0), [colonyOffset, setColonyOffset] = useState(0), [detail, setDetail] = useState(false);
@@ -64,13 +68,15 @@ function Workspace({ session, store, controller, onExit, inputDraft, initialProm
   const deps = useMemo(() => ({ commands: [...COMMANDS, ...skillCommands(session.skills.list()), ...mcpPromptCommands(session)], files: (q: string) => files.match(q), members: (q: string) => ['queen', ...ui.meta.swarm.filter((agent) => agent.parentId).map((agent) => agent.id)].filter((id) => id.startsWith(q)) }), [session, files, ui.meta.swarm]);
   const agents = useMemo(() => treeOrder(ui.meta.swarm), [ui.meta.swarm]);
   const current = agents.find((agent) => agent.id === selected) ?? agents[0];
-  const card = ui.meta.interactions[0], layout = deckLayout(columns, rows, Boolean(card));
+  const card = ui.meta.interactions[0], layout = deckLayout(columns, rows, Boolean(card), hints !== 'off');
   useEffect(() => { if (focus === 'signals' && !layout.signals) changeFocus('mission'); }, [focus, layout.signals]);
   const branch = useMemo(() => gitBranch(cwd), [cwd, main.running]);
   const mission = latestMission(main), phase = missionPhase(main, agents);
   useDiffReviews(session, store, ui, current?.id ?? 'main', !splash && tab === 2 && !card && !ui.meta.overlay);
+  const openHelp = () => store.setMeta({ overlay: 'help' });
+  const hintItems = keyHints({ screen: 'hive', focus, running: main.running, card, detail, tabs: !layout.signals && !layout.narrow ? 7 : 6 });
   useMouseReporting();
-  useDeckFunctionKeys(!splash && !card && !ui.meta.overlay && !detail && !menu, reverse => changeFocus(nextFocus(focusRef.current, layout.signals > 0, reverse)));
+  useDeckFunctionKeys(!splash && !card && !ui.meta.overlay && !detail && !menu, reverse => changeFocus(nextFocus(focusRef.current, layout.signals > 0, reverse)), openHelp);
   useEffect(() => { controller.setScreen('hive'); }, [controller]);
   useEffect(() => { store.setFocus(current?.id ?? 'main'); return () => store.setFocus('main'); }, [store, current?.id]);
   useEffect(() => { if (!main.running) return; const timer = setInterval(() => setNow(Date.now()), 1000); return () => clearInterval(timer); }, [main.running]);
@@ -98,7 +104,7 @@ function Workspace({ session, store, controller, onExit, inputDraft, initialProm
         }
   };
   useInput((input, key) => {
-    if (input === '\ue019') return;
+    if (input === '\ue019' || input === '\ue014') return;
     if (parseMouse(input).length) return;
     if (key.ctrl && input === 'g') return onExit();
     if (key.ctrl && input === 'c') { if (controller.ctrlC(draft.state ? textOf(draft.state) : '') === 'clear') { draft.state = editorReducer(draft.state ?? createEditor(history), { type: 'set', text: '' }); store.setMeta((m) => ({ inputSeed: { key: m.inputSeed.key + 1, text: '', screen: 'hive' } })); draft.seed = store.getState().meta.inputSeed.key; } return; }
@@ -120,6 +126,7 @@ function Workspace({ session, store, controller, onExit, inputDraft, initialProm
       if (key.pageUp) { changeFocus('mission'); move(Math.max(1, layout.body - 3)); }
       return;
     }
+    if (input === '?') return openHelp();
     if (focusRef.current === 'colony' && input === ' ') return setMenu(current?.id ?? 'main');
     if (key.return && focusRef.current === 'signals') { const region = regions.find(region => region.target.kind === 'signal'); if (region?.target.kind === 'signal') openSignal(region.target); return; }
     if (key.escape || input === 'i') return changeFocus('input');
@@ -153,17 +160,40 @@ function Workspace({ session, store, controller, onExit, inputDraft, initialProm
       changeFocus('input');
     }
   }, { isActive: !splash && !card && !ui.meta.overlay && !menu });
-  const regions = deckRegions(layout, { focus, narrow, tab, agents: agents.map(agent => agent.id), colonyOffset: Math.min(colonyOffset, colonyMax), offset: Math.min(offset, maxOffset), signalOffset: Math.min(signalOffset, signalMax), missionLines: raw, signalLines: signalLines(session, ui), modeWidth: modeWidth(ui.meta.mode), strategyWidth: displayWidth(`策略 ${ui.meta.strategy ?? 'auto'} · n ${ui.meta.n ?? 3}`), interaction: Boolean(card) });
+  const regions = deckRegions(layout, { focus, narrow, tab, agents: agents.map(agent => agent.id), colonyOffset: Math.min(colonyOffset, colonyMax), offset: Math.min(offset, maxOffset), signalOffset: Math.min(signalOffset, signalMax), missionLines: raw, signalLines: signalLines(session, ui), memberLabel: current ? `${current.id === 'main' ? 'queen' : current.id} ${current.role}` : undefined, modeWidth: modeWidth(ui.meta.mode), strategyWidth: displayWidth(`策略 ${ui.meta.strategy ?? 'auto'} · n ${ui.meta.n ?? 3}`), interaction: Boolean(card), hints: fitKeyHints(hintItems, columns) });
   const prefill = (id: string) => {
     const text = `@${id === 'main' ? 'queen' : id} `;
     draft.state = editorReducer(draft.state ?? createEditor(history), { type: 'set', text });
     store.setMeta(meta => ({ inputSeed: { key: meta.inputSeed.key + 1, text, screen: 'hive' } }));
     draft.seed = store.getState().meta.inputSeed.key; changeFocus('input');
   };
+  const runHint = (action: string) => {
+    if (card) { if (action.startsWith('approve:')) approvalActions.current?.choose(Number(action.slice(8))); else if (action === 'approval-next') approvalActions.current?.next(); return; }
+    if (action === 'submit') inputActions.current?.enter();
+    if (action === 'help') openHelp();
+    if (action === 'interrupt') controller.interrupt();
+    if (action === 'switch') onExit();
+    if (action === 'mention' || action === 'commands') { changeFocus('input'); inputActions.current?.insert(action === 'mention' ? '@' : '/'); }
+    if (action === 'input') changeFocus('input');
+    if (action === 'focus-next') changeFocus(nextFocus(focusRef.current, layout.signals > 0));
+    if (action === 'tool-open') setDetail(true);
+    if (action === 'tool-close') setDetail(false);
+    if (action === 'tool-scroll') toolScroll.current?.();
+    if (action === 'select-next') select(1);
+    if (action === 'output' || action === 'diff') { pickTab(action === 'output' ? 1 : 2); changeFocus('mission'); }
+    if (action === 'menu') setMenu(current?.id ?? 'main');
+    if (action === 'steer') prefill(current?.id ?? 'main');
+    if (action === 'pause' && current) store.addNotice('main', controller.togglePause(current.id));
+    if (action === 'cancel' && current) { if (cancel.current === current.id) { cancel.current = null; controller.cancelAgent(current.id); } else { cancel.current = current.id; store.setMeta({ toast: { text: `再按 x 取消 ${current.id} 及其子 agent`, tone: 'warn' } }); } }
+    if (action === 'tab-next') { const order = !layout.signals && !layout.narrow ? [0, 1, 2, 6, 3, 4, 5] : [0, 1, 2, 3, 4, 5]; pickTab(order[(order.indexOf(tab) + 1) % order.length]!); }
+    if (action === 'scroll' || action === 'page') move(action === 'scroll' ? 1 : Math.max(1, layout.body - 4));
+    if (action === 'top') move(focusRef.current === 'signals' ? signalMax : maxOffset);
+    if (action === 'signal') { const target = regions.find(region => region.target.kind === 'signal')?.target; if (target?.kind === 'signal') openSignal(target); }
+  };
   useInput(input => {
     const events = parseMouse(input);
     if (!events.length || mouse === false) return;
-    handleMouse.current(events, regions, {
+    handleMouse.current(events, detail ? regions.filter(region => region.target.kind === 'hint') : regions, {
       focus: changeFocus, select: id => { setSelected(id); cancel.current = null; },
       tab: pickTab, menu: setMenu,
       scroll: (pane, delta) => {
@@ -172,10 +202,10 @@ function Workspace({ session, store, controller, onExit, inputDraft, initialProm
         else { nav.current.offset = Math.max(0, Math.min(maxOffset, nav.current.offset - delta)); setOffset(nav.current.offset); }
       },
       mode: () => controller.cycleMode(), strategy: () => controller.runCommand('/strategy'),
-      hint: action => { if (action === 'help') store.setMeta({ overlay: 'help' }); },
+      hint: runHint,
       signal: openSignal,
     }, Boolean(card));
-  }, { isActive: !splash && !ui.meta.overlay && !menu && !detail });
+  }, { isActive: !splash && !ui.meta.overlay && !menu });
   const menuAgent = agents.find(agent => agent.id === menu);
   const cost = session.cost(), runningChildren = agents.filter((agent) => agent.parentId && ['queued', 'running', 'waiting', 'paused'].includes(agent.state)).length;
   const center = <MissionPane session={session} ui={ui} tab={tab} selected={current?.id ?? 'main'} height={layout.body} width={layout.mission} focused={focus === 'mission'} offset={Math.min(offset, maxOffset)} narrow={layout.narrow} signals={!layout.signals && !layout.narrow} />;
@@ -183,19 +213,20 @@ function Workspace({ session, store, controller, onExit, inputDraft, initialProm
   if (splash) return <Ignition session={session} height={layout.height} columns={columns} onExit={exit} onDone={(text) => { if (text) { draft.seed = ui.meta.inputSeed.key; draft.state = editorReducer(draft.state ?? createEditor(history), { type: 'insert', text }); } setSplash(false); }} />;
   return <Box height={layout.height} width={columns} flexDirection="column" overflow="hidden">
     {layout.header ? <Text bold color={theme.accent} wrap="truncate-end">{header}</Text> : null}
-    {menuAgent && !card ? <AgentMenu agent={menuAgent} height={layout.body + layout.input} controller={controller} onClose={() => setMenu(null)} onAction={action => { setMenu(null); setSelected(menuAgent.id); if (action === 'steer') prefill(menuAgent.id); else if (action === 'pause') store.addNotice('main', controller.togglePause(menuAgent.id)); else { pickTab(action === 'output' ? 1 : 2); changeFocus('mission'); } }} /> : ui.meta.overlay && !card ? <Overlay kind={ui.meta.overlay} session={session} store={store} controller={controller} height={layout.body + layout.input} /> : <>
-      {layout.body ? detail && !card ? <Box height={layout.body} overflow="hidden"><ToolDetail tool={tool} width={columns} maxLines={layout.body} active /></Box> : layout.compact ? <Text wrap="truncate-end">HIVE {runningChildren}/{session.config.swarm.maxAgents} · {phase}</Text> : <Box height={layout.body} flexShrink={0}>
+    {menuAgent && !card ? <AgentMenu agent={menuAgent} height={layout.body + layout.input + layout.keybar} controller={controller} onClose={() => setMenu(null)} onAction={action => { setMenu(null); setSelected(menuAgent.id); if (action === 'steer') prefill(menuAgent.id); else if (action === 'pause') store.addNotice('main', controller.togglePause(menuAgent.id)); else { pickTab(action === 'output' ? 1 : 2); changeFocus('mission'); } }} /> : ui.meta.overlay && !card ? <Overlay deck kind={ui.meta.overlay} session={session} store={store} controller={controller} height={layout.body + layout.input + layout.keybar} /> : <>
+      {layout.body ? detail && !card ? <Box height={layout.body} overflow="hidden"><ToolDetail scrollAction={toolScroll} tool={tool} width={columns} maxLines={layout.body} active /></Box> : layout.compact ? <Text wrap="truncate-end">HIVE {runningChildren}/{session.config.swarm.maxAgents} · {phase}</Text> : <Box height={layout.body} flexShrink={0}>
         {layout.colony > 0 ? <ColonyPane agents={agents} views={ui.agents} selected={current?.id ?? 'main'} height={layout.body} width={layout.colony} focused={focus === 'colony'} offset={Math.min(colonyOffset, colonyMax)} /> : null}
-        {layout.narrow && (narrow === 0 || focus === 'colony') ? <Pane title="蜂群 计划 输出 改动 信号" lines={colonyLines(agents, ui.agents, current?.id ?? 'main', ascii)} width={columns} height={layout.body} focused={focus === 'colony'} offset={Math.min(colonyOffset, colonyMax)} fromTop singleLine /> : center}
+        {layout.narrow && (narrow === 0 || focus === 'colony') ? <Pane title="蜂群 计划 输出 改动 信号" lines={colonyLines(agents, ui.agents, current?.id ?? 'main', ascii, hints === 'full')} width={columns} height={layout.body} focused={focus === 'colony'} offset={Math.min(colonyOffset, colonyMax)} fromTop singleLine /> : center}
         {layout.signals > 0 ? <SignalsPane session={session} ui={ui} height={layout.body} width={layout.signals} focused={focus === 'signals'} offset={Math.min(signalOffset, signalMax)} /> : null}
       </Box> : null}
       <Box height={layout.input} flexShrink={0} flexDirection="column" overflow="hidden">
-        {card ? <InteractionCard key={card.id} request={card} maxHeight={layout.input} onInterrupt={() => controller.ctrlC('')} onRespond={(response) => controller.respond(card, response)} /> : <>
+        {card ? <InteractionCard actions={approvalActions} key={card.id} request={card} maxHeight={layout.input} onInterrupt={() => controller.ctrlC('')} onRespond={(response) => controller.respond(card, response)} /> : <>
           {layout.input >= 2 ? <Box height={1}><Box flexGrow={1} overflow="hidden"><QueueLine texts={ui.meta.queued} /></Box><Text dimColor wrap="truncate-end">策略 {ui.meta.strategy ?? 'auto'} · n {ui.meta.n ?? 3}</Text></Box> : null}
-          <InputBox key={ui.meta.inputSeed.key} active={focus === 'input' && !detail} acceptInput={(input) => input !== '\ue019' && focusRef.current === 'input' && !detail && !menu && !store.getState().meta.overlay && !store.getState().meta.interactions.length} placeholder={main.running ? '插话，或 @成员 发指示' : '输入目标'} initialHistory={history} initialText={ui.meta.inputSeed.screen && ui.meta.inputSeed.screen !== 'hive' ? '' : ui.meta.inputSeed.text} initialState={draft.seed === ui.meta.inputSeed.key || (ui.meta.inputSeed.screen && ui.meta.inputSeed.screen !== 'hive') ? draft.state : undefined} onStateChange={(state) => { draft.seed = ui.meta.inputSeed.key; draft.state = state; }} deps={deps} maxHeight={layout.input - (layout.input >= 2 ? 1 : 0)} onHelp={() => store.setMeta({ overlay: 'help' })} onSubmit={(text, raw) => controller.submit(text, raw)} />
+          <InputBox actions={inputActions} key={ui.meta.inputSeed.key} active={focus === 'input' && !detail} acceptInput={(input) => input !== '\ue019' && input !== '\ue014' && focusRef.current === 'input' && !detail && !menu && !store.getState().meta.overlay && !store.getState().meta.interactions.length} placeholder={main.running ? '插话，或 @成员 发指示' : '输入目标'} initialHistory={history} initialText={ui.meta.inputSeed.screen && ui.meta.inputSeed.screen !== 'hive' ? '' : ui.meta.inputSeed.text} initialState={draft.seed === ui.meta.inputSeed.key || (ui.meta.inputSeed.screen && ui.meta.inputSeed.screen !== 'hive') ? draft.state : undefined} onStateChange={(state) => { draft.seed = ui.meta.inputSeed.key; draft.state = state; }} deps={deps} maxHeight={layout.input - (layout.input >= 2 ? 1 : 0)} onHelp={() => store.setMeta({ overlay: 'help' })} onSubmit={(text, raw) => controller.submit(text, raw)} />
         </>}
       </Box>
     </>}
+    {!ui.meta.overlay && !menu && layout.keybar ? <KeyBar items={hintItems} columns={columns} /> : null}
     {layout.status ? <StatusLine mode={ui.meta.mode} model={`${session.providerName}:${session.model}`} contextPercent={ui.meta.contextPercent} total={main.totalUsage} last={main.lastUsage} running={main.running} elapsedMs={main.turnStartedAt ? now - main.turnStartedAt : 0} step={main.step} cost={cost === null ? null : formatCost(cost)} branch={branch} agents={runningChildren} toast={ui.meta.toast} /> : null}
   </Box>;
 }

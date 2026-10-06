@@ -56,6 +56,29 @@ async function frameContains(tty: Terminal, text: string) {
 }
 
 describe('fullscreen workspace in real Ink', () => {
+  it('clicks the shared chat key bar, preserves expanded input and keeps generic help', async () => {
+    const { tty, stdin, draft, store } = workspace(120, 40);
+    const submit = vi.spyOn(controller, 'submit').mockImplementation(() => {});
+    const click = async (text: string) => {
+      await frameContains(tty, text);
+      const lines = tty.frames().at(-1)!.split('\n'), y = lines.length - 2, line = lines[y]!;
+      const x = displayWidth(line.slice(0, line.indexOf(text)));
+      expect(line).toContain(text); stdin.write(`\x1b[<0;${x + 1};${y + 1}M`); await tick(); await instance!.waitUntilRenderFlush();
+    };
+    stdin.write('first'); await frameContains(tty, 'first'); await click('Shift+Enter 换行');
+    stdin.write('second'); await frameContains(tty, 'second'); await click('Enter 发送');
+    expect(submit).toHaveBeenCalledWith('first\nsecond', 'first\nsecond'); expect(draft.state?.lines).toEqual(['']);
+    await click('? 帮助'); expect(store.getState().meta.overlay).toBe('help'); await frameContains(tty, '帮助 · ROAST');
+  });
+  it('hides chat key hints when disabled while retaining reading position and draft', async () => {
+    session.config.ui = { motion: 'reduced', hints: 'off' };
+    const { tty, stdin, store, draft } = workspace();
+    stdin.write('keep'); await frameContains(tty, 'keep');
+    expect(tty.frames().at(-1)).not.toContain('Enter 发送');
+    store.addNotice('main', Array.from({ length: 80 }, (_, i) => `hint-off-${i}`).join('\n'));
+    await frameContains(tty, 'hint-off-79'); stdin.write('\x1b[5~'); await frameContains(tty, '阅读 · ');
+    expect(tty.frames().at(-1)).not.toContain('PgUp/PgDn 翻页'); expect(draft.state?.lines).toEqual(['keep']);
+  });
   it('Ctrl+C clears a draft before arming exit, and queued input returns on interruption', async () => {
     const { tty, stdin, draft, store } = workspace();
     await tick(); stdin.write('preserved'); await frameContains(tty, 'preserved'); stdin.write('\x03');

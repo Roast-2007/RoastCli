@@ -1,4 +1,8 @@
-import { missionTabs } from './tabs.js';
+import { displayWidth } from '../../core/text-width.js';
+import { EMPTY_GUIDES, MissionGuide } from './Guides.js';
+import { useTheme } from '../theme.js';
+import { paneMetrics } from './Pane.js';
+import { missionTabs, tabMemberSuffix } from './tabs.js';
 import { Box, Text } from 'ink';
 import type { Session } from '../../agent/session.js';
 import type { UiStoreState } from '../store/store.js';
@@ -32,11 +36,19 @@ export function missionLines(session: Session, ui: UiStoreState, tab: number, se
   return signalLines(session, ui);
 }
 export function MissionPane({ session, ui, tab, selected, height, width, focused, offset, narrow = false, signals = false }: { session: Session; ui: UiStoreState; tab: number; selected: string; height: number; width: number; focused: boolean; offset: number; narrow?: boolean; signals?: boolean }) {
-  const { ascii } = useTerminal(), mission = latestMission(ui.agents.main!);
-  const lines = missionLines(session, ui, tab, selected, ascii);
+  const theme = useTheme(), { ascii, hints } = useTerminal(), mission = latestMission(ui.agents.main!);
+  const raw = missionLines(session, ui, tab, selected, ascii);
+  const empty = !raw.length || tab === 5 && raw.length === 1 || tab === 1 && raw[0]?.text === '（还没有输出）' || tab === 2 && !ui.meta.diffs?.[selected]?.loading && !ui.meta.diffs?.[selected]?.result && !ui.meta.swarm.find(agent => agent.id === selected)?.worktree;
+  const lines = empty && hints === 'full' ? [{ text: EMPTY_GUIDES[tab]!, tone: 'muted' as const }] : raw;
+  const metrics = paneMetrics(width, height);
+  const member = ui.meta.swarm.find(agent => agent.id === selected);
+  const suffix = tabMemberSuffix(metrics.width - 2, tab, member ? `${member.id === 'main' ? 'queen' : member.id} ${member.role}` : undefined);
+  const tabs = missionTabs(Math.max(0, metrics.width - 2 - displayWidth(suffix)), tab, signals, ascii);
+  const tabWidth = tabs.length ? tabs.at(-1)!.x + tabs.at(-1)!.width : 0;
+  const titleContent = <>{tabs.map((item, index) => <Text key={item.tab}>{index ? <Text color={theme.muted}>{ascii ? '|' : '│'}</Text> : null}<Text color={item.tab === tab ? theme.accent : theme.muted} inverse={item.tab === tab}>{item.text}</Text></Text>)}{suffix ? <Text color={theme.muted}>{' '.repeat(Math.max(0, metrics.width - 2 - tabWidth - displayWidth(suffix)))}{suffix}</Text> : null}</>;
   const title = missionTabs(Math.max(1, width - (height >= 4 && width >= 8 ? 4 : 0)), tab, signals).map(item => item.text).join('');
   const recent = ui.agents.main!.items.filter((item) => item.kind === 'mission').slice(-3);
-  return <Pane title={title} lines={lines} height={height} width={width} focused={focused} offset={offset} singleLine={tab === 0}>
-    {tab === 0 && ((!mission && !lines.length) || (session.resumedFrom && !ui.agents.main!.running && !session.swarm.board.read('/mission/plan'))) ? <Box flexGrow={1} justifyContent="center" alignItems="center" flexDirection="column"><Text dimColor>{ascii ? 'HIVE' : '⬡ HIVE'}</Text>{session.resumedFrom && recent.length ? <><Text dimColor>最近的任务</Text>{recent.map((item) => item.kind === 'mission' ? <Text key={item.id} dimColor wrap="truncate-end">{item.goal} · {item.strategy} · {missionResult(ui.agents.main!, item)}</Text> : null)}</> : null}</Box> : undefined}
+  return <Pane title={title} titleContent={titleContent} lines={lines} height={height} width={width} focused={focused} offset={offset} singleLine={tab === 0}>
+    {tab === 0 && ((!mission && !raw.length) || (session.resumedFrom && !ui.agents.main!.running && !session.swarm.board.read('/mission/plan'))) ? hints === 'full' && !mission ? <MissionGuide height={metrics.count} width={metrics.width} strategy={ui.meta.strategy ?? 'auto'} n={ui.meta.n ?? 3} /> : <Box flexGrow={1} justifyContent="center" alignItems="center" flexDirection="column"><Text dimColor>{ascii ? 'HIVE' : '⬡ HIVE'}</Text>{session.resumedFrom && recent.length ? <><Text dimColor>最近的任务</Text>{recent.map((item) => item.kind === 'mission' ? <Text key={item.id} dimColor wrap="truncate-end">{item.goal} · {item.strategy} · {missionResult(ui.agents.main!, item)}</Text> : null)}</> : null}</Box> : undefined}
   </Pane>;
 }

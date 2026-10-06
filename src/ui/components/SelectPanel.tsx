@@ -64,7 +64,7 @@ export function SelectPanel({ title, entries, height, onSelect, onClose, initial
       for (const event of events) {
         if (event.x < origin.x || event.x >= origin.x + columns || event.y < origin.y || event.y >= origin.y + height) continue;
         if (event.kind === 'wheel') { const delta = event.delta ?? 0; setScrollStart(value => Math.max(0, Math.min(Math.max(0, items.length - count), value + delta))); move(index + delta, false); continue; }
-        if (event.kind !== 'press' || event.button !== 'left') continue;
+        if (event.kind !== 'press' || event.button !== 'left' || event.shift) continue;
         const row = event.y - origin.y - Number(border) - layout.header - layout.extra;
         const entry = row >= 0 && row < count ? items[first + row] : undefined;
         if (!entry) continue;

@@ -1,7 +1,7 @@
 import { parseMouse } from '../mouse.js';
 import { absoluteOrigin } from '../input/cursor.js';
 import { useViewport } from '../viewport.js';
-import { useRef, useState } from 'react';
+import { useLayoutEffect, useRef, useState, type RefObject } from 'react';
 import { Box, Text, useInput, useBoxMetrics, type DOMElement } from 'ink';
 import type { InteractionRequest, InteractionResponse } from '../../core/interaction.js';
 import { terminalText } from '../../core/terminal-text.js';
@@ -13,9 +13,10 @@ import { textOf } from '../input/editor.js';
 import { useScroll } from '../scroll.js';
 import { motionColor, useEntrance } from '../motion.js';
 
-interface Props { request: InteractionRequest; onRespond(response: InteractionResponse): void; onInterrupt?(): void; maxHeight?: number }
+export interface ApprovalActions { choose(index: number): void; next(): void }
+interface Props { actions?: RefObject<ApprovalActions | null>; request: InteractionRequest; onRespond(response: InteractionResponse): void; onInterrupt?(): void; maxHeight?: number }
 
-export function InteractionCard({ request, onRespond, onInterrupt, maxHeight = 16 }: Props) {
+export function InteractionCard({ request, onRespond, onInterrupt, maxHeight = 16, actions }: Props) {
   const theme = useTheme();
   const { ascii, mouse } = useTerminal();
   const glyph = useGlyphs();
@@ -55,7 +56,7 @@ export function InteractionCard({ request, onRespond, onInterrupt, maxHeight = 1
       for (const event of events) {
         if (event.x < origin.x || event.x >= origin.x + columns || event.y < origin.y || event.y >= origin.y + maxHeight) continue;
         if (event.kind === 'wheel') { scroll.move(scroll.position() + (event.delta ?? 0)); continue; }
-        if (event.kind !== 'press' || event.button !== 'left') continue;
+        if (event.kind !== 'press' || event.button !== 'left' || event.shift) continue;
         const row = event.y - origin.y - Number(border) - header - detail.slice(start, start + detailHeight).length;
         if (row >= 0 && row < optionsHeight) answer(firstOption + row);
       }
@@ -74,6 +75,11 @@ export function InteractionCard({ request, onRespond, onInterrupt, maxHeight = 1
       if (remember && (input === '2' || input === '3')) return answer(Number(input) - 1);
       if (input === '4' || input === 'n') return answer(options.length - 1);
     }
+  });
+  useLayoutEffect(() => {
+    if (!actions) return;
+    actions.current = { choose: index => { if (index >= 0 && index < options.length) answer(index); }, next: () => { if (options.length) { selectionRef.current = (selectionRef.current + 1) % options.length; setSelected(selectionRef.current); } } };
+    return () => { actions.current = null; };
   });
   const firstOption = Math.max(0, selected - optionsHeight + 1);
   const color = request.kind === 'permission' ? request.forced ? theme.danger : theme.warn : theme.info;

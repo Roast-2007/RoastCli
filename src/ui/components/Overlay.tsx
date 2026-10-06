@@ -1,3 +1,4 @@
+import { DeckHelp } from '../hive/DeckHelp.js';
 import { useState } from 'react';
 import { useInput } from 'ink';
 import type { Session } from '../../agent/session.js';
@@ -12,9 +13,10 @@ import { CommandPanel } from './CommandPanel.js';
 import { MessagePanel } from './MessagePanel.js';
 import { SelectPanel } from './SelectPanel.js';
 
-type Props = { kind: OverlayKind; session: Session; store: UiStore; controller: UiController; height: number };
+type Props = { kind: OverlayKind; session: Session; store: UiStore; controller: UiController; height: number; deck?: boolean };
 
 export function Overlay(props: Props) {
+  if (props.kind === 'help' && props.deck) return <DeckHelp store={props.store} height={props.height} />;
   if (props.kind === 'help') return <HelpPanel {...props} />;
   if (props.kind === 'context') return <ContextPanel {...props} />;
   if (props.kind === 'rewind' || props.kind === 'sessions') return <HistoryPanel {...props} />;

@@ -97,7 +97,7 @@ export function StatusLine(p: StatusLineProps) {
     const origin = absoluteOrigin(box.current);
     if (!origin) return;
     for (const event of parseMouse(input)) {
-      if (event.kind !== 'press' || event.button !== 'left' || event.y !== origin.y) continue;
+      if (event.kind !== 'press' || event.button !== 'left' || event.shift || event.y !== origin.y) continue;
       if (event.x >= origin.x && event.x < origin.x + Math.min(columns, modeWidth(p.mode))) p.onMode?.();
       if (parts.right.endsWith('? 帮助') && event.x >= origin.x + columns - 6 && event.x < origin.x + columns) p.onHelp?.();
     }
@@ -126,7 +126,7 @@ export function AgentsPanel({ agents, activity, maxHeight = 11, onOpenDeck }: { 
     if (mouse === false || !onOpenDeck) return;
     const origin = absoluteOrigin(box.current);
     if (!origin) return;
-    if (parseMouse(input).some(event => event.kind === 'press' && event.button === 'left' && event.x >= origin.x && event.x < origin.x + columns && event.y >= origin.y && event.y < origin.y + metrics.height)) onOpenDeck();
+    if (parseMouse(input).some(event => event.kind === 'press' && event.button === 'left' && !event.shift && event.x >= origin.x && event.x < origin.x + columns && event.y >= origin.y && event.y < origin.y + metrics.height)) onOpenDeck();
   });
   const children = agents.filter((a) => a.parentId !== null);
   if (maxHeight < 1 || !children.some((a) => ['running', 'queued', 'waiting', 'paused'].includes(a.state))) return null;

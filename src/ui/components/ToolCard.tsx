@@ -1,3 +1,4 @@
+import { useLayoutEffect, type RefObject } from 'react';
 import { useViewport } from '../viewport.js';
 /**
  * 工具卡片：一行摘要（状态图标 · 工具名 · 关键参数 · 耗时），
@@ -105,13 +106,14 @@ function StatusIcon({ status }: { status: ToolView['status'] }) {
 }
 
 /** Ctrl+O：最近一个工具的完整输出（活动区内显示，高度受限以免触发整屏重绘） */
-export function ToolDetail({ tool, maxLines, active = false, width }: { tool: ToolView | undefined; maxLines: number; active?: boolean; width?: number }) {
+export function ToolDetail({ tool, maxLines, active = false, width, scrollAction }: { scrollAction?: RefObject<(() => void) | null>; tool: ToolView | undefined; maxLines: number; active?: boolean; width?: number }) {
   const theme = useTheme();
   const { ascii } = useTerminal();
   const { columns } = useViewport();
   const layout = panelLayout(maxLines, width ?? columns), { count, border } = layout;
   const lines = wrapDisplay(terminalText(tool?.output ?? tool?.preview ?? ''), layout.width);
   const scroll = useScroll(lines.length, count), { start } = scroll;
+  useLayoutEffect(() => { if (!scrollAction) return; scrollAction.current = () => scroll.move(scroll.position() + 1); return () => { scrollAction.current = null; }; });
   const accent = motionColor(theme.border, theme.accent, useEntrance(tool?.callId));
   useInput((input, key) => {
     scroll.onKey(input, key);

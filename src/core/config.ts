@@ -133,6 +133,7 @@ export const ConfigSchema = z.object({
       title: z.boolean().default(true),
       gutter: z.number().int().min(0).max(4).default(2),
       mouse: z.boolean().default(true),
+      hints: z.enum(['full', 'compact', 'off']).default('full'),
       /** 主题：ember（默认）/ aurora / daylight（浅色终端）/ mono；环境变量 ROAST_THEME 优先 */
       theme: z.string().optional(),
       motion: z.enum(['full', 'reduced']).optional(),
@@ -170,7 +171,7 @@ export type ProviderProfile = z.infer<typeof ProviderProfileSchema>;
 type ParsedConfig = z.infer<typeof ConfigSchema>;
 /** Programmatic callers may omit Hive preferences; parsed configuration resolves defaults. */
 type UiPreferences = NonNullable<ParsedConfig['ui']>;
-export type RoastConfig = Omit<ParsedConfig, 'swarm' | 'ui'> & { ui?: Omit<UiPreferences, 'home' | 'notify' | 'title' | 'gutter' | 'mouse'> & Partial<Pick<UiPreferences, 'home' | 'notify' | 'title' | 'gutter' | 'mouse'>>; swarm: Omit<ParsedConfig['swarm'], 'strategy' | 'n'> & { strategy?: string; n?: number } };
+export type RoastConfig = Omit<ParsedConfig, 'swarm' | 'ui'> & { ui?: Omit<UiPreferences, 'home' | 'notify' | 'title' | 'gutter' | 'mouse' | 'hints'> & Partial<Pick<UiPreferences, 'home' | 'notify' | 'title' | 'gutter' | 'mouse' | 'hints'>>; swarm: Omit<ParsedConfig['swarm'], 'strategy' | 'n'> & { strategy?: string; n?: number } };
 
 export interface ModelRef {
   provider: string;

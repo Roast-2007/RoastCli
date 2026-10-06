@@ -16,7 +16,7 @@ export function paneLines(lines: Line[], width: number, height: number, singleLi
 export function paneMaxOffset(lines: Line[], width: number, height: number, singleLine = false): number {
   return Math.max(0, paneLines(lines, width, height, singleLine).length - Math.max(0, height - (height >= 4 && width >= 8 ? 3 : 1)));
 }
-export function Pane({ title, lines, height, width, focused, offset = 0, fromTop = false, singleLine = false, children }: { title: string; lines: Line[]; height: number; width: number; focused?: boolean; offset?: number; fromTop?: boolean; singleLine?: boolean; children?: React.ReactNode }) {
+export function Pane({ title, lines, height, width, focused, offset = 0, fromTop = false, singleLine = false, titleContent, children }: { title: string; lines: Line[]; height: number; width: number; focused?: boolean; offset?: number; fromTop?: boolean; singleLine?: boolean; titleContent?: React.ReactNode; children?: React.ReactNode }) {
   const theme = useTheme(), { ascii } = useTerminal();
   const border = height >= 4 && width >= 8;
   const accent = motionColor(theme.border, theme.accent, useEntrance(focused ? 'focus' : 'blur'));
@@ -26,7 +26,7 @@ export function Pane({ title, lines, height, width, focused, offset = 0, fromTop
   const view = fromTop ? { shown: wrapped.slice(offset, offset + count), offset: 0 } : windowLines(wrapped, count, offset);
   const color = (tone: LineTone) => tone === 'user' ? theme.user : tone === 'accent' || tone === 'tool' ? theme.accent : tone === 'ok' ? theme.success : tone === 'error' ? theme.danger : tone === 'warn' ? theme.warn : undefined;
   return <Box width={width} height={height} flexShrink={0} overflow="hidden" flexDirection="column" borderStyle={border ? ascii ? 'classic' : 'round' : undefined} borderColor={focused ? accent : theme.border} paddingX={border ? 1 : 0}>
-    <Text color={focused ? theme.accent : theme.muted} bold wrap="truncate-end">{view.offset ? `↑ 已上翻 ${view.offset} 行 · ` : ''}{terminalText(title)}</Text>
+    <Text color={focused ? theme.accent : theme.muted} bold wrap="truncate-end">{focused ? ascii ? '> ' : '▸ ' : '  '}{titleContent ?? `${view.offset ? `↑ 已上翻 ${view.offset} 行 · ` : ''}${terminalText(title)}`}</Text>
     {children ?? view.shown.map((line, index) => <Text key={index} color={color(line.tone)} dimColor={line.tone === 'muted'} wrap="truncate-end">{line.text || ' '}</Text>)}
   </Box>;
 }

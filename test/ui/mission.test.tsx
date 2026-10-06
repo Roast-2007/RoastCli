@@ -53,12 +53,12 @@ describe('Mission Control', () => {
         stdin.write('b');
         await sleep(15);
       }
-      const topOffset = Number(/已上翻 (\d+) 行/.exec(lastFrame()!)?.[1]);
-      expect(topOffset).toBeGreaterThan(0);
+      const topLine = Number(/line-(\d+)/.exec(lastFrame()!)?.[1]);
+      expect(topLine).toBe(0);
       stdin.write('f');
       await sleep(50);
-      const nextOffset = Number(/已上翻 (\d+) 行/.exec(lastFrame()!)?.[1] ?? 0);
-      expect(nextOffset).toBeLessThan(topOffset);
+      const nextLine = Number(/line-(\d+)/.exec(lastFrame()!)?.[1]);
+      expect(nextLine).toBeGreaterThan(topLine);
     } finally {
       unmount();
       controller.dispose();
