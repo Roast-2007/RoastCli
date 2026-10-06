@@ -16,6 +16,8 @@ export type InteractionRequestBody =
       title: string;
       /** 详细内容（完整命令 / 文件路径 / diff 预览） */
       detail?: string;
+      preview?: string[];
+      fullDetail?: string;
       reason: string;
       suggestedRule?: string;
       /** 每次必须明确授权：不提供"始终允许" */

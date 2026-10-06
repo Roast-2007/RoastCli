@@ -32,6 +32,15 @@ function writeJson(file: string, value: unknown): void {
 const ds = { driver: 'openai-compat', apiKeyEnv: 'DEEPSEEK_API_KEY', models: { 'deepseek-chat': { contextWindow: 1000 } } };
 
 describe('分层配置', () => {
+  it('terminal notifications and title can only come from the user layer, even for trusted projects', () => {
+    writeJson(path.join(home, 'config.json'), { providers: { p: { driver: 'openai-compat' } }, default: 'p:m' });
+    writeJson(path.join(cwd, '.roast/config.json'), { ui: { notify: 'bell', title: false, home: 'chat' } });
+    trustProject(cwd);
+    expect(loadConfig(cwd)!.ui).toMatchObject({ home: 'chat' });
+    expect(loadConfig(cwd)!.ui!.notify).toBe('auto'); expect(loadConfig(cwd)!.ui!.title).toBe(true);
+    const base = mergeConfigLayer({}, { ui: { notify: 'off', title: false } }, 'user');
+    for (const layer of ['project', 'legacy', 'env'] as const) expect(mergeConfigLayer(base, { ui: { notify: 'bell', title: true } }, layer)).toMatchObject({ ui: { notify: 'off', title: false } });
+  });
   it('requires trust for repository search endpoints and invalidates trust when they change', () => {
     writeJson(path.join(home, 'config.json'), { providers: { p: { driver: 'openai-compat' } }, default: 'p:m' });
     const file = path.join(cwd, '.roast/config.json');

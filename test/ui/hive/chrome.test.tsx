@@ -41,4 +41,17 @@ describe('quiet Hive chrome', () => {
     } finally { screen.unmount(); vi.useRealTimers(); }
     await tick();
   });
+  it('lands the final ignition frame on the Deck header without delaying completion', async () => {
+    vi.useFakeTimers();
+    const done = vi.fn(), header = 'ROAST HIVE v0.5.0 · p:m · project · 空闲';
+    const session = { log: { header: { cwd: process.cwd() } }, config: { swarm: { maxAgents: 12 } }, providerName: 'p', model: 'm' } as Session;
+    const screen = render(<TerminalContext.Provider value={{ motion: true, ascii: true }}><ThemeContext.Provider value={THEMES.mono!}><Ignition session={session} height={23} columns={80} landingHeader={header} onDone={done} onExit={() => {}} /></ThemeContext.Provider></TerminalContext.Provider>);
+    try {
+      await vi.advanceTimersByTimeAsync(608);
+      expect(screen.lastFrame()?.split('\n')[0]).toBe(header);
+      expect(done).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(32); expect(done).toHaveBeenCalledOnce();
+    } finally { screen.unmount(); vi.useRealTimers(); }
+    await tick();
+  });
 });

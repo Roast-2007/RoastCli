@@ -9,6 +9,7 @@ import type { InteractionBroker } from '../../core/interaction.js';
 import type { PreExecuteHook, ToolContext, ToolDefinition } from '../tool.js';
 import type { PermissionEngine } from './engine.js';
 import type { PermissionRequest } from './rules.js';
+import { approvalPreview } from './preview.js';
 
 export interface PermissionHookOptions {
   engine: PermissionEngine;
@@ -56,6 +57,7 @@ export function permissionHook(opts: PermissionHookOptions): PreExecuteHook {
     const verdict = opts.engine.evaluate(req);
     if (verdict.behavior === 'allow') return { action: 'allow' };
     if (verdict.behavior === 'deny') return { action: 'deny', reason: `权限 deny：${verdict.reason}` };
+    const preview = opts.broker.interactive ? await approvalPreview(tool.name, args, ctx, opts.engine) : undefined;
 
     const response = await opts.broker.request(
       {
@@ -65,6 +67,7 @@ export function permissionHook(opts: PermissionHookOptions): PreExecuteHook {
         title: req.target ? `${tool.name}: ${req.target.split('\n')[0]}` : tool.name,
         ...(req.target ? { detail: req.target } : {}),
         reason: verdict.reason,
+        ...preview,
         ...(verdict.suggestedRule && !verdict.forced ? { suggestedRule: verdict.suggestedRule } : {}),
         ...(verdict.forced ? { forced: true } : {}),
       },

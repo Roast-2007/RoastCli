@@ -128,7 +128,9 @@ export const ConfigSchema = z.object({
   }).optional(),
   ui: z
     .object({
-      home: z.enum(['hive', 'chat']).optional(),
+      home: z.enum(['hive', 'chat']).default('hive'),
+      notify: z.enum(['auto', 'bell', 'off']).default('auto'),
+      title: z.boolean().default(true),
       /** 主题：ember（默认）/ aurora / daylight（浅色终端）/ mono；环境变量 ROAST_THEME 优先 */
       theme: z.string().optional(),
       motion: z.enum(['full', 'reduced']).optional(),
@@ -165,7 +167,8 @@ export type ModelMeta = z.infer<typeof ModelMetaSchema>;
 export type ProviderProfile = z.infer<typeof ProviderProfileSchema>;
 type ParsedConfig = z.infer<typeof ConfigSchema>;
 /** Programmatic callers may omit Hive preferences; parsed configuration resolves defaults. */
-export type RoastConfig = Omit<ParsedConfig, 'swarm'> & { swarm: Omit<ParsedConfig['swarm'], 'strategy' | 'n'> & { strategy?: string; n?: number } };
+type UiPreferences = NonNullable<ParsedConfig['ui']>;
+export type RoastConfig = Omit<ParsedConfig, 'swarm' | 'ui'> & { ui?: Omit<UiPreferences, 'home' | 'notify' | 'title'> & Partial<Pick<UiPreferences, 'home' | 'notify' | 'title'>>; swarm: Omit<ParsedConfig['swarm'], 'strategy' | 'n'> & { strategy?: string; n?: number } };
 
 export interface ModelRef {
   provider: string;
@@ -246,6 +249,9 @@ const REPO_LAYERS: readonly ConfigLayer[] = ['project', 'legacy'];
 
 /** Trusted full profiles own their connections; never inherit a repository URL or key reference. */
 export function mergeConfigLayer(base: unknown, over: unknown, layer: ConfigLayer): unknown {
+  if (layer !== 'user' && isPlainObject(over) && isPlainObject(over['ui'])) {
+    const { notify: _notify, title: _title, ...ui } = over['ui']; over = { ...over, ui };
+  }
   const merged = deepMerge(base, over);
   if (REPO_LAYERS.includes(layer) || !isPlainObject(over) || !isPlainObject(over['providers']) || !isPlainObject(merged) || !isPlainObject(merged['providers'])) return merged;
   const providers = { ...merged['providers'] };

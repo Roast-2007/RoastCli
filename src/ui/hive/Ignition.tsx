@@ -12,7 +12,7 @@ export const HONEYCOMB = [' __    __    __     ', '/  \\__/  \\__/  \\__ ', '\\_
 export const ROAST_LOGO = [' ____   ___    _    ____ _____', '|  _ \\ / _ \\  / \\  / ___|_   _|', '| |_) | | | |/ _ \\ \\___ \\ | |', '|  _ <| |_| / ___ \\ ___) || |', '|_| \\_\\\\___/_/   \\_\\____/ |_|'];
 export const IGNITION_MS = 640;
 export function ignitionSize(columns: number, rows: number): 'full' | 'line' | 'small' { return columns >= 60 && rows >= 12 ? 'full' : columns >= 34 && rows >= 6 ? 'line' : 'small'; }
-export function Ignition({ session, height, columns, onDone, onExit }: { session: Session; height: number; columns: number; onDone(text?: string): void; onExit(): void }) {
+export function Ignition({ session, height, columns, landingHeader, onDone, onExit }: { session: Session; height: number; columns: number; landingHeader?: string; onDone(text?: string): void; onExit(): void }) {
   const theme = useTheme(), progress = useEntrance('ignition', IGNITION_MS), finished = useRef(false);
   const callback = useRef(onDone); callback.current = onDone;
   const done = (text?: string) => { if (!finished.current || text) { finished.current = true; callback.current(text); } };
@@ -21,6 +21,8 @@ export function Ignition({ session, height, columns, onDone, onExit }: { session
   const size = ignitionSize(columns, height + 1), time = progress * IGNITION_MS;
   const cwd = session.log.header.cwd, branch = gitBranch(cwd);
   const facts = `${session.providerName}:${session.model} · ${path.basename(cwd)}${branch ? ` ⎇ ${branch}` : ''} · ${session.config.swarm.maxAgents} agents · worktree ${session.config.swarm.worktrees === false ? '关' : '开'}`;
+  // The last animation frame shares the Deck header's row and column.
+  if (landingHeader && time >= IGNITION_MS - 32) return <Box height={height} width={columns} flexDirection="column" overflow="hidden"><Text bold color={theme.accent} wrap="truncate-end">{truncateDisplay(terminalText(landingHeader), columns)}</Text></Box>;
   return <Box height={height} width={columns} flexDirection="column" alignItems="center" justifyContent="center" overflow="hidden">
     {size === 'full' ? HONEYCOMB.map((line, row) => <Text key={row} wrap="truncate-end">{[...line].map((ch, col) => {
       const distance = Math.hypot((col - 10) / 10, (row - 2.5) / 3) / 1.5;

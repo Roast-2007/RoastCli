@@ -158,6 +158,7 @@ export async function assembleSession(input: AssemblyInput): Promise<Session> {
   checkpoints.attach(commit);
   ctx.controller.attach(commit, () => loop.committer.state);
   loop.committer.onCommit((ev) => ctx.controller.observe(ev));
+  loop.committer.onCommit((ev) => swarm.observeMission(ev));
   core.services.set(CONTEXT_ACCESS_KEY, { state: () => loop.committer.state });
   return sessionApi({ input, core, loop, swarm, checkpoints, contextCtl: ctx.controller, listeners, lifetime });
 }

@@ -15,6 +15,7 @@ import { ProviderWizard } from './providers/ProviderWizard.js';
 import { TrustPanel } from './components/TrustPanel.js';
 import type { EditorState } from './input/editor.js';
 import { checkForUpdate, updateNotice, type LatestRelease } from '../cli/update.js';
+import { terminalEffects } from './hive/terminal-effects.js';
 
 /** Clear while Ink still knows the activity height/caret, before losing its renderer state. */
 export async function releaseScreen(instance: Instance, inline: boolean, onFlushed?: () => void): Promise<void> {
@@ -50,6 +51,8 @@ export async function runTrustPrompt(cwd: string): Promise<boolean> {
 
 export async function runInteractive(session: Session, opts: { initialPrompt?: import('../agent/runtime.js').RuntimeInput; home?: 'hive' | 'chat' } = {}): Promise<void> {
   let store = createUiStore();
+  const effects = terminalEffects(process.stdout, session.log.header.cwd, session.config.ui);
+  effects.bind(store);
   let instance: Instance | null = null;
   const activeInstance = () => instance;
   let instanceExit: Promise<unknown> = Promise.resolve();
@@ -160,6 +163,7 @@ export async function runInteractive(session: Session, opts: { initialPrompt?: i
       process.stderr.write(savedWorktreesText(retained.worktrees));
       session = next;
       store = createUiStore();
+      effects.bind(store);
       controller = makeController();
       if (availableUpdate) controller.notify(updateNotice(availableUpdate));
       delete inputDraft.seed; delete inputDraft.state;
@@ -198,6 +202,7 @@ export async function runInteractive(session: Session, opts: { initialPrompt?: i
     controller.interrupt();
     await controller.whenIdle();
     controller.dispose();
+    effects.dispose();
     process.stderr.write(savedWorktreesText((await session.shutdown()).worktrees));
   }
 }

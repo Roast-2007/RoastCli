@@ -2,11 +2,18 @@ import type { AgentInfo } from '../../swarm/types.js';
 import type { AgentView, DisplayItem } from '../store/reducer.js';
 export type MissionItem = Extract<DisplayItem, { kind: 'mission' }>;
 export function latestMission(view: AgentView): MissionItem | undefined { return view.items.slice().reverse().find((item): item is MissionItem => item.kind === 'mission'); }
+export function missionEnd(view: AgentView, mission: MissionItem) { return view.items.find((item) => item.id > mission.id && item.kind === 'turn-summary'); }
+export function missionResult(view: AgentView, mission: MissionItem): string {
+  const end = missionEnd(view, mission);
+  return end?.kind === 'turn-summary' ? ({ completed: '完成', aborted: '中断', error: '出错', 'max-steps': '步数上限' } as Record<string, string>)[end.reason] ?? '出错' : '未完成';
+}
 export function missionChildren(view: AgentView, agents: AgentInfo[]): AgentInfo[] {
   const mission = latestMission(view);
   if (!mission) return agents.filter((agent) => agent.parentId);
   const ids = new Set<string>();
-  for (const item of view.items.filter((item) => item.id > mission.id)) {
+  const end = missionEnd(view, mission);
+  if (!end && mission.startedAt !== undefined) for (const agent of agents) if (agent.parentId && agent.startedAt >= mission.startedAt) ids.add(agent.id);
+  for (const item of view.items.filter((item) => item.id > mission.id && (!end || item.id < end.id))) {
     const tools = item.kind === 'tool' ? [item.tool] : item.kind === 'tool-group' ? item.tools : [];
     for (const tool of tools) {
       const id = tool.metadata?.['agentId'];
@@ -23,9 +30,8 @@ export function missionChildren(view: AgentView, agents: AgentInfo[]): AgentInfo
 export function missionPhase(view: AgentView, agents: AgentInfo[]): string {
   const mission = latestMission(view);
   if (!mission) return '空闲';
-  const end = view.items.find((item) => item.id > mission.id && item.kind === 'turn-summary');
-  if (end?.kind === 'turn-summary') return ({ completed: '完成', aborted: '中断', error: '出错', 'max-steps': '步数上限' } as Record<string, string>)[end.reason] ?? '出错';
+  if (missionEnd(view, mission)) return missionResult(view, mission);
   const children = missionChildren(view, agents);
-  if (children.some((agent) => ['queued', 'running', 'waiting', 'paused'].includes(agent.state) && !agent.report)) return '执行中';
+  if (children.some((agent) => ['queued', 'running', 'waiting', 'paused'].includes(agent.state))) return '执行中';
   return children.length ? '整合中' : '计划中';
 }

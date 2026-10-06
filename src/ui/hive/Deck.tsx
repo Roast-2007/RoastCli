@@ -30,6 +30,7 @@ import { Pane, paneMaxOffset } from './Pane.js';
 import { latestMission, missionPhase } from './phase.js';
 import { Ignition } from './Ignition.js';
 import { QueueLine } from './QueueLine.js';
+import { useDiffReviews } from './diffs.js';
 
 export interface DeckProps { session: Session; store: UiStore; controller: UiController; onExit(): void; inputDraft?: { seed?: number; state?: EditorState }; initialPrompt?: RuntimeInput; startup?: boolean }
 export function Deck(props: DeckProps) {
@@ -58,6 +59,7 @@ function Workspace({ session, store, controller, onExit, inputDraft, initialProm
   const card = ui.meta.interactions[0], layout = deckLayout(columns, rows, Boolean(card));
   const branch = useMemo(() => gitBranch(cwd), [cwd, main.running]);
   const mission = latestMission(main), phase = missionPhase(main, agents);
+  useDiffReviews(session, store, ui, current?.id ?? 'main', !splash && tab === 2 && !card && !ui.meta.overlay);
   useMouseReporting();
   useEffect(() => { controller.setScreen('hive'); }, [controller]);
   useEffect(() => { store.setFocus(current?.id ?? 'main'); return () => store.setFocus('main'); }, [store, current?.id]);
@@ -69,6 +71,7 @@ function Workspace({ session, store, controller, onExit, inputDraft, initialProm
   const tool = selectedView?.tools.at(-1) ?? (lastTool?.kind === 'tool' ? lastTool.tool : lastTool?.kind === 'tool-group' ? lastTool.tools.at(-1) : undefined);
   const raw = missionLines(session, ui, tab, current?.id ?? 'main', ascii);
   const maxOffset = paneMaxOffset(raw, layout.mission, layout.body);
+  useEffect(() => { if (tab === 2 && ui.meta.diffs?.[selected]?.result) { nav.current.offset = maxOffset; setOffset(maxOffset); } }, [tab, selected, ui.meta.diffs?.[selected]?.result]);
   const signalMax = paneMaxOffset(signalLines(session, ui), layout.signals, layout.body);
   const colonyMax = paneMaxOffset(colonyLines(agents, ui.agents, selected, ascii), layout.colony || columns, layout.body);
   const move = (delta: number) => { if (focusRef.current === 'signals') { setSignalOffset((n) => Math.max(0, Math.min(signalMax, n + delta))); return; } nav.current.offset = Math.max(0, Math.min(maxOffset, nav.current.offset + delta)); setOffset(nav.current.offset); };
@@ -98,17 +101,20 @@ function Workspace({ session, store, controller, onExit, inputDraft, initialProm
       return;
     }
     if (key.escape || input === 'i') return changeFocus('input');
+    if (input !== 'x') cancel.current = null;
     if (/^[1-7]$/.test(input)) return pickTab(layout.signals === 0 && !layout.narrow ? [0, 1, 2, 6, 3, 4, 5][Number(input) - 1]! : Number(input) === 7 ? 6 : Number(input) - 1);
-    if (input === '[' || input === ']') { const next = (nav.current.narrow + (input === '[' ? 4 : 1)) % 5; nav.current.narrow = next; setNarrow(next); if (next > 0) { setTab([0, 0, 1, 2, 6][next]!); setOffset(0); } return; }
-    if (input === 'm' && current) { const text = `@${current.id === 'main' ? 'queen' : current.id} `; draft.state = editorReducer(draft.state ?? createEditor(history), { type: 'set', text }); store.setMeta((meta) => ({ inputSeed: { key: meta.inputSeed.key + 1, text } })); draft.seed = store.getState().meta.inputSeed.key; return changeFocus('input'); }
+    if (layout.narrow && (input === '[' || input === ']')) { const next = (nav.current.narrow + (input === '[' ? 4 : 1)) % 5; nav.current.narrow = next; setNarrow(next); if (next > 0) { setTab([0, 0, 1, 2, 6][next]!); setOffset(0); } return; }
+    if (input === 'm' && current) { const text = `@${current.id === 'main' ? 'queen' : current.id} `; draft.state = editorReducer(draft.state ?? createEditor(history), { type: 'set', text }); store.setMeta((meta) => ({ inputSeed: { key: meta.inputSeed.key + 1, text, screen: 'hive' } })); draft.seed = store.getState().meta.inputSeed.key; return changeFocus('input'); }
     if (input === 'p' && current) return store.addNotice('main', controller.togglePause(current.id));
     if (input === 'x' && current) { if (cancel.current === current.id) { cancel.current = null; return controller.cancelAgent(current.id); } cancel.current = current.id; return store.setMeta({ toast: { text: `再按 x 取消 ${current.id} 及其子 agent`, tone: 'warn' } }); }
     if (input === 'd') return pickTab(2);
     if (focusRef.current === 'colony') {
+      if (key.pageUp) return select(-Math.max(1, layout.body - 3));
+      if (key.pageDown) return select(Math.max(1, layout.body - 3));
       if (key.upArrow || input === 'k') return select(-1);
       if (key.downArrow || input === 'j') return select(1);
-      if (key.home || input === 'g') return setSelected(agents[0]?.id ?? 'main');
-      if (key.end || input === 'G') return setSelected(agents.at(-1)?.id ?? 'main');
+      if (key.home || input === 'g') return select(-agents.length);
+      if (key.end || input === 'G') return select(agents.length);
       if (key.return) { pickTab(1); return changeFocus('mission'); }
     }
     if (key.upArrow || input === 'k') move(1);
@@ -120,9 +126,10 @@ function Workspace({ session, store, controller, onExit, inputDraft, initialProm
   }, { isActive: !splash && !card && !ui.meta.overlay });
   const cost = session.cost(), runningChildren = agents.filter((agent) => agent.parentId && ['queued', 'running', 'waiting', 'paused'].includes(agent.state)).length;
   const center = <MissionPane session={session} ui={ui} tab={tab} selected={current?.id ?? 'main'} height={layout.body} width={layout.mission} focused={focus === 'mission'} offset={offset} narrow={layout.narrow} signals={!layout.signals && !layout.narrow} />;
-  if (splash) return <Ignition session={session} height={layout.height} columns={columns} onExit={exit} onDone={(text) => { if (text) { draft.seed = ui.meta.inputSeed.key; draft.state = editorReducer(draft.state ?? createEditor(history), { type: 'insert', text }); } setSplash(false); }} />;
+  const header = `ROAST HIVE v${VERSION} · ${session.providerName}:${session.model} · ${path.basename(cwd)} ${branch ? `⎇ ${branch}` : ''} · ${phase}${mission ? ` #${mission.missionId.slice(1)} · ${mission.strategy} · ${mission.goal}` : ''}`;
+  if (splash) return <Ignition session={session} height={layout.height} columns={columns} landingHeader={layout.header ? header : undefined} onExit={exit} onDone={(text) => { if (text) { draft.seed = ui.meta.inputSeed.key; draft.state = editorReducer(draft.state ?? createEditor(history), { type: 'insert', text }); } setSplash(false); }} />;
   return <Box height={layout.height} width={columns} flexDirection="column" overflow="hidden">
-    {layout.header ? <Text bold color={theme.accent} wrap="truncate-end">ROAST HIVE v{VERSION} · {session.providerName}:{session.model} · {path.basename(cwd)} {branch ? `⎇ ${branch}` : ''} · {phase}{mission ? ` #${mission.missionId.slice(1)} · ${mission.strategy} · ${mission.goal}` : ''}</Text> : null}
+    {layout.header ? <Text bold color={theme.accent} wrap="truncate-end">{header}</Text> : null}
     {ui.meta.overlay && !card ? <Overlay kind={ui.meta.overlay} session={session} store={store} controller={controller} height={layout.body + layout.input} /> : <>
       {layout.body ? detail && !card ? <Box height={layout.body} overflow="hidden"><ToolDetail tool={tool} width={columns} maxLines={layout.body} active /></Box> : layout.compact ? <Text wrap="truncate-end">HIVE {runningChildren}/{session.config.swarm.maxAgents} · {phase}</Text> : <Box height={layout.body} flexShrink={0}>
         {layout.colony > 0 ? <ColonyPane agents={agents} views={ui.agents} selected={current?.id ?? 'main'} height={layout.body} width={layout.colony} focused={focus === 'colony'} offset={colonyOffset} /> : null}
@@ -131,8 +138,8 @@ function Workspace({ session, store, controller, onExit, inputDraft, initialProm
       </Box> : null}
       <Box height={layout.input} flexShrink={0} flexDirection="column" overflow="hidden">
         {card ? <InteractionCard key={card.id} request={card} maxHeight={layout.input} onInterrupt={() => controller.ctrlC('')} onRespond={(response) => controller.respond(card, response)} /> : <>
-          {ui.meta.queued.length && layout.input >= 2 ? <QueueLine texts={ui.meta.queued} /> : layout.input >= 4 ? <Text dimColor wrap="truncate-end">策略 {ui.meta.strategy ?? 'auto'} · n {ui.meta.n ?? 3}</Text> : null}
-          <InputBox key={ui.meta.inputSeed.key} active={focus === 'input' && !detail} acceptInput={() => focusRef.current === 'input' && !detail && !store.getState().meta.overlay && !store.getState().meta.interactions.length} placeholder={main.running ? '插话，或 @成员 发指示' : '输入目标'} initialHistory={history} initialText={ui.meta.inputSeed.screen && ui.meta.inputSeed.screen !== 'hive' ? '' : ui.meta.inputSeed.text} initialState={draft.seed === ui.meta.inputSeed.key || (ui.meta.inputSeed.screen && ui.meta.inputSeed.screen !== 'hive') ? draft.state : undefined} onStateChange={(state) => { draft.seed = ui.meta.inputSeed.key; draft.state = state; }} deps={deps} maxHeight={layout.input - (layout.input >= 4 || (layout.input >= 2 && ui.meta.queued.length) ? 1 : 0)} onHelp={() => store.setMeta({ overlay: 'help' })} onSubmit={(text, raw) => controller.submit(text, raw)} />
+          {layout.input >= 2 ? <Box height={1}><Box flexGrow={1} overflow="hidden"><QueueLine texts={ui.meta.queued} /></Box><Text dimColor wrap="truncate-end">策略 {ui.meta.strategy ?? 'auto'} · n {ui.meta.n ?? 3}</Text></Box> : null}
+          <InputBox key={ui.meta.inputSeed.key} active={focus === 'input' && !detail} acceptInput={() => focusRef.current === 'input' && !detail && !store.getState().meta.overlay && !store.getState().meta.interactions.length} placeholder={main.running ? '插话，或 @成员 发指示' : '输入目标'} initialHistory={history} initialText={ui.meta.inputSeed.screen && ui.meta.inputSeed.screen !== 'hive' ? '' : ui.meta.inputSeed.text} initialState={draft.seed === ui.meta.inputSeed.key || (ui.meta.inputSeed.screen && ui.meta.inputSeed.screen !== 'hive') ? draft.state : undefined} onStateChange={(state) => { draft.seed = ui.meta.inputSeed.key; draft.state = state; }} deps={deps} maxHeight={layout.input - (layout.input >= 2 ? 1 : 0)} onHelp={() => store.setMeta({ overlay: 'help' })} onSubmit={(text, raw) => controller.submit(text, raw)} />
         </>}
       </Box>
     </>}

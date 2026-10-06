@@ -18,6 +18,14 @@ const permission = (extra: Partial<Extract<InteractionRequest, { kind: 'permissi
 });
 
 describe('InteractionCard：权限', () => {
+  it('folds diff previews at twelve lines and Ctrl+O opens full details without approving', async () => {
+    const onRespond = vi.fn(), screen = render(<InteractionCard request={permission({ preview: Array.from({ length: 25 }, (_, i) => `+preview-${i}`), fullDetail: 'full-only-marker\ncomplete diff', forced: true, reason: 'worktree 需要明确授权' })} maxHeight={30} onRespond={onRespond} />);
+    try {
+      await tick(); expect(screen.lastFrame()).toContain('+preview-11'); expect(screen.lastFrame()).not.toContain('+preview-12'); expect(screen.lastFrame()).toContain('另 13 行');
+      screen.stdin.write('\x0f'); await tick(); expect(screen.lastFrame()).toContain('full-only-marker'); expect(onRespond).not.toHaveBeenCalled();
+      screen.stdin.write('1'); await tick(); expect(onRespond).toHaveBeenCalledWith({ kind: 'permission', decision: 'allow' });
+    } finally { screen.unmount(); }
+  });
   it('显示标题、原因与建议规则；按 2 本会话始终允许', async () => {
     const onRespond = vi.fn();
     const { lastFrame, stdin } = render(<InteractionCard request={permission()} onRespond={onRespond} />);

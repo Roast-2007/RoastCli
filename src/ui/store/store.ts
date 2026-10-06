@@ -8,6 +8,7 @@ import type { SessionEvent } from '../../session/events.js';
 import type { InteractionRequest } from '../../core/interaction.js';
 import type { PermissionMode } from '../../tools/permissions/engine.js';
 import type { AgentInfo, Envelope } from '../../swarm/types.js';
+import type { DiffCacheEntry } from '../hive/diffs.js';
 
 /** 与具体 agent 无关的界面状态（控制器写入，inline 与 Mission Control 共用） */
 export type OverlayKind = 'help' | 'rewind' | 'context' | 'sessions' | 'theme' | 'mode' | 'model' | 'hive-models' | 'swarm' | 'strategy' | 'skills' | 'board' | 'cost' | 'todo' | 'mcp' | 'logs' | 'memory' | 'compact' | 'init' | 'agents';
@@ -21,6 +22,7 @@ export interface UiMeta {
   /** 输入框重置种子（中断后放回的排队插话） */
   inputSeed: { key: number; text: string; screen?: 'inline' | 'hive' | 'providers' };
   queued: string[];
+  diffs?: Record<string, DiffCacheEntry>;
   running: boolean;
   screen: 'inline' | 'hive' | 'providers';
   strategy?: string;

@@ -22,6 +22,7 @@ import { formatMerge, reportWorktreeNote, wantsWorktree, worktreeNote, type Isol
 import type { Worktree } from './worktree.js';
 import { ProgressWatchdog } from './watchdog.js';
 import type { SessionEvent } from '../session/events.js';
+import type { DiffTarget } from './diff.js';
 
 export interface CreateRuntimeInput {
   id: string;
@@ -102,6 +103,22 @@ export class Supervisor {
   private readonly now: () => number;
   private seq = 0;
   private msgSeq = 0;
+  private readOnlyMission = false;
+
+  observeMission(event: SessionEvent): void {
+    if (event.agentId && event.agentId !== 'main') return;
+    if (event.type === 'turn/start') this.readOnlyMission = false;
+    if (event.type === 'hive/mission') this.readOnlyMission = event.readOnly === true;
+    if (event.type === 'turn/end') this.readOnlyMission = false;
+  }
+  /** Copy only the immutable review coordinates; callers cannot mutate a worktree record. */
+  diffTarget(id: string): DiffTarget | undefined {
+    const rec = this.recs.get(id);
+    return rec ? { cwd: rec.worktree?.cwd ?? rec.cwd, ...(rec.worktree ? { base: rec.worktree.base } : {}) } : undefined;
+  }
+  childDiffTarget(parentId: string, id: string): DiffTarget | undefined {
+    return this.recs.get(id)?.info.parentId === parentId ? this.diffTarget(id) : undefined;
+  }
   /** 各 agent 已发出、尚未得到回答的提问（id 集合）：提问方无事可做时等待回答，而不是结束 */
   private readonly openQuestions = new Map<string, Set<string>>();
   private readonly runs = new Set<Promise<void>>();
@@ -206,6 +223,7 @@ export class Supervisor {
   spawn(parentId: string, opts: { role: AgentRole; task: string; taskId?: string; refs?: string[]; isolation?: IsolationMode; model?: string; reasoningEffort?: ReasoningEffort | null }): SpawnResult {
     const parent = this.recs.get(parentId);
     if (!parent) return { ok: false, reason: `未知的上级 ${parentId}` };
+    if (this.readOnlyMission && (opts.role === 'worker' || opts.role === 'lead')) return { ok: false, reason: '本任务为只读调研' };
     if (opts.role === 'queen') return { ok: false, reason: '不能派生 queen' };
     const maxAgents = this.deps.maxAgents ?? 12;
     const maxDepth = this.deps.maxDepth ?? 3;

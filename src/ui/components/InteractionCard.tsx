@@ -19,6 +19,7 @@ export function InteractionCard({ request, onRespond, onInterrupt, maxHeight = 1
   const { columns } = useWindowSize();
   const [selected, setSelected] = useState(0);
   const [draft, setDraft] = useState('');
+  const [full, setFull] = useState(false);
   const selectionRef = useRef(0), draftRef = useRef(''), responded = useRef(false);
   const respond = (response: InteractionResponse) => { if (!responded.current) { responded.current = true; onRespond(response); } };
   const border = maxHeight >= 8 && columns >= 8;
@@ -36,10 +37,13 @@ export function InteractionCard({ request, onRespond, onInterrupt, maxHeight = 1
   const inputHeight = question ? inner >= 9 ? 3 : 1 : 0;
   const optionsHeight = Math.min(options.length, Math.max(0, inner - header - footer - inputHeight - (inner >= (question ? 2 : 4) ? 1 : 0)));
   const detailHeight = Math.max(0, inner - header - footer - optionsHeight - inputHeight);
-  const detail = wrapDisplay(terminalText(question ? request.question : `${request.title}\n${request.detail ?? ''}\n原因：${request.reason}${remember ? `\n授权规则：${request.suggestedRule}` : ''}`), Math.max(1, columns - (border ? 4 : 0)));
+  const preview = !question ? request.preview ?? [] : [];
+  const content = question ? request.question : full ? `${request.fullDetail ?? request.detail ?? request.title}\n原因：${request.reason}` : `${request.title}\n${request.detail ?? ''}\n原因：${request.reason}${remember ? `\n授权规则：${request.suggestedRule}` : ''}${preview.length ? `\n${preview.slice(0, 12).join('\n')}${preview.length > 12 ? `\n… 另 ${preview.length - 12} 行，Ctrl+O 查看` : ''}` : ''}`;
+  const detail = wrapDisplay(terminalText(content), Math.max(1, columns - (border ? 4 : 0)));
   const scroll = useScroll(detail.length, detailHeight), { start } = scroll;
   useInput((input, key) => {
     if (responded.current) return;
+    if (key.ctrl && input === 'o') { setFull((value) => !value); scroll.move(0); return; }
     if (key.ctrl && input === 'c' && onInterrupt) return onInterrupt();
     if (key.escape || (key.ctrl && input === 'c')) return respond(question ? { kind: 'question', answer: '（用户未作答）' } : { kind: 'permission', decision: 'deny' });
     if (key.pageUp || key.pageDown) return scroll.onKey(input, key);

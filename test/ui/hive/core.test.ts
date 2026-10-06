@@ -4,7 +4,7 @@ import { emptyAgentView, pushItems } from '../../../src/ui/store/reducer.js';
 import { deckLayout } from '../../../src/ui/hive/layout.js';
 import { agentInstruction, nextFocus } from '../../../src/ui/hive/focus.js';
 import { parsePlan, planRows } from '../../../src/ui/hive/plan.js';
-import { missionPhase, missionChildren } from '../../../src/ui/hive/phase.js';
+import { missionPhase, missionChildren, missionResult } from '../../../src/ui/hive/phase.js';
 import { paneMaxOffset } from '../../../src/ui/hive/Pane.js';
 import { emptyUsage } from '../../../src/core/types.js';
 import { missionUsage } from '../../../src/ui/hive/usage.js';
@@ -47,6 +47,17 @@ describe('Hive projection boundaries', () => {
     expect(agentInstruction('@queen 插话', [])).toEqual({ agent: 'main', body: '插话' });
     expect(agentInstruction('@missing text', [])).toBeNull();
     expect(agentInstruction('@w1', ['w1'])).toBeNull();
+  });
+  it('includes a pending spawn, waits for report completion and closes membership at the mission turn', () => {
+    let view = { ...pushItems(emptyAgentView(), { kind: 'mission', missionId: 'm1', goal: '目标', strategy: 'auto', n: 3, turn: 1, startedAt: 10 }), running: true };
+    const writer = { ...agent(), startedAt: 11, report: { agentId: 'w1', status: 'done' as const, summary: '已报告', refs: [] } };
+    expect(missionChildren(view, [agent('old'), writer])).toEqual([writer]);
+    expect(missionPhase(view, [writer])).toBe('执行中');
+    view = pushItems(view, { kind: 'tool', tool: { callId: 'spawn', name: 'spawn_agent', args: {}, status: 'done', preview: '', durationMs: 0, metadata: { agentId: 'w1' } } }, { kind: 'turn-summary', reason: 'aborted', durationMs: 1, usage: emptyUsage() });
+    view = pushItems(view, { kind: 'tool', tool: { callId: 'chat', name: 'spawn_agent', args: {}, status: 'done', preview: '', durationMs: 0, metadata: { agentId: 'chat-child' } } });
+    expect(missionChildren(view, [writer, agent('chat-child')])).toEqual([writer]);
+    const item = view.items[0];
+    expect(item?.kind === 'mission' && missionResult(view, item)).toBe('中断');
   });
   it('uses display width for scroll limits and never reports a partial price', () => {
     expect(paneMaxOffset([{ text: '中文'.repeat(30), tone: 'text' }], 10, 4)).toBe(19);

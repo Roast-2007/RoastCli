@@ -26,7 +26,7 @@ export interface ToolView {
 export type Tone = 'info' | 'warn' | 'error' | 'success';
 
 export type DisplayItem =
-  | { id: number; kind: 'mission'; missionId: string; goal: string; strategy: string; n: number; turn: number }
+  | { id: number; kind: 'mission'; missionId: string; goal: string; strategy: string; n: number; turn: number; startedAt?: number }
   | { id: number; kind: 'user'; text: string }
   | { id: number; kind: 'markdown'; text: string }
   | { id: number; kind: 'reasoning'; text: string }
@@ -115,7 +115,7 @@ function appendText(v: AgentView, text: string): AgentView {
 
 export function applyEvent(v: AgentView, ev: UiEvent, now: number): AgentView {
   switch (ev.type) {
-    case 'hive/mission': return pushItems(flushStream(v), { kind: 'mission', missionId: ev.missionId, goal: ev.goal, strategy: ev.strategy, n: ev.n, turn: ev.turn });
+    case 'hive/mission': return pushItems(flushStream(v), { kind: 'mission', missionId: ev.missionId, goal: ev.goal, strategy: ev.strategy, n: ev.n, turn: ev.turn, startedAt: Date.parse(ev.at) || now });
     case 'turn-start':
       return { ...v, running: true, turnStartedAt: now, turnUsage: emptyUsage(), step: 0, tools: [] };
     case 'text-delta':
