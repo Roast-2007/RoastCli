@@ -22,8 +22,11 @@ export function reasoningEfforts(driver: 'openai-compat' | 'anthropic', baseURL?
   if (baseURL) {
     try {
       const url = new URL(baseURL.trim());
-      if (['api.kimi.com', 'api.kimi.ai'].includes(url.hostname) && url.pathname.startsWith('/coding')) return driver === 'anthropic' ? ['low', 'high', 'max'] : ['none', 'low', 'high', 'max'];
-    } catch { /* The connection form separately validates the URL. */ }
+      if (['api.kimi.com', 'api.kimi.ai'].includes(url.hostname) && url.pathname.startsWith('/coding'))
+        return driver === 'anthropic' ? ['low', 'high', 'max'] : ['none', 'low', 'high', 'max'];
+    } catch {
+      /* The connection form separately validates the URL. */
+    }
   }
   return driver === 'anthropic' ? ['low', 'medium', 'high', 'xhigh', 'max'] : [...ReasoningEffortSchema.options];
 }
@@ -114,18 +117,25 @@ export const ConfigSchema = z.object({
       maxAgents: z.number().int().min(1).max(64).default(12),
       maxDepth: z.number().int().min(1).max(5).default(3),
       /** 单个子 agent 的运行时长上限（分钟） */
-      maxMinutes: z.number().int().min(1).max(24 * 60).default(60),
+      maxMinutes: z
+        .number()
+        .int()
+        .min(1)
+        .max(24 * 60)
+        .default(60),
       /** 写入型子 agent 在 git 仓库中使用独立 worktree（false 则全部共享工作区，靠租约协调） */
       worktrees: z.boolean().optional(),
     })
     .default({}),
   /** 界面偏好 */
-  webSearch: z.object({
-    driver: z.enum(['duckduckgo', 'brave', 'tavily', 'searxng']).default('duckduckgo'),
-    baseURL: z.string().url().optional(),
-    apiKeyRef: z.string().min(1).optional(),
-    timeoutMs: z.number().int().min(100).max(120_000).optional(),
-  }).optional(),
+  webSearch: z
+    .object({
+      driver: z.enum(['duckduckgo', 'brave', 'tavily', 'searxng']).default('duckduckgo'),
+      baseURL: z.string().url().optional(),
+      apiKeyRef: z.string().min(1).optional(),
+      timeoutMs: z.number().int().min(100).max(120_000).optional(),
+    })
+    .optional(),
   ui: z
     .object({
       home: z.enum(['hive', 'chat']).default('hive'),
@@ -134,34 +144,44 @@ export const ConfigSchema = z.object({
       gutter: z.number().int().min(0).max(4).default(2),
       mouse: z.boolean().default(true),
       hints: z.enum(['full', 'compact', 'off']).default('full'),
-      /** 主题：ember（默认）/ aurora / daylight（浅色终端）/ mono；环境变量 ROAST_THEME 优先 */
+      /** 主题：aurora（默认）/ ember / daylight（浅色终端）/ mono；环境变量 ROAST_THEME 优先 */
       theme: z.string().optional(),
       motion: z.enum(['full', 'reduced']).optional(),
       ascii: z.boolean().optional(),
       shellTimeoutMs: z.number().int().min(1000).max(86_400_000).optional(),
-      markdown: z.object({
-        padding: z.number().int().min(0).max(8).optional(),
-        spacing: z.number().int().min(0).max(2).optional(),
-      }).optional(),
+      markdown: z
+        .object({
+          padding: z.number().int().min(0).max(8).optional(),
+          spacing: z.number().int().min(0).max(2).optional(),
+        })
+        .optional(),
     })
     .optional(),
-  memory: z.object({
-    driver: z.enum(['local', 'mem0']).optional(),
-    baseURL: z.string().url().optional(),
-    apiKeyEnv: z.string().min(1).optional(),
-    apiKeyRef: z.string().min(1).optional(),
-    mode: z.enum(['platform', 'self-hosted']).optional(),
-    apiVersion: z.enum(['v2', 'v3']).optional(),
-    timeoutMs: z.number().int().min(100).max(120_000).optional(),
-  }).optional(),
-  rag: z.object({ embeddings: z.object({
-    provider: z.string().min(1),
-    model: z.string().min(1),
-    dimensions: z.number().int().min(1).max(65_536).optional(),
-    batchSize: z.number().int().min(1).max(128).optional(),
-    maxChunks: z.number().int().min(1).max(20_000).optional(),
-    timeoutMs: z.number().int().min(100).max(120_000).optional(),
-  }).optional() }).optional(),
+  memory: z
+    .object({
+      driver: z.enum(['local', 'mem0']).optional(),
+      baseURL: z.string().url().optional(),
+      apiKeyEnv: z.string().min(1).optional(),
+      apiKeyRef: z.string().min(1).optional(),
+      mode: z.enum(['platform', 'self-hosted']).optional(),
+      apiVersion: z.enum(['v2', 'v3']).optional(),
+      timeoutMs: z.number().int().min(100).max(120_000).optional(),
+    })
+    .optional(),
+  rag: z
+    .object({
+      embeddings: z
+        .object({
+          provider: z.string().min(1),
+          model: z.string().min(1),
+          dimensions: z.number().int().min(1).max(65_536).optional(),
+          batchSize: z.number().int().min(1).max(128).optional(),
+          maxChunks: z.number().int().min(1).max(20_000).optional(),
+          timeoutMs: z.number().int().min(100).max(120_000).optional(),
+        })
+        .optional(),
+    })
+    .optional(),
   /** 每个 step 落完整请求体（调试用；也可用环境变量 ROAST_DEBUG_LOG=1） */
   debugLog: z.boolean().default(false),
 });
@@ -171,7 +191,11 @@ export type ProviderProfile = z.infer<typeof ProviderProfileSchema>;
 type ParsedConfig = z.infer<typeof ConfigSchema>;
 /** Programmatic callers may omit Hive preferences; parsed configuration resolves defaults. */
 type UiPreferences = NonNullable<ParsedConfig['ui']>;
-export type RoastConfig = Omit<ParsedConfig, 'swarm' | 'ui'> & { ui?: Omit<UiPreferences, 'home' | 'notify' | 'title' | 'gutter' | 'mouse' | 'hints'> & Partial<Pick<UiPreferences, 'home' | 'notify' | 'title' | 'gutter' | 'mouse' | 'hints'>>; swarm: Omit<ParsedConfig['swarm'], 'strategy' | 'n'> & { strategy?: string; n?: number } };
+export type RoastConfig = Omit<ParsedConfig, 'swarm' | 'ui'> & {
+  ui?: Omit<UiPreferences, 'home' | 'notify' | 'title' | 'gutter' | 'mouse' | 'hints'> &
+    Partial<Pick<UiPreferences, 'home' | 'notify' | 'title' | 'gutter' | 'mouse' | 'hints'>>;
+  swarm: Omit<ParsedConfig['swarm'], 'strategy' | 'n'> & { strategy?: string; n?: number };
+};
 
 export interface ModelRef {
   provider: string;
@@ -220,10 +244,11 @@ export function configSources(cwd: string = process.cwd()): ConfigSource[] {
     const abs = resolve(envPath);
     layers.push({ layer: canonicalPath(abs) === canonicalPath(user) ? 'user' : isPathInside(cwd, abs) ? 'project' : 'env', path: abs });
   }
-  const unique = new Map<string, typeof layers[number]>();
+  const unique = new Map<string, (typeof layers)[number]>();
   for (const layer of layers) {
     const key = canonicalPath(layer.path);
-    unique.delete(key); unique.set(key, layer);
+    unique.delete(key);
+    unique.set(key, layer);
   }
   return [...unique.values()].map((l) => ({ ...l, exists: existsSync(l.path) }));
 }
@@ -253,10 +278,18 @@ const REPO_LAYERS: readonly ConfigLayer[] = ['project', 'legacy'];
 /** Trusted full profiles own their connections; never inherit a repository URL or key reference. */
 export function mergeConfigLayer(base: unknown, over: unknown, layer: ConfigLayer): unknown {
   if (layer !== 'user' && isPlainObject(over) && isPlainObject(over['ui'])) {
-    const { notify: _notify, title: _title, ...ui } = over['ui']; over = { ...over, ui };
+    const { notify: _notify, title: _title, ...ui } = over['ui'];
+    over = { ...over, ui };
   }
   const merged = deepMerge(base, over);
-  if (REPO_LAYERS.includes(layer) || !isPlainObject(over) || !isPlainObject(over['providers']) || !isPlainObject(merged) || !isPlainObject(merged['providers'])) return merged;
+  if (
+    REPO_LAYERS.includes(layer) ||
+    !isPlainObject(over) ||
+    !isPlainObject(over['providers']) ||
+    !isPlainObject(merged) ||
+    !isPlainObject(merged['providers'])
+  )
+    return merged;
   const providers = { ...merged['providers'] };
   for (const [name, profile] of Object.entries(over['providers'])) {
     if (FORBIDDEN_KEYS.has(name) || !isPlainObject(profile) || profile['driver'] === undefined) continue;
@@ -305,7 +338,9 @@ function readTrusted(): TrustRecord {
     if (!isPlainObject(raw)) return { projects: [], hashes: {} };
     const projects = Array.isArray(raw['projects']) ? raw['projects'].filter((p): p is string => typeof p === 'string') : [];
     const hashes = isPlainObject(raw['hashes'])
-      ? Object.fromEntries(Object.entries(raw['hashes']).filter((e): e is [string, string] => typeof e[1] === 'string' && !FORBIDDEN_KEYS.has(e[0])))
+      ? Object.fromEntries(
+          Object.entries(raw['hashes']).filter((e): e is [string, string] => typeof e[1] === 'string' && !FORBIDDEN_KEYS.has(e[0])),
+        )
       : {};
     return { projects, hashes };
   } catch {
@@ -315,7 +350,11 @@ function readTrusted(): TrustRecord {
 
 function stableStringify(v: unknown): string {
   if (Array.isArray(v)) return `[${v.map(stableStringify).join(',')}]`;
-  if (isPlainObject(v)) return `{${Object.keys(v).sort().map((k) => `${JSON.stringify(k)}:${stableStringify(v[k])}`).join(',')}}`;
+  if (isPlainObject(v))
+    return `{${Object.keys(v)
+      .sort()
+      .map((k) => `${JSON.stringify(k)}:${stableStringify(v[k])}`)
+      .join(',')}}`;
   return JSON.stringify(v) ?? 'null';
 }
 
@@ -333,7 +372,14 @@ export function repoConfigHash(cwd: string): string {
       const cfg = isPlainObject(raw) ? raw : {};
       const providers = isPlainObject(cfg['providers']) ? cfg['providers'] : {};
       const connections = Object.fromEntries(
-        Object.entries(providers).map(([name, p]) => [name, isPlainObject(p) ? Object.fromEntries(CONNECTION_FIELDS.filter((f) => !['apiKeyRef', 'auth'].includes(f) || p[f] !== undefined).map((f) => [f, p[f] ?? null])) : null]),
+        Object.entries(providers).map(([name, p]) => [
+          name,
+          isPlainObject(p)
+            ? Object.fromEntries(
+                CONNECTION_FIELDS.filter((f) => !['apiKeyRef', 'auth'].includes(f) || p[f] !== undefined).map((f) => [f, p[f] ?? null]),
+              )
+            : null,
+        ]),
       );
       const permissions = isPlainObject(cfg['permissions']) ? cfg['permissions'] : {};
       return {
@@ -406,7 +452,15 @@ export function loadConfig(cwd: string = process.cwd()): RoastConfig | null {
   const present = configSources(cwd).filter((s) => s.exists);
   if (present.length === 0) return null;
   const trusted = present.some((s) => REPO_LAYERS.includes(s.layer)) ? isProjectTrusted(cwd) : true;
-  const merged = present.reduce<unknown>((acc, s) => mergeConfigLayer(acc, trusted || !REPO_LAYERS.includes(s.layer) ? readJson(s.path) : withoutUntrustedKeys(readJson(s.path), cwd), s.layer), {});
+  const merged = present.reduce<unknown>(
+    (acc, s) =>
+      mergeConfigLayer(
+        acc,
+        trusted || !REPO_LAYERS.includes(s.layer) ? readJson(s.path) : withoutUntrustedKeys(readJson(s.path), cwd),
+        s.layer,
+      ),
+    {},
+  );
   const result = ConfigSchema.safeParse(merged);
   if (!result.success) {
     const where = present.map((s) => s.path).join(' + ');

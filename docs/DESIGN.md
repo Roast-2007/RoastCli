@@ -284,7 +284,7 @@ Queen 用 `board_write` 写 `/mission/plan` JSON，`plan.ts` 对缺字段、重�
 
 ### 主题与动画
 
-- `theme.tsx` 定义语义色（accent、muted、success、warn、danger、diffAdd、diffDel 等）和四套主题。ember 的主色是 `#ff4e1a → #ff7a18 → #ffb347` 渐变。真彩色不可用时降级到 256 色或 16 色；`NO_COLOR`、`FORCE_COLOR=0` 或 `TERM=dumb` 时使用 mono。
+- `theme.tsx` 定义语义色（accent、muted、success、warn、danger、diffAdd、diffDel 等）和四套主题。默认主题是 aurora，主色为 `#22d3ee → #3ddbd9 → #a78bfa` 渐变；ember 为 `#ff4e1a → #ff7a18 → #ffb347`。真彩色不可用时降级到 256 色或 16 色；`NO_COLOR`、`FORCE_COLOR=0` 或 `TERM=dumb` 时使用 mono。
 - `components/useSpinner.ts` 让所有旋转动画共用一个 80 毫秒的计时器，没有订阅者时停止。`motion.ts` 处理面板的颜色过渡。`hive/Ignition.tsx` 取代 Startup，ASCII 蜂巢铺满视口，从中央王台向外点火，字标逐列显示，持续 900 毫秒后直接进入工作面；可跳过并传递可打印字符。reduced motion、TERM=dumb 或有初始任务时跳过，尺寸不足时降级为单行或 ROAST。
 - `honeycomb.ts` 是纯平顶六边形生成器：蜂房宽 L+2s、高 2s+1，原点为 x=c(L+s)+dx、y=2sq+(奇数列?s:0)+dy，共享边字符一致；四周多生成一圈再裁剪。按 XL / L / M / S 档生成，王台剔除交叠蜂房，选取正上方最近的完整蜂王格。几何按 columns、rows、tier 缓存，限制 8 项。
 - `wordmark.ts` 的 Big 字标由 R/O/A/S/T 五块逐行拼接，每块间一空格，六行各 48 列。`ignition-frame.ts` 按归一化距离计算点火时间，热度用 @/#/*/+/:/.，约 18% 固定 hash 余烬不闪烁；每行同样式连续字符合成 span，避免逐字符 React 元素。缩放只换几何，不重置 900ms 时钟；mono 仅用粗体与暗色。

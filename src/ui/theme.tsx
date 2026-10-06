@@ -1,5 +1,5 @@
 /**
- * 主题：语义色 token。默认 Ember（炭黑 + 余烬橙渐变）；NO_COLOR 时用 mono（只用粗细/反显/暗显）。
+ * 主题：语义色 token。默认 Aurora（极光青 + 紫渐变）；NO_COLOR 时用 mono（只用粗细/反显/暗显）。
  * Ink 的 color 接受十六进制，chalk 会按终端能力自动降级到 256 / 16 色。
  */
 import { createContext, useContext } from 'react';
@@ -71,14 +71,16 @@ export const MONO: Theme = { name: 'mono', gradient: [] };
 
 export const THEMES: Readonly<Record<string, Theme>> = { ember: EMBER, aurora: AURORA, daylight: DAYLIGHT, mono: MONO };
 
-/** 优先级：NO_COLOR → ROAST_THEME 环境变量 → 配置 ui.theme → ember；未知名称回退 ember */
+export const DEFAULT_THEME = AURORA;
+
+/** 优先级：NO_COLOR → ROAST_THEME 环境变量 → 配置 ui.theme → aurora；未知名称回退 aurora */
 export function pickTheme(env: NodeJS.ProcessEnv = process.env, configured?: string): Theme {
   if ((env['NO_COLOR'] !== undefined && env['NO_COLOR'] !== '') || env['FORCE_COLOR'] === '0' || env['TERM'] === 'dumb') return MONO;
-  const name = env['ROAST_THEME'] || configured || 'ember';
-  return THEMES[name] ?? EMBER;
+  const name = env['ROAST_THEME'] || configured || DEFAULT_THEME.name;
+  return THEMES[name] ?? DEFAULT_THEME;
 }
 
-export const ThemeContext = createContext<Theme>(EMBER);
+export const ThemeContext = createContext<Theme>(DEFAULT_THEME);
 export const useTheme = (): Theme => useContext(ThemeContext);
 
 function hexToRgb(hex: string): [number, number, number] {

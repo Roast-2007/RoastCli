@@ -362,7 +362,7 @@ agent 运行时输入的消息会排队，在下一个 step 送达，不用先�
 
 ### 外观
 
-- 主题：`ember`（默认）、`aurora`、`daylight`（适合浅色终端）、`mono`。环境变量 `ROAST_THEME` 优先于配置。设置了 `NO_COLOR`、`FORCE_COLOR=0` 或 `TERM=dumb` 时使用 `mono`。
+- 主题：`aurora`（默认）、`ember`、`daylight`（适合浅色终端）、`mono`。环境变量 `ROAST_THEME` 优先于配置。设置了 `NO_COLOR`、`FORCE_COLOR=0` 或 `TERM=dumb` 时使用 `mono`。
 - `ui.ascii: true` 或 `ROAST_ASCII=1`：边框和装饰只用 ASCII 字符。
 - `ui.motion: "reduced"` 或 `ROAST_REDUCED_MOTION=1`：关闭动画，不播放启动动画。`TERM=dumb` 会同时开启这两项。
 - `ui.gutter`：全屏右侧留白 0–4 列，默认 2；`ROAST_GUTTER` 优先，原始窗口宽度 <30 列时自动归零。动画、Deck、Chat、浮层、审批、向导与信任确认都使用这块留白。

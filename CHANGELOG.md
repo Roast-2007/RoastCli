@@ -2,7 +2,7 @@
 
 安装包和校验文件见 [GitHub Releases](https://github.com/Roast-2007/RoastCli/releases)。
 
-## 0.5.0 - 2026-10-06
+## 0.5.0 - 2026-10-07
 
 新增
 
@@ -22,6 +22,7 @@
 - 输入框 Tab 仅用于补全，F6 / Shift+F6 切换面板；面板 Tab / Shift+Tab 切焦点，输入框 Shift+Tab 保留权限模式切换。
 - `Ctrl+C` 优先中断运行、其次清空草稿，空闲无草稿时在两秒内再按一次才退出；排队消息显示在输入框上方。
 - 重写共享提示词、Queen 任务简报、角色卡与报告格式；只读任务拒绝派生 worker / lead。
+- 默认主题改为 `aurora`（极光青紫）。想继续用余烬橙，设置 `ui.theme: "ember"` 或 `ROAST_THEME=ember`。
 
 兼容性
 

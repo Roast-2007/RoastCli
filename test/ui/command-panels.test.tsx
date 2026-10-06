@@ -53,8 +53,9 @@ describe('interactive command panels', () => {
   it('selects a theme and persists it with arrows and Enter; cancels mode without changing it', async () => {
     const view = screen('theme');
     try {
+      // The panel opens on the default theme (aurora); one step down selects the next entry.
       await tick(); await press(view.stdin, '\x1b[B', '\r');
-      expect(view.store.getState().meta.theme).toBe('aurora'); expect(loadConfig(ws.dir)!.ui!.theme).toBe('aurora');
+      expect(view.store.getState().meta.theme).toBe('daylight'); expect(loadConfig(ws.dir)!.ui!.theme).toBe('daylight');
       expect(view.store.getState().meta.overlay).toBeNull();
       expect(view.frames.every((frame) => frame.split('\n').length <= 8)).toBe(true);
       view.unmount();
