@@ -14,5 +14,5 @@ export function colonyLines(agents: AgentInfo[], views: Readonly<Record<string, 
 }
 export function ColonyPane({ agents, views, selected, height, width, focused, offset = 0 }: { agents: AgentInfo[]; views: Readonly<Record<string, AgentView>>; selected: string; height: number; width: number; focused: boolean; offset?: number }) {
   const { ascii } = useTerminal();
-  return <Pane title="蜂群" lines={colonyLines(agents, views, selected, ascii)} height={height} width={width} focused={focused} offset={offset} fromTop />;
+  return <Pane title="蜂群" lines={colonyLines(agents, views, selected, ascii)} height={height} width={width} focused={focused} offset={offset} fromTop singleLine />;
 }

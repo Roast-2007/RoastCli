@@ -7,5 +7,5 @@ export function deckLayout(columns: number, rows: number, interaction = false) {
   const body = Math.max(0, available - input);
   const colony = rows >= 8 && columns >= 70 ? Math.min(30, Math.floor(columns * 0.24)) : 0;
   const signals = rows >= 8 && columns >= 112 ? Math.min(40, Math.floor(columns * 0.23)) : 0;
-  return { height, header, status, input, body, colony, signals, mission: Math.max(1, columns - colony - signals), compact: rows < 8, narrow: columns < 70 };
+  return { keybar: 0, height, header, status, input, body, colony, signals, mission: Math.max(1, columns - colony - signals), compact: rows < 8, narrow: columns < 70 };
 }

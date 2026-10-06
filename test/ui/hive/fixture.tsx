@@ -29,7 +29,7 @@ export async function deckFixture(columns = 120, rows = 40, ui?: RoastConfig['ui
   const instance = render(element, { stdout: tty as unknown as NodeJS.WriteStream, stdin: stdin as unknown as NodeJS.ReadStream, interactive: true, alternateScreen: true, incrementalRendering: false, patchConsole: false, exitOnCtrlC: false });
   await tick();
   return { session, store, controller, tty, stdin, draft, instance,
-    send: async (text: string) => { stdin.write(text); await tick(); },
+    send: async (text: string) => { stdin.write(text); await tick(); await instance.waitUntilRenderFlush(); },
     close: async () => { instance.unmount(); await instance.waitUntilExit(); instance.cleanup(); controller.dispose(); await session.shutdown(); },
   };
 }

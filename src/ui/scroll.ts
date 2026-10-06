@@ -1,9 +1,11 @@
+import { useTerminal } from './terminal.js';
 import { useLayoutEffect, useRef, useState } from 'react';
 import type { Key } from 'ink';
 import { mouseWheel } from './mouse.js';
 
 /** A continuous line viewport; the ref also accumulates input between paints. */
 export function useScroll(total: number, count: number) {
+  const { mouse } = useTerminal();
   const [offset, setOffset] = useState(0);
   const current = useRef(offset);
   const max = Math.max(0, total - count);
@@ -12,7 +14,7 @@ export function useScroll(total: number, count: number) {
   const move = (value: number) => { current.current = Math.max(0, Math.min(value, max)); setOffset(current.current); };
   const onKey = (input: string, key: Key) => {
     const wheel = mouseWheel(input);
-    if (wheel !== null) { move(current.current + wheel); return true; }
+    if (wheel !== null) { if (mouse !== false) move(current.current + wheel); return true; }
     if (key.home || input === 'g') { move(0); return true; }
     if (key.end || input === 'G') { move(max); return true; }
     if (key.upArrow || key.pageUp || input === 'k') { move(current.current - (key.pageUp ? Math.max(1, count - 1) : 1)); return true; }

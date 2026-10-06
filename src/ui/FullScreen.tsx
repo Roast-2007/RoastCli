@@ -36,14 +36,14 @@ export function FullScreen(props: AppProps) {
   useEffect(() => props.controller ? undefined : () => controller.dispose(), [controller, props.controller]);
   const ui = useSyncExternalStore(store.subscribe, store.getState);
   const theme = pickTheme(process.env, ui.meta.theme ?? props.session.config.ui?.theme);
-  const terminal = useMemo(() => terminalPreferences(process.env, props.session.config.ui), [props.session]);
+  const terminal = useMemo(() => terminalPreferences(process.env, { ...props.session.config.ui, mouse: ui.meta.mouse ?? props.session.config.ui?.mouse }), [props.session, ui.meta.mouse]);
   return <ThemeContext.Provider value={theme}><TerminalContext.Provider value={terminal}><Workspace {...props} store={store} controller={controller} /></TerminalContext.Provider></ThemeContext.Provider>;
 }
 
 function Workspace({ session, store: storeProp, controller: controllerProp, inputDraft, initialPrompt, printedUpTo = 0, onMissionControl, startup }: AppProps) {
   const store = storeProp!, controller = controllerProp!;
   const { exit } = useApp(), { stdin } = useStdin(), { rows, columns } = useViewport();
-  const theme = useTheme(), { ascii, motion } = useTerminal();
+  const theme = useTheme(), { ascii, motion, mouse } = useTerminal();
   const ui = useSyncExternalStore(store.subscribe, store.getState), view = ui.agents.main!, meta = ui.meta;
   const localDraft = useRef<{ seed?: number; state?: EditorState }>({});
   const draft = inputDraft ?? localDraft.current;
@@ -79,7 +79,7 @@ function Workspace({ session, store: storeProp, controller: controllerProp, inpu
   useInput((input, key) => {
     const wheel = mouseWheel(input);
     if (wheel !== null) {
-      if (detailRef.current || wheel === 0) return;
+      if (mouse === false || detailRef.current || wheel === 0) return;
       const next = Math.max(0, Math.min(scroll.max, (readingRef.current ? scroll.position() : scroll.max) + wheel));
       scroll.move(next);
       if (next === scroll.max) leaveReading(); else read();
@@ -136,14 +136,14 @@ function Workspace({ session, store: storeProp, controller: controllerProp, inpu
       <Box height={layout.body} flexShrink={0} flexDirection="column" overflow="hidden" paddingX={padding}>
         {detail && !card ? <ToolDetail key={tool?.callId} tool={tool} maxLines={layout.body} width={width} active={ready} /> : transcriptRows.length ? transcriptRows.slice(start, start + count).map((row, index) => <Text key={index} wrap="truncate-end">{row.length ? row.map((span, i) => <Text key={i} color={span.color ? theme[span.color] as string | undefined : undefined} bold={span.bold} dimColor={span.dim} italic={span.italic} underline={span.underline} strikethrough={span.strike}>{span.text}</Text>) : ' '}</Text>) : <Welcome height={layout.body} columns={width} warnings={session.startupWarnings} />}
       </Box>
-      {layout.agents ? <AgentsPanel agents={meta.swarm} activity={(id) => ui.agents[id]?.tools[0]?.name ?? '运行中'} maxHeight={layout.agents} /> : null}
+      {layout.agents ? <AgentsPanel onOpenDeck={onMissionControl} agents={meta.swarm} activity={(id) => ui.agents[id]?.tools[0]?.name ?? '运行中'} maxHeight={layout.agents} /> : null}
       {layout.todos ? <TodoPanel todos={view.todos} maxHeight={layout.todos} /> : null}
       {layout.hint ? meta.queued.length ? <QueueLine texts={meta.queued} /> : <Text color={reading ? theme.info : theme.muted} wrap="truncate-end">{detail ? '工具详情 · ↑↓ 滚动 · Ctrl+O 返回' : reading ? `阅读 · ${start + 1}–${Math.min(transcriptRows.length, start + count)}/${transcriptRows.length} · ↑↓ 滚动 · End/Enter/Esc 返回输入` : view.running ? `${spinner} 运行中` : ' '}</Text> : null}
       <Box height={layout.input} flexShrink={0} overflow="hidden" flexDirection="column">
         {card ? <InteractionCard key={card.id} request={card} maxHeight={layout.input} onInterrupt={() => controller.ctrlC('')} onRespond={(response) => controller.respond(card, response)} /> : <InputBox key={meta.inputSeed.key} active={ready && !reading && !detail} maxHeight={layout.input} acceptInput={() => !readingRef.current && !detailRef.current && !store.getState().meta.overlay && store.getState().meta.interactions.length === 0} placeholder={view.running ? '插话' : '输入消息'} initialHistory={history} initialText={meta.inputSeed.screen && meta.inputSeed.screen !== 'inline' ? '' : meta.inputSeed.text} initialState={draft.seed === meta.inputSeed.key || (meta.inputSeed.screen && meta.inputSeed.screen !== 'inline') ? draft.state : undefined} onStateChange={(state) => { draft.seed = meta.inputSeed.key; draft.state = state; }} deps={deps} onHelp={() => store.setMeta({ overlay: 'help' })} onSubmit={(text, raw) => { leaveReading(); controller.submit(text, raw); }} />}
       </Box>
     </>}
-    {layout.status ? <StatusLine mode={meta.mode} model={`${session.providerName}:${session.model}`} contextPercent={meta.contextPercent} total={view.totalUsage} last={view.lastUsage} running={view.running} elapsedMs={view.turnStartedAt ? now - view.turnStartedAt : 0} step={view.step} branch={branch} cost={cost === null ? null : formatCost(cost)} toast={meta.toast} agents={meta.swarm.filter((a) => a.parentId && ['queued', 'running', 'waiting', 'paused'].includes(a.state)).length} /> : null}
+    {layout.status ? <StatusLine onMode={() => controller.cycleMode()} onHelp={() => store.setMeta({ overlay: 'help' })} mode={meta.mode} model={`${session.providerName}:${session.model}`} contextPercent={meta.contextPercent} total={view.totalUsage} last={view.lastUsage} running={view.running} elapsedMs={view.turnStartedAt ? now - view.turnStartedAt : 0} step={view.step} branch={branch} cost={cost === null ? null : formatCost(cost)} toast={meta.toast} agents={meta.swarm.filter((a) => a.parentId && ['queued', 'running', 'waiting', 'paused'].includes(a.state)).length} /> : null}
   </Box>;
 }
 

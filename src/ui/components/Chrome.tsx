@@ -1,8 +1,11 @@
+import { useRef } from 'react';
+import { parseMouse } from '../mouse.js';
+import { absoluteOrigin } from '../input/cursor.js';
 import { useViewport } from '../viewport.js';
 /**
  * 界面"外壳"组件：启动横幅、状态栏（模式胶囊 / 模型 / 上下文量规 / 缓存 / 用量 / 计时）、待办面板、回合小结。
  */
-import { Box, Text } from 'ink';
+import { Box, Text, useInput, useBoxMetrics, type DOMElement } from 'ink';
 import type { TokenUsage } from '../../core/types.js';
 import type { PermissionMode } from '../../tools/permissions/engine.js';
 import type { TodoItem } from '../../tools/interact/index.js';
@@ -32,6 +35,8 @@ const MODE: Record<PermissionMode, { text: string; key: keyof ReturnType<typeof 
   plan: { text: '计划', key: 'info' },
   yolo: { text: 'YOLO', key: 'danger' },
 };
+
+export function modeWidth(mode: PermissionMode) { return displayWidth(` ${MODE[mode].text} `); }
 
 function k(n: number): string {
   return n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
@@ -68,9 +73,13 @@ export interface StatusLineProps {
   cost?: string | null;
   toast?: { text: string; tone: 'info' | 'success' | 'warn' | 'error' } | null;
   agents?: number;
+  onMode?(): void;
+  onHelp?(): void;
 }
 
 export function StatusLine(p: StatusLineProps) {
+  const box = useRef<DOMElement>(null); useBoxMetrics(box);
+  const { mouse } = useTerminal();
   const theme = useTheme();
   const { columns } = useViewport();
   const frame = useSpinner(p.running);
@@ -83,8 +92,18 @@ export function StatusLine(p: StatusLineProps) {
   const hive = p.agents ? ` HIVE ${p.agents} ` : '';
   const parts = statusText(columns, displayWidth(base + hive), { percent, total: p.total, cost: p.cost, branch: p.branch, activity: p.running ? `${frame} ${Math.floor(p.elapsedMs / 1000)}s step ${p.step}` : '', separator: glyph.separator, up: glyph.up, down: glyph.down, branchGlyph: glyph.branch, ascii });
   const rightWidth = displayWidth(parts.right);
+  useInput(input => {
+    if (mouse === false) return;
+    const origin = absoluteOrigin(box.current);
+    if (!origin) return;
+    for (const event of parseMouse(input)) {
+      if (event.kind !== 'press' || event.button !== 'left' || event.y !== origin.y) continue;
+      if (event.x >= origin.x && event.x < origin.x + Math.min(columns, modeWidth(p.mode))) p.onMode?.();
+      if (parts.right.endsWith('? 帮助') && event.x >= origin.x + columns - 6 && event.x < origin.x + columns) p.onHelp?.();
+    }
+  });
   return (
-    <Box flexShrink={0} height={1} overflow="hidden">
+    <Box ref={box} width={columns} flexShrink={0} height={1} overflow="hidden">
       <Text color={color} inverse bold>
         {` ${m.text} `}
       </Text>
@@ -98,15 +117,23 @@ export function StatusLine(p: StatusLineProps) {
 const AGENT_ICON: Record<AgentInfo['state'], string> = { queued: '◌', running: '◉', waiting: '◎', paused: 'Ⅱ', done: '✓', failed: '✗', cancelled: '⊘' };
 
 /** 蜂群面板：有子 agent 在运行时显示（id · 角色 · 状态 · 当前活动 · 任务） */
-export function AgentsPanel({ agents, activity, maxHeight = 11 }: { agents: AgentInfo[]; activity: (id: string) => string; maxHeight?: number }) {
+export function AgentsPanel({ agents, activity, maxHeight = 11, onOpenDeck }: { agents: AgentInfo[]; activity: (id: string) => string; maxHeight?: number; onOpenDeck?(): void }) {
   const theme = useTheme();
   const { ascii } = useTerminal();
+  const { columns } = useViewport(), { mouse } = useTerminal();
+  const box = useRef<DOMElement>(null); const metrics = useBoxMetrics(box);
+  useInput(input => {
+    if (mouse === false || !onOpenDeck) return;
+    const origin = absoluteOrigin(box.current);
+    if (!origin) return;
+    if (parseMouse(input).some(event => event.kind === 'press' && event.button === 'left' && event.x >= origin.x && event.x < origin.x + columns && event.y >= origin.y && event.y < origin.y + metrics.height)) onOpenDeck();
+  });
   const children = agents.filter((a) => a.parentId !== null);
   if (maxHeight < 1 || !children.some((a) => ['running', 'queued', 'waiting', 'paused'].includes(a.state))) return null;
   const border = maxHeight >= 4;
   const color = (s: AgentInfo['state']) => (s === 'done' ? theme.success : s === 'failed' ? theme.danger : s === 'cancelled' ? theme.warn : theme.accent);
   return (
-    <Box flexDirection="column" borderStyle={border ? ascii ? 'classic' : 'round' : undefined} borderColor={theme.border} paddingX={border ? 1 : 0} flexShrink={0}>
+    <Box ref={box} flexDirection="column" borderStyle={border ? ascii ? 'classic' : 'round' : undefined} borderColor={theme.border} paddingX={border ? 1 : 0} flexShrink={0}>
       <Text color={theme.accent} bold>
         HIVE {children.filter((a) => ['running', 'queued', 'waiting', 'paused'].includes(a.state)).length}/{children.length} · Ctrl+G 指挥台
       </Text>

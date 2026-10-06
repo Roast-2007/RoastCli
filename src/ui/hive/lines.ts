@@ -1,3 +1,4 @@
+import type { Target } from './hitmap.js';
 /**
  * Hive 的紧凑行渲染（纯函数）：把 AgentView 转成定高窗格里的一行行文本，
  * 便于精确控制高度（全屏布局不能依赖自动换行）。
@@ -11,6 +12,7 @@ export type LineTone = 'user' | 'text' | 'tool' | 'ok' | 'error' | 'warn' | 'mut
 
 export interface Line {
   text: string;
+  target?: Target;
   tone: LineTone;
 }
 

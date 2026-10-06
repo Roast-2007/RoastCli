@@ -1,6 +1,8 @@
+import { parseMouse } from '../mouse.js';
+import { absoluteOrigin } from '../input/cursor.js';
 import { useViewport } from '../viewport.js';
 import { useRef, useState } from 'react';
-import { Box, Text, useInput } from 'ink';
+import { Box, Text, useInput, useBoxMetrics, type DOMElement } from 'ink';
 import type { InteractionRequest, InteractionResponse } from '../../core/interaction.js';
 import { terminalText } from '../../core/terminal-text.js';
 import { wrapDisplay } from '../../core/text-width.js';
@@ -15,9 +17,11 @@ interface Props { request: InteractionRequest; onRespond(response: InteractionRe
 
 export function InteractionCard({ request, onRespond, onInterrupt, maxHeight = 16 }: Props) {
   const theme = useTheme();
-  const { ascii } = useTerminal();
+  const { ascii, mouse } = useTerminal();
   const glyph = useGlyphs();
   const { columns } = useViewport();
+  const box = useRef<DOMElement>(null);
+  useBoxMetrics(box);
   const [selected, setSelected] = useState(0);
   const [draft, setDraft] = useState('');
   const [full, setFull] = useState(false);
@@ -44,6 +48,19 @@ export function InteractionCard({ request, onRespond, onInterrupt, maxHeight = 1
   const scroll = useScroll(detail.length, detailHeight), { start } = scroll;
   useInput((input, key) => {
     if (responded.current) return;
+    const events = parseMouse(input);
+    if (events.length) {
+      const origin = absoluteOrigin(box.current);
+      if (mouse === false || !origin) return;
+      for (const event of events) {
+        if (event.x < origin.x || event.x >= origin.x + columns || event.y < origin.y || event.y >= origin.y + maxHeight) continue;
+        if (event.kind === 'wheel') { scroll.move(scroll.position() + (event.delta ?? 0)); continue; }
+        if (event.kind !== 'press' || event.button !== 'left') continue;
+        const row = event.y - origin.y - Number(border) - header - detail.slice(start, start + detailHeight).length;
+        if (row >= 0 && row < optionsHeight) answer(firstOption + row);
+      }
+      return;
+    }
     if (key.ctrl && input === 'o') { setFull((value) => !value); scroll.move(0); return; }
     if (key.ctrl && input === 'c' && onInterrupt) return onInterrupt();
     if (key.escape || (key.ctrl && input === 'c')) return respond(question ? { kind: 'question', answer: '（用户未作答）' } : { kind: 'permission', decision: 'deny' });
@@ -61,7 +78,7 @@ export function InteractionCard({ request, onRespond, onInterrupt, maxHeight = 1
   const firstOption = Math.max(0, selected - optionsHeight + 1);
   const color = request.kind === 'permission' ? request.forced ? theme.danger : theme.warn : theme.info;
   const accent = motionColor(theme.border, color, useEntrance(request.id));
-  return <Box height={maxHeight} overflow="hidden" flexDirection="column" borderStyle={border ? ascii ? 'classic' : 'round' : undefined} borderColor={accent} paddingX={border ? 1 : 0} flexShrink={0}>
+  return <Box ref={box} width={columns} height={maxHeight} overflow="hidden" flexDirection="column" borderStyle={border ? ascii ? 'classic' : 'round' : undefined} borderColor={accent} paddingX={border ? 1 : 0} flexShrink={0}>
     {header ? <Text bold color={color} wrap="truncate-end">{question ? '需要你的回答' : request.forced ? `${glyph.warning} ${request.reason.startsWith('高危操作') ? '高危操作' : '操作'}需要确认` : '需要你的授权'}{request.agentId !== 'main' ? `（agent ${request.agentId}）` : ''}</Text> : null}
     {detail.slice(start, start + detailHeight).map((line, i) => <Text key={i} wrap="truncate-end">{line || ' '}</Text>)}
     {options.slice(firstOption, firstOption + optionsHeight).map((option, i) => <Text key={i} color={firstOption + i === selected ? theme.accent : undefined} wrap="truncate-end">{firstOption + i === selected ? `${glyph.pointer} ` : '  '}{question ? `${firstOption + i + 1} ` : ''}{terminalText(option).replace(/\s+/g, ' ')}</Text>)}

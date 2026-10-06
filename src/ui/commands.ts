@@ -116,6 +116,11 @@ async function rewind(ctx: CommandContext, arg: string): Promise<void> {
 }
 
 export const COMMANDS: SlashCommand[] = [
+  { name: 'mouse', description: '开启或关闭鼠标操作', args: '[on|off]', run: (ctx, args) => {
+    if (args && args !== 'on' && args !== 'off') return say(ctx, '用法：/mouse [on|off]', 'warn');
+    const enabled = args ? args === 'on' : !(ctx.store.getState().meta.mouse ?? ctx.session.config.ui?.mouse ?? true);
+    ctx.store.setMeta({ mouse: enabled, toast: { text: enabled ? '鼠标已开启 · Shift 拖动选择文字' : '鼠标已关闭，可直接拖选文字 · /mouse on 恢复', tone: 'info' } });
+  } },
   { name: 'status', description: '版本、模型、目录、信任和 Hive 设置', run: (ctx) => {
     const s = ctx.session, meta = ctx.store.getState().meta, cwd = s.log.header.cwd;
     say(ctx, `RoastCli v${VERSION}\n模型：${s.providerName}:${s.model}\ncwd：${cwd}\n分支：${gitBranch(cwd) ?? '—'}\n信任：${isProjectTrusted(cwd) ? '已信任' : '未信任'}\n权限：${s.permissions.mode}\n首页：${s.config.ui?.home ?? 'hive'}\n策略：${meta.strategy ?? 'auto'} · n ${meta.n ?? 3}\nmaxAgents：${s.config.swarm.maxAgents}\nworktree：${s.config.swarm.worktrees === false ? '关' : '开'}`);

@@ -29,6 +29,7 @@ export interface UiMeta {
   n?: number;
   overlay: OverlayKind | null;
   theme?: string;
+  mouse?: boolean;
   toast?: { text: string; tone: Tone } | null;
 }
 
