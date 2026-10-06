@@ -2,6 +2,11 @@
 
 安装包和校验文件见 [GitHub Releases](https://github.com/Roast-2007/RoastCli/releases)。
 
+## 0.4.1 - 2026-10-06
+
+- 每次启动交互终端时，在后台检查官方 GitHub Releases 的最新正式版本，发现更新后提醒并显示更新指令；不强制更新，网络失败不影响使用。
+- 新增 `roast update`，一条命令更新全局安装；`roast update --check` 只检测。更新失败时提供手动安装指令。
+
 ## 0.4.0 - 2026-10-05
 
 新增

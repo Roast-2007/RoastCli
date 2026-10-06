@@ -33,6 +33,7 @@ import { listWorktrees, pruneWorktrees, savedWorktreesText } from '../cli/worktr
 import { parseRoleModels } from '../swarm/model-routing.js';
 import type { AgentRole } from '../swarm/types.js';
 import { terminalText } from '../core/terminal-text.js';
+import { runUpdate } from '../cli/update.js';
 
 /**
  * 把 `roast -p ...` / `roast` 归一化为 `roast chat -p ...` / `roast chat`，
@@ -42,7 +43,7 @@ function normalizeArgv(argv: string[]): string[] {
   const args = argv.slice(2);
   const first = args[0];
   if (first === undefined) return [...argv.slice(0, 2), 'chat'];
-  if (first === 'chat' || first === 'logs' || first === 'help' || first === 'trust' || first === 'swarm' || first === 'mcp' || first === 'doctor' || first === 'init' || first === 'config' || first === 'worktrees') return argv;
+  if (first === 'chat' || first === 'logs' || first === 'help' || first === 'trust' || first === 'swarm' || first === 'mcp' || first === 'doctor' || first === 'init' || first === 'config' || first === 'worktrees' || first === 'update') return argv;
   if (first.startsWith('-')) {
     // --help / -h / --version 交给 program 级处理，其余选项归 chat
     if (first === '--help' || first === '-h' || first === '--version' || first === '-V') return argv;
@@ -302,6 +303,12 @@ async function main(): Promise<void> {
         ...(opts.outputFormat ? { outputFormat: opts.outputFormat } : {}),
       });
     });
+
+  program
+    .command('update')
+    .description('从官方 GitHub Release 更新全局安装（主动执行才安装）')
+    .option('--check', '只检查最新版本，不安装')
+    .action(async (opts: { check?: boolean }) => { process.exitCode = await runUpdate(opts); });
 
   program
     .command('trust')

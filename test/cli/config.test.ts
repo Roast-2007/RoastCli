@@ -24,7 +24,15 @@ describe('config CLI entrypoint', { timeout: 35_000 }, () => {
     const { result } = cli(['--help']);
     expect(result.status).toBe(0);
     expect(result.stdout).toContain('终端内供应商配置向导');
+    expect(result.stdout).toContain('update');
     expect(cli(['config', '--help']).result.status).toBe(0);
+  });
+
+  it('advertises the updater without configuration and supports a check-only option', () => {
+    const { result, home } = cli(['update', '--help']);
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain('--check');
+    expect(existsSync(join(home.dir, 'config.json'))).toBe(false);
   });
 
   it('refuses a noninteractive wizard without writing files', () => {

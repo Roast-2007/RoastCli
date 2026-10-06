@@ -14,6 +14,7 @@ import { savedWorktreesText } from '../cli/worktrees.js';
 import { ProviderWizard } from './providers/ProviderWizard.js';
 import { TrustPanel } from './components/TrustPanel.js';
 import type { EditorState } from './input/editor.js';
+import { checkForUpdate, updateNotice, type LatestRelease } from '../cli/update.js';
 
 /** Clear while Ink still knows the activity height/caret, before losing its renderer state. */
 export async function releaseScreen(instance: Instance, inline: boolean, onFlushed?: () => void): Promise<void> {
@@ -65,6 +66,8 @@ export async function runInteractive(session: Session, opts: { initialPrompt?: s
   let printedUpTo: number | undefined;
   let initialPrompt = opts.initialPrompt;
   let firstMount = true;
+  const updateAbort = new AbortController();
+  let availableUpdate: LatestRelease | undefined;
 
   const watch = (inst: Instance) => {
     instanceExit = inst.waitUntilExit();
@@ -151,6 +154,7 @@ export async function runInteractive(session: Session, opts: { initialPrompt?: s
       session = next;
       store = createUiStore();
       controller = makeController();
+      if (availableUpdate) store.addNotice('main', updateNotice(availableUpdate), 'info');
       delete inputDraft.seed; delete inputDraft.state;
       printedUpTo = undefined;
       initialPrompt = undefined;
@@ -167,9 +171,15 @@ export async function runInteractive(session: Session, opts: { initialPrompt?: s
 
   try {
     mountInline();
+    void checkForUpdate({ signal: updateAbort.signal }).then((release) => {
+      if (quitRequested || updateAbort.signal.aborted || !release) return;
+      availableUpdate = release;
+      store.addNotice('main', updateNotice(release), 'info');
+    });
     await quit;
   } finally {
     quitRequested = true;
+    updateAbort.abort();
     await switchTask;
     const active = activeInstance();
     active?.unmount();

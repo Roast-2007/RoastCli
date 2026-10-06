@@ -31,8 +31,8 @@ irm https://raw.githubusercontent.com/Roast-2007/RoastCli/main/install.ps1 | iex
 curl -fsSL https://raw.githubusercontent.com/Roast-2007/RoastCli/main/install.sh | sh
 ```
 
-- 更新：退出 RoastCli，重新运行安装命令，再用 `roast --version` 确认版本。配置、API Key 和会话记录不受影响。
-- 安装指定版本：把链接中的 `latest/download` 换成 `download/v0.4.0`。
+- 每次打开对话终端时，会在后台检查官方 GitHub Release，有新版本就提醒；不强制更新，离线或检测失败不影响使用。退出后运行 `roast update` 即可更新，也可以重新运行安装命令，再用 `roast --version` 确认版本。配置、API Key 和会话记录不受影响。
+- 安装指定版本：把链接中的 `latest/download` 换成 `download/v0.4.1`。
 - 卸载：`npm uninstall -g roastcli`。配置和密钥在 `~/.roast` 目录，运行日志默认在项目下的 `logs/` 目录，不再需要时手动删除。
 
 安装遇到问题见[常见问题](docs/USAGE.md#常见问题)。

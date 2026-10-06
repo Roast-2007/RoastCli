@@ -97,6 +97,7 @@ echo "$API_KEY" | roast init --provider deepseek --api-key-stdin   # 或者从�
 | `roast logs list` | 列出最近 20 次运行 |
 | `roast logs show <runId> [--raw]` | 从日志还原某次运行的对话，`--raw` 输出原始事件 |
 | `roast worktrees list` / `prune` | 查看或清理蜂群保留下来的 worktree |
+| `roast update` | 从官方 GitHub Release 更新全局安装；`--check` 只检查、不安装 |
 | `roast --version` | 显示版本 |
 
 在 CI、管道等非 TTY 环境中必须用 `-p` 提供任务，蜂群用 `roast swarm --print "<目标>"`，否则直接报错。非交互模式下，需要用户确认的操作一律拒绝。按一次 `Ctrl+C` 中断当前任务，再按一次退出。
@@ -104,6 +105,10 @@ echo "$API_KEY" | roast init --provider deepseek --api-key-stdin   # 或者从�
 退出码：`2` 缺少配置，`3` 项目配置未受信任，`130` 被中断，其他错误为 `1`。
 
 Windows 上 bash 工具和 `!命令` 优先使用 Git Bash（`C:\Program Files\Git\bin\bash.exe`），找不到时使用 cmd。
+
+每次启动交互式 `roast` 或 `roast swarm`，都会在后台从官方 GitHub Releases 检查最新正式版本，超时 3 秒，不缓存到下次启动。有更新时在对话里显示当前版本、新版本和更新指令，不打断输入或任务。断网、超时、限流时静默跳过；管道模式、`--help`、`--version` 不自动联网检查。
+
+更新完全自愿：退出会话后运行 `roast update`，它会调用 npm 安装对应版本的官方发布附件。`roast update --check` 只检查。npm 不可用或安装失败时会给出手动安装指令，不自动提权。Windows 执行策略拦截命令时用 `roast.cmd update`、`npm.cmd`。
 
 ## 对话界面
 

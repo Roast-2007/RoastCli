@@ -10,6 +10,12 @@ import { ProviderWizard, type ProviderWizardProps } from '../../src/ui/providers
 import { releaseScreen, runInteractive } from '../../src/ui/screens.js';
 import { ScriptedProvider } from '../fixtures/scripted-provider.js';
 import { tempWorkspace } from '../fixtures/workspace.js';
+import { checkForUpdate } from '../../src/cli/update.js';
+
+vi.mock('../../src/cli/update.js', async (original) => ({
+  ...await original<typeof import('../../src/cli/update.js')>(),
+  checkForUpdate: vi.fn(async () => undefined),
+}));
 
 const fake = vi.hoisted(() => ({ rendered: [] as { element: ReactElement; instance: Instance; options: Record<string, unknown> }[], lifecycle: [] as string[] }));
 vi.mock('ink', async (original) => ({
@@ -33,9 +39,45 @@ vi.mock('ink', async (original) => ({
 
 const config: RoastConfig = { providers: { p: { driver: 'openai-compat', apiKeyEnv: 'UNUSED' } }, default: 'p:m', maxSteps: 10, logsDir: 'logs', debugLog: false, context: {}, swarm: { maxAgents: 12, maxDepth: 3, maxMinutes: 60 } };
 const tick = () => new Promise((resolve) => setTimeout(resolve, 20));
-beforeEach(() => { fake.rendered = []; fake.lifecycle = []; });
+beforeEach(() => { fake.rendered = []; fake.lifecycle = []; vi.mocked(checkForUpdate).mockReset().mockResolvedValue(undefined); });
 
 describe('screen lifecycle', () => {
+  it('checks each launch in the background and delivers a notice without changing the draft or model history', async () => {
+    let finish!: (release: { version: string }) => void;
+    vi.mocked(checkForUpdate).mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+    const providers = new ProviderRegistry(); providers.register('p', new ScriptedProvider([]));
+    const session = await createSession({ cwd: tempWorkspace().dir, config, providers });
+    const running = runInteractive(session);
+    const app = fake.rendered[0]!.element as ReactElement<AppProps>;
+    const initialEvents = [...session.initialEvents];
+    expect(app.type).toBe(App);
+    app.props.onMissionControl!();
+    finish({ version: '0.4.2' }); await tick();
+    expect(app.props.store!.getState().agents.main!.items.at(-1)).toMatchObject({ kind: 'notice', text: expect.stringContaining('roast update') });
+    (fake.rendered.at(-1)!.element as ReactElement<MissionControlProps>).props.onExit();
+    const returned = fake.rendered.at(-1)!.element as ReactElement<AppProps>;
+    expect(returned.props.inputDraft).toBe(app.props.inputDraft);
+    expect(session.initialEvents).toEqual(initialEvents);
+    fake.rendered.at(-1)!.instance.unmount(); await running;
+    expect(vi.mocked(checkForUpdate).mock.calls[0]![0]!.signal!.aborted).toBe(true);
+    const next = await createSession({ cwd: tempWorkspace().dir, config, providers });
+    const reopened = runInteractive(next);
+    fake.rendered.at(-1)!.instance.unmount(); await reopened;
+    expect(checkForUpdate).toHaveBeenCalledTimes(2);
+  });
+
+  it('ignores a late update response after the terminal closes', async () => {
+    let finish!: (release: { version: string }) => void;
+    vi.mocked(checkForUpdate).mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+    const providers = new ProviderRegistry(); providers.register('p', new ScriptedProvider([]));
+    const session = await createSession({ cwd: tempWorkspace().dir, config, providers });
+    const running = runInteractive(session);
+    const app = fake.rendered[0]!.element as ReactElement<AppProps>;
+    fake.rendered[0]!.instance.unmount(); await running;
+    finish({ version: '0.4.2' }); await tick();
+    expect(app.props.store!.getState().agents.main!.items).toHaveLength(0);
+  });
+
   it('restores the whole fullscreen history after a failed resume', async () => {
     const providers = new ProviderRegistry(); providers.register('p', new ScriptedProvider([]));
     const session = await createSession({ cwd: tempWorkspace().dir, config, providers });
