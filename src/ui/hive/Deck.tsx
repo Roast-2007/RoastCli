@@ -129,7 +129,7 @@ function Workspace({ session, store, controller, onExit, inputDraft, initialProm
   const cost = session.cost(), runningChildren = agents.filter((agent) => agent.parentId && ['queued', 'running', 'waiting', 'paused'].includes(agent.state)).length;
   const center = <MissionPane session={session} ui={ui} tab={tab} selected={current?.id ?? 'main'} height={layout.body} width={layout.mission} focused={focus === 'mission'} offset={Math.min(offset, maxOffset)} narrow={layout.narrow} signals={!layout.signals && !layout.narrow} />;
   const header = `ROAST HIVE v${VERSION} · ${session.providerName}:${session.model} · ${path.basename(cwd)} ${branch ? `⎇ ${branch}` : ''} · ${phase}${mission ? ` #${mission.missionId.slice(1)} · ${mission.strategy} · ${mission.goal}` : ''}`;
-  if (splash) return <Ignition session={session} height={layout.height} columns={columns} landingHeader={layout.header ? header : undefined} onExit={exit} onDone={(text) => { if (text) { draft.seed = ui.meta.inputSeed.key; draft.state = editorReducer(draft.state ?? createEditor(history), { type: 'insert', text }); } setSplash(false); }} />;
+  if (splash) return <Ignition session={session} height={layout.height} columns={columns} onExit={exit} onDone={(text) => { if (text) { draft.seed = ui.meta.inputSeed.key; draft.state = editorReducer(draft.state ?? createEditor(history), { type: 'insert', text }); } setSplash(false); }} />;
   return <Box height={layout.height} width={columns} flexDirection="column" overflow="hidden">
     {layout.header ? <Text bold color={theme.accent} wrap="truncate-end">{header}</Text> : null}
     {ui.meta.overlay && !card ? <Overlay kind={ui.meta.overlay} session={session} store={store} controller={controller} height={layout.body + layout.input} /> : <>

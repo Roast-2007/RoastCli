@@ -28,8 +28,8 @@ describe('quiet Hive chrome', () => {
     expect(disappears('^5.0k')).toBeLessThan(disappears('$0.08'));
     expect(statusText(120, 6, { ...p, cost: null }).left).toContain('未知');
   });
-  it('uses exact size fallbacks and completes the monochrome animation at 640ms', async () => {
-    expect(ignitionSize(60, 12)).toBe('full'); expect(ignitionSize(59, 12)).toBe('line'); expect(ignitionSize(80, 6)).toBe('line'); expect(ignitionSize(33, 20)).toBe('small');
+  it('uses exact size fallbacks and completes the monochrome animation at 900ms', async () => {
+    expect(ignitionSize(64, 18)).toBe('M'); expect(ignitionSize(60, 12)).toBe('S'); expect(ignitionSize(80, 6)).toBe('line'); expect(ignitionSize(23, 20)).toBe('tiny');
     vi.useFakeTimers();
     const done = vi.fn(), session = { log: { header: { cwd: process.cwd() } }, config: { swarm: { maxAgents: 12 } }, providerName: 'p', model: 'm' } as Session;
     const screen = render(<TerminalContext.Provider value={{ motion: true, ascii: true }}><ThemeContext.Provider value={THEMES.mono!}><Ignition session={session} height={23} columns={80} onDone={done} onExit={() => {}} /></ThemeContext.Provider></TerminalContext.Provider>);
@@ -37,20 +37,7 @@ describe('quiet Hive chrome', () => {
       await vi.advanceTimersByTimeAsync(IGNITION_MS - 1); expect(done).not.toHaveBeenCalled();
       await vi.advanceTimersByTimeAsync(1); expect(done).toHaveBeenCalledTimes(1);
       expect(screen.lastFrame()).not.toMatch(/任意键|正在进入/);
-      expect(screen.lastFrame()).toContain('12 agents');
-    } finally { screen.unmount(); vi.useRealTimers(); }
-    await tick();
-  });
-  it('lands the final ignition frame on the Deck header without delaying completion', async () => {
-    vi.useFakeTimers();
-    const done = vi.fn(), header = 'ROAST HIVE v0.5.0 · p:m · project · 空闲';
-    const session = { log: { header: { cwd: process.cwd() } }, config: { swarm: { maxAgents: 12 } }, providerName: 'p', model: 'm' } as Session;
-    const screen = render(<TerminalContext.Provider value={{ motion: true, ascii: true }}><ThemeContext.Provider value={THEMES.mono!}><Ignition session={session} height={23} columns={80} landingHeader={header} onDone={done} onExit={() => {}} /></ThemeContext.Provider></TerminalContext.Provider>);
-    try {
-      await vi.advanceTimersByTimeAsync(608);
-      expect(screen.lastFrame()?.split('\n')[0]).toBe(header);
-      expect(done).not.toHaveBeenCalled();
-      await vi.advanceTimersByTimeAsync(32); expect(done).toHaveBeenCalledOnce();
+      expect(screen.lastFrame()).toContain('H   I   V   E');
     } finally { screen.unmount(); vi.useRealTimers(); }
     await tick();
   });
