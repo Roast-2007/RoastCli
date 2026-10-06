@@ -11,11 +11,15 @@
 - 按需读取和缓存 worktree diff；文件审批卡片预览 diff，合并审批显示 diffstat，`Ctrl+O` 查看完整详情。
 - `roast hive`、`--strategy`、`--list-strategies`、`/strategy`、`/chat` 和 `/status`；`ui.home`、`ui.notify`、`ui.title`、`swarm.strategy` 和 `swarm.n` 配置。
 - 终端审批与长任务结束通知、节流窗口标题；通知和标题配置仅在用户配置中生效。
+- Deck 鼠标选择、双击输出、右键成员菜单、页签和信号点击、指针所在面板的滚轮；浮层与审批支持点击，`ui.mouse` 和 `/mouse [on|off]` 控制鼠标报告。
+- Deck / Chat 共用可点击 KeyBar，焦点标记、反色页签、空状态引导和 Deck 专属帮助；`ui.hints` 支持 full、compact、off。
+- 全屏右侧留白 `ui.gutter`（默认 2，范围 0–4）及 `ROAST_GUTTER` 覆盖；窗口两维变化完整重绘并保留草稿、焦点、成员、页签、滚动和浮层。
 
 变更
 
 - `roast` 默认进入 Deck，`Ctrl+G` 切换 Deck / Chat，两边各保留草稿；旧 Mission Control 被 Deck 取代。
-- 640 毫秒 Ignition 蜂巢启动动画、安静的空白工作面、单行头部与统一状态栏；启动警告和更新提醒移至信号或 toast。
+- 900 毫秒全窗口 ASCII 蜂巢 Ignition，按尺寸选择蜂房和字标，中央王台点火、固定余烬；单行头部与统一状态栏，启动警告和更新提醒移至信号或 toast。
+- 输入框 Tab 仅用于补全，F6 / Shift+F6 切换面板；面板 Tab / Shift+Tab 切焦点，输入框 Shift+Tab 保留权限模式切换。
 - `Ctrl+C` 优先中断运行、其次清空草稿，空闲无草稿时在两秒内再按一次才退出；排队消息显示在输入框上方。
 - 重写共享提示词、Queen 任务简报、角色卡与报告格式；只读任务拒绝派生 worker / lead。
 

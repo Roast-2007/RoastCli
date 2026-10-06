@@ -41,7 +41,7 @@
   "logsDir": "logs",
   "context": { "summaryModel": "auto", "summaryMaxTokens": 2048 },
   "webSearch": { "driver": "duckduckgo", "timeoutMs": 30000 },
-  "ui": { "home": "hive", "notify": "auto", "title": true, "theme": "ember", "shellTimeoutMs": 600000, "markdown": { "padding": 2, "spacing": 1 } },
+  "ui": { "home": "hive", "notify": "auto", "title": true, "gutter": 2, "mouse": true, "hints": "full", "theme": "ember", "shellTimeoutMs": 600000, "markdown": { "padding": 2, "spacing": 1 } },
   "swarm": {
     "strategy": "auto",
     "n": 3,

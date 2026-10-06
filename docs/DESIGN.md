@@ -230,7 +230,8 @@ interface ContextState {
 
 - `screens.ts` 的 `runInteractive` 只创建一个 Ink 实例（alternate screen、`maxFps` 30、`incrementalRendering`、kitty 键盘协议自动检测），通过 `rerender` 在 Hive Deck、Chat（`FullScreen.tsx`）和会话内的配置向导之间切换。首页取 `ui.home`，默认 hive，CLI 可以覆盖。store、controller 和两个工作面的独立编辑器草稿在切换时保留。首次配置向导和信任确认在此之前用单独的 `render()` 显示，旧 Mission Control 已删除。
 - 对话界面的标题、输入框和状态栏固定，中间是按行滚动的视口。`transcript.ts` 把消息转换成带样式的行（Markdown 由 `markdown/rows.ts` 通过 `marked.lexer` 解析，代码块用 cli-highlight 高亮并映射到主题色），按不可变的消息对象缓存在 WeakMap 中。每帧只重建流式输出的尾部、推理内容和运行中的工具，并且只把可见的行渲染成 `<Text>`。
-- 根容器高度为 `rows - 1`，避免 Windows 控制台在画面占满时滚动。`layout.ts` 按物理行分配高度，输入框和审批卡片优先，状态栏固定一行。
+- `viewport.ts` 统一读取窗口尺寸，所有布局接收 `columns = max(1, rawColumns - gutter)`、`rows = max(1, rawRows - 1)`；底部一行避免 Windows 控制台滚屏。`ui.gutter` 为 0–4，默认 2，`ROAST_GUTTER` 优先，rawColumns <30 时归零。根容器和浮层使用扣留白后的尺寸，输入与审批优先。
+- `resize.ts` 为各 Ink 实例监听任一维度的 resize，防抖 60ms；等待绘制完成后丢弃输出缓存、写清屏序列并 rerender 原树。Ink 7.1.1 的公开 `clear()` 会把旧输出重新同步进缓存，不能强制重绘，因此版本相关的私有实例映射与缓存适配集中在此处，并移除 Ink 同步绘制旧尺寸树的 resize 监听。尺寸 hook 继续更新，根不 remount；偏移在渲染时夹紧，草稿、焦点、页签、浮层与动画时钟保留。
 - `App.tsx` 中还保留了旧的 inline 模式（`<Static>` 加水位线），只在 `fullScreen` 为假时使用，目前生产代码不走这条路径，主要用于测试和嵌入。
 
 ### Hive Deck
@@ -244,10 +245,17 @@ interface ContextState {
 | `plan.ts`、`phase.ts` | 纯函数解析计划、关联 taskId、推导任务状态与结果 |
 | `focus.ts` | 四焦点循环和成员指示解析 |
 | `diffs.ts`、`usage.ts`、`lines.ts` | 改动缓存、任务费用聚合和输出行投影 |
-| `Ignition.tsx`、`status.ts`、`interrupt.ts`、`QueueLine.tsx` | 640ms 启动、统一状态栏、Ctrl+C 状态机与排队条 |
+| `Ignition.tsx`、`honeycomb.ts`、`wordmark.ts`、`ignition-frame.ts` | 900ms 全窗口蜂巢、几何缓存、精确字标与样式 span |
+| `hitmap.ts`、`deck-mouse.ts`、`AgentMenu.tsx`、`tabs.ts` | 共享布局命中、指针路由、成员菜单和页签几何 |
+| `Guides.tsx`、`DeckHelp.tsx`、`components/KeyBar.tsx` | 空状态、专属帮助和 Deck / Chat 共用的可点击键位提示 |
+| `status.ts`、`interrupt.ts`、`QueueLine.tsx` | 统一状态栏、Ctrl+C 状态机与排队条 |
 | `terminal-effects.ts` | TTY 通知和标题的单一生命周期 |
 
-焦点默认 input，Tab 在 input → colony → mission → signals 之间循环，缺少独立信号栏时跳过。输入框有补全候选时 Tab 先补全；单字母操作仅在面板聚焦时执行。鼠标滚轮只滚动面板，输入焦点时滚动中栏，不切成员或历史。两个草稿独立保存 editor state，带 screen 的 inputSeed 只更新对应工作面，排队消息中断后恢复到输入框。
+焦点默认 input，输入框中的 Tab 只补全，无候选时保持焦点；Shift+Tab 只在输入框切权限模式。F6 / Shift+F6 正向 / 反向循环 input → colony → mission → signals，缺少信号栏时跳过；Ink Key 不保留功能键名称，因此 `function-keys.ts` 监听原始序列。面板内 Tab / Shift+Tab 切焦点，非面板快捷键的可打印字符回到输入框并插入草稿。聚焦边框用 accent，标题加方向标记。两个草稿独立保存完整 editor state，带 screen 的 inputSeed 只更新对应工作面，排队消息中断后恢复到输入框。
+
+`hitmap.ts` 的 deckRegions 与绘制共用 deckLayout、paneMetrics 和页签显示宽度，反向查找让具体目标优先；蜂群与计划按单行截断，滚动后的坐标只覆盖可见行，留白没有命中。点击成员、计划、页签、信号、策略与权限胶囊经既有 controller 操作；滚轮按指针下的面板路由，不改变成员或草稿。SelectPanel、InteractionCard 与 Chat 的可点击组件用真实 DOM 的绝对位置和可见高度，双击限定同一目标 400ms。
+
+`ui.hints` 控制 full 引导、compact KeyBar 或 off。KeyBar 只取能完整放入的一组优先级前缀，高度不足 14 行时隐藏；Deck 命中图和 Chat DOM 坐标都对应实际显示项。点击提交复用 InputBox 的 Enter 处理，保留命令补全、历史搜索、换行和折叠粘贴展开；点击审批复用 InteractionCard 的选项及单次响应守卫，强制审批不提供持久授权。Chat 阅读位置和排队数量留在输入区，不随 hints 关闭而丢失。Deck 专属帮助经 Overlay 的 deck 标记分流。
 
 Queen 用 `board_write` 写 `/mission/plan` JSON，`plan.ts` 对缺字段、重复 id 和错误 JSON 容错，失败时用成员生成行；`spawn_agent` / `task` 的 `task_id` 映射到 `AgentInfo.taskId`。任务行的状态来自成员 state / report，不要求反复更新黑板。黑板没有持久化，恢复会话后计划板为空，最近任务由日志中的 goal、strategy、turn/end 结果投影。
 
@@ -271,14 +279,16 @@ Queen 用 `board_write` 写 `/mission/plan` JSON，`plan.ts` 对缺字段、重�
 - `input/cursor.ts` 把终端光标放到插入点，让输入法候选框跟随。
 - `input/files.ts` 为 `@` 补全提供文件列表（tinyglobby，最多 2 万个文件），用自己实现的子序列打分做模糊匹配。
 - `input/history.ts` 把输入历史存到 `~/.roast/projects/<hash>/history.jsonl`，保留 500 条。
-- `mouse.ts` 开启 SGR 鼠标报告（1000/1006），滚轮每格滚动 3 行。
+- `mouse.ts` 仅开启 1000/1006，不开启移动或拖动报告。parseMouse 支持连续包、缺 ESC 的包、按下 / 释放、右键、修饰键与滚轮，每格滚动 3 行；释放与 Shift 按下不触发点击。`ui.mouse` 默认 true，`/mouse` 在共享 meta 中覆盖本会话设置，切换工作面仍有效；关闭和卸载时恢复报告模式。
 - 外部文本（工具输出、Markdown、diff）显示前用 `core/terminal-text.ts` 清除终端控制序列。
 
 ### 主题与动画
 
 - `theme.tsx` 定义语义色（accent、muted、success、warn、danger、diffAdd、diffDel 等）和四套主题。ember 的主色是 `#ff4e1a → #ff7a18 → #ffb347` 渐变。真彩色不可用时降级到 256 色或 16 色；`NO_COLOR`、`FORCE_COLOR=0` 或 `TERM=dumb` 时使用 mono。
-- `components/useSpinner.ts` 让所有旋转动画共用一个 80 毫秒的计时器，没有订阅者时停止。`motion.ts` 处理面板的颜色过渡。`hive/Ignition.tsx` 取代 Startup，ASCII 蜂巢径向点亮、字标逐列显示，持续 640 毫秒，最后一帧与 Deck 头部对齐；可跳过并传递可打印字符。reduced motion、TERM=dumb 或有初始任务时跳过，尺寸不足时降级为单行或 ROAST。
-- `terminal.tsx` 提供 ASCII 和减少动画两个开关，`TERM=dumb` 时两者都开启。
+- `components/useSpinner.ts` 让所有旋转动画共用一个 80 毫秒的计时器，没有订阅者时停止。`motion.ts` 处理面板的颜色过渡。`hive/Ignition.tsx` 取代 Startup，ASCII 蜂巢铺满视口，从中央王台向外点火，字标逐列显示，持续 900 毫秒后直接进入工作面；可跳过并传递可打印字符。reduced motion、TERM=dumb 或有初始任务时跳过，尺寸不足时降级为单行或 ROAST。
+- `honeycomb.ts` 是纯平顶六边形生成器：蜂房宽 L+2s、高 2s+1，原点为 x=c(L+s)+dx、y=2sq+(奇数列?s:0)+dy，共享边字符一致；四周多生成一圈再裁剪。按 XL / L / M / S 档生成，王台剔除交叠蜂房，选取正上方最近的完整蜂王格。几何按 columns、rows、tier 缓存，限制 8 项。
+- `wordmark.ts` 的 Big 字标由 R/O/A/S/T 五块逐行拼接，每块间一空格，六行各 48 列。`ignition-frame.ts` 按归一化距离计算点火时间，热度用 @/#/*/+/:/.，约 18% 固定 hash 余烬不闪烁；每行同样式连续字符合成 span，避免逐字符 React 元素。缩放只换几何，不重置 900ms 时钟；mono 仅用粗体与暗色。
+- `terminal.tsx` 提供 ASCII、减少动画、gutter、mouse 和 hints 偏好；TERM=dumb 自动启用 ASCII 和减少动画。
 
 ### 命令
 
