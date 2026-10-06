@@ -56,6 +56,24 @@ async function frameContains(tty: Terminal, text: string) {
 }
 
 describe('fullscreen workspace in real Ink', () => {
+  it('Ctrl+C clears a draft before arming exit, and queued input returns on interruption', async () => {
+    const { tty, stdin, draft, store } = workspace();
+    await tick(); stdin.write('preserved'); await frameContains(tty, 'preserved'); stdin.write('\x03');
+    await frameContains(tty, '已清空'); expect(draft.state?.lines.join('')).toBe('');
+    controller.notify('startup update'); await frameContains(tty, 'startup update');
+    expect(store.getState().agents.main!.items.at(-1)).toMatchObject({ kind: 'notice', quiet: true });
+  });
+  it('shows queued messages, removes delivered messages and restores interrupted text', async () => {
+    const cwd = session.log.header.cwd, config = session.config; await session.shutdown();
+    const providers = new ProviderRegistry(); providers.register('p', new ScriptedProvider([toolCallScript('r', 'read', { path: 'a' }), textScript('done')], { chunkDelayMs: 80 }));
+    session = await createSession({ cwd, config, providers });
+    const { tty, store, draft } = workspace(); controller.submit('start', 'start');
+    await tick(40); controller.submit('queued first', 'queued first'); controller.submit('queued second', 'queued second');
+    await frameContains(tty, '已排队 2 条'); expect(store.getState().meta.queued).toEqual(['queued first', 'queued second']);
+    controller.ctrlC('draft'); await controller.whenIdle(); store.flush(); await tick();
+    expect(store.getState().meta.queued).toEqual([]);
+    expect(draft.state?.lines.join('\n')).toBe('queued first\nqueued second');
+  });
   it.each([[40, 12], [80, 24], [120, 40], [200, 60]])('Hive fits %i×%i, reflows on resize and keeps printable shortcuts in the draft', async (columns, rows) => {
     const store = createUiStore(); controller = createUiController(session, store, { exit() {} });
     const tty = new Terminal(columns, rows), stdin = new Input(), draft: { seed?: number; state?: EditorState } = {};
@@ -201,11 +219,11 @@ describe('fullscreen workspace in real Ink', () => {
   it('renders the character startup, accepts a typed skip and stops animation timers', async () => {
     session.config.ui = { motion: 'full' };
     const { tty, stdin, draft } = workspace(80, 24, true);
-    await vi.waitFor(() => expect(tty.frames().at(-1)).toContain('TERMINAL WORKSPACE'));
+    await vi.waitFor(() => expect(tty.frames().at(-1)).toContain('__'));
     await instance!.waitUntilRenderFlush();
     for (const character of ['a', 'b', 'c']) stdin.write(character);
     await vi.waitFor(() => expect(draft.state?.lines.join('\n')).toBe('abc'));
-    await instance!.waitUntilRenderFlush(); expect(tty.frames().at(-1)).not.toContain('TERMINAL WORKSPACE');
+    await instance!.waitUntilRenderFlush(); expect(tty.frames().at(-1)).not.toContain('\\__/  \\__/');
     fits(tty); expect(tty.chunks.join('')).not.toContain('\x1b[2J');
     await tick(300); const frames = tty.frames().length; await tick(100); expect(tty.frames().length).toBe(frames);
   });

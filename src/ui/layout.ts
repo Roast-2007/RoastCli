@@ -19,7 +19,7 @@ export function inlineLayout(rows: number, content: { tools: number; todos: numb
 /** Fullscreen keeps one spare terminal row so Windows never scrolls a painted frame. */
 export function fullscreenLayout(rows: number, content: { interaction: boolean; detail: boolean; todos: boolean; agents: boolean }) {
   const height = Math.max(1, rows - 1);
-  const header = height >= 11 ? 2 : height >= 5 ? 1 : 0;
+  const header = height >= 5 ? 1 : 0;
   const status = height >= 3 ? 1 : 0;
   let left = height - header - status;
   const input = Math.min(Math.max(1, left - 1), content.interaction ? 16 : Math.max(1, Math.min(7, Math.floor(rows / 6))));

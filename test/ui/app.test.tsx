@@ -68,7 +68,7 @@ describe('App', () => {
     const { session } = await makeSession([textScript('# 结论\n\n一切**正常**。')]);
     const { stdin, lastFrame, frames, unmount } = render(<App session={session} />);
     await sleep(50);
-    expect(frames.join('\n')).toContain('R O A S T');
+    expect(frames.join('\n')).toContain('ROAST');
     stdin.write('你好');
     await sleep(30);
     stdin.write('\r');

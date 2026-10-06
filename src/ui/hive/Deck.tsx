@@ -8,7 +8,7 @@ import type { UiStore } from '../store/store.js';
 import { ThemeContext, pickTheme, useTheme } from '../theme.js';
 import { TerminalContext, terminalPreferences, useTerminal } from '../terminal.js';
 import { InputBox } from '../input/InputBox.js';
-import { createEditor, editorReducer, type EditorState } from '../input/editor.js';
+import { createEditor, editorReducer, textOf, type EditorState } from '../input/editor.js';
 import { suggestions } from '../input/suggest.js';
 import { loadHistory } from '../input/history.js';
 import { FileIndex } from '../input/files.js';
@@ -28,6 +28,8 @@ import { MissionPane, missionLines } from './MissionPane.js';
 import { SignalsPane, signalLines } from './SignalsPane.js';
 import { Pane, paneMaxOffset } from './Pane.js';
 import { latestMission, missionPhase } from './phase.js';
+import { Ignition } from './Ignition.js';
+import { QueueLine } from './QueueLine.js';
 
 export interface DeckProps { session: Session; store: UiStore; controller: UiController; onExit(): void; inputDraft?: { seed?: number; state?: EditorState }; initialPrompt?: RuntimeInput; startup?: boolean }
 export function Deck(props: DeckProps) {
@@ -36,11 +38,12 @@ export function Deck(props: DeckProps) {
   const terminal = useMemo(() => terminalPreferences(process.env, props.session.config.ui), [props.session]);
   return <ThemeContext.Provider value={theme}><TerminalContext.Provider value={terminal}><Workspace {...props} /></TerminalContext.Provider></ThemeContext.Provider>;
 }
-function Workspace({ session, store, controller, onExit, inputDraft, initialPrompt }: DeckProps) {
-  const { exit } = useApp(), theme = useTheme(), { ascii } = useTerminal();
+function Workspace({ session, store, controller, onExit, inputDraft, initialPrompt, startup }: DeckProps) {
+  const { exit } = useApp(), theme = useTheme(), { ascii, motion } = useTerminal();
   const { rows, columns } = useWindowSize();
   const ui = useSyncExternalStore(store.subscribe, store.getState), main = ui.agents.main!;
   const localDraft = useRef<{ seed?: number; state?: EditorState }>({}), draft = inputDraft ?? localDraft.current;
+  const [splash, setSplash] = useState(Boolean(startup && motion && !initialPrompt));
   const [focus, setFocus] = useState<DeckFocus>('input'), focusRef = useRef(focus);
   const changeFocus = (next: DeckFocus) => { focusRef.current = next; setFocus(next); };
   const [selected, setSelected] = useState('main'), [tab, setTab] = useState(0), [narrow, setNarrow] = useState(1);
@@ -75,7 +78,7 @@ function Workspace({ session, store, controller, onExit, inputDraft, initialProm
     const wheel = mouseWheel(input);
     if (wheel !== null) { if (!wheel || detail) return; if (focusRef.current === 'colony') setColonyOffset((n) => Math.max(0, Math.min(colonyMax, n + wheel))); else move(-wheel); return; }
     if (key.ctrl && input === 'g') return onExit();
-    if (key.ctrl && input === 'c') return controller.isRunning() ? controller.interrupt() : exit();
+    if (key.ctrl && input === 'c') { if (controller.ctrlC(draft.state ? textOf(draft.state) : '') === 'clear') { draft.state = editorReducer(draft.state ?? createEditor(history), { type: 'set', text: '' }); store.setMeta((m) => ({ inputSeed: { key: m.inputSeed.key + 1, text: '', screen: 'hive' } })); draft.seed = store.getState().meta.inputSeed.key; } return; }
     if (key.tab && key.shift) return controller.cycleMode();
     if (key.ctrl && input === 'o') return setDetail((value) => !value);
     if (detail) { if (key.escape) setDetail(false); return; }
@@ -114,9 +117,10 @@ function Workspace({ session, store, controller, onExit, inputDraft, initialProm
     if (key.pageDown || input === 'f') move(-Math.max(1, layout.body - 4));
     if (key.home || input === 'g') move(focusRef.current === 'signals' ? signalMax : maxOffset);
     if (key.end || input === 'G') move(-(focusRef.current === 'signals' ? signalMax : maxOffset));
-  }, { isActive: !card && !ui.meta.overlay });
+  }, { isActive: !splash && !card && !ui.meta.overlay });
   const cost = session.cost(), runningChildren = agents.filter((agent) => agent.parentId && ['queued', 'running', 'waiting', 'paused'].includes(agent.state)).length;
   const center = <MissionPane session={session} ui={ui} tab={tab} selected={current?.id ?? 'main'} height={layout.body} width={layout.mission} focused={focus === 'mission'} offset={offset} narrow={layout.narrow} signals={!layout.signals && !layout.narrow} />;
+  if (splash) return <Ignition session={session} height={layout.height} columns={columns} onExit={exit} onDone={(text) => { if (text) { draft.seed = ui.meta.inputSeed.key; draft.state = editorReducer(draft.state ?? createEditor(history), { type: 'insert', text }); } setSplash(false); }} />;
   return <Box height={layout.height} width={columns} flexDirection="column" overflow="hidden">
     {layout.header ? <Text bold color={theme.accent} wrap="truncate-end">ROAST HIVE v{VERSION} · {session.providerName}:{session.model} · {path.basename(cwd)} {branch ? `⎇ ${branch}` : ''} · {phase}{mission ? ` #${mission.missionId.slice(1)} · ${mission.strategy} · ${mission.goal}` : ''}</Text> : null}
     {ui.meta.overlay && !card ? <Overlay kind={ui.meta.overlay} session={session} store={store} controller={controller} height={layout.body + layout.input} /> : <>
@@ -126,9 +130,9 @@ function Workspace({ session, store, controller, onExit, inputDraft, initialProm
         {layout.signals > 0 ? <SignalsPane session={session} ui={ui} height={layout.body} width={layout.signals} focused={focus === 'signals'} offset={signalOffset} /> : null}
       </Box> : null}
       <Box height={layout.input} flexShrink={0} flexDirection="column" overflow="hidden">
-        {card ? <InteractionCard key={card.id} request={card} maxHeight={layout.input} onRespond={(response) => controller.respond(card, response)} /> : <>
-          {layout.input >= 4 ? <Text dimColor wrap="truncate-end">策略 {ui.meta.strategy ?? 'auto'} · n {ui.meta.n ?? 3}</Text> : null}
-          <InputBox key={ui.meta.inputSeed.key} active={focus === 'input' && !detail} acceptInput={() => focusRef.current === 'input' && !detail && !store.getState().meta.overlay && !store.getState().meta.interactions.length} placeholder={main.running ? '插话，或 @成员 发指示' : '输入目标'} initialHistory={history} initialText={ui.meta.inputSeed.text} initialState={draft.seed === ui.meta.inputSeed.key ? draft.state : undefined} onStateChange={(state) => { draft.seed = ui.meta.inputSeed.key; draft.state = state; }} deps={deps} maxHeight={layout.input - (layout.input >= 4 ? 1 : 0)} onHelp={() => store.setMeta({ overlay: 'help' })} onSubmit={(text, raw) => controller.submit(text, raw)} />
+        {card ? <InteractionCard key={card.id} request={card} maxHeight={layout.input} onInterrupt={() => controller.ctrlC('')} onRespond={(response) => controller.respond(card, response)} /> : <>
+          {ui.meta.queued.length && layout.input >= 2 ? <QueueLine texts={ui.meta.queued} /> : layout.input >= 4 ? <Text dimColor wrap="truncate-end">策略 {ui.meta.strategy ?? 'auto'} · n {ui.meta.n ?? 3}</Text> : null}
+          <InputBox key={ui.meta.inputSeed.key} active={focus === 'input' && !detail} acceptInput={() => focusRef.current === 'input' && !detail && !store.getState().meta.overlay && !store.getState().meta.interactions.length} placeholder={main.running ? '插话，或 @成员 发指示' : '输入目标'} initialHistory={history} initialText={ui.meta.inputSeed.screen && ui.meta.inputSeed.screen !== 'hive' ? '' : ui.meta.inputSeed.text} initialState={draft.seed === ui.meta.inputSeed.key || (ui.meta.inputSeed.screen && ui.meta.inputSeed.screen !== 'hive') ? draft.state : undefined} onStateChange={(state) => { draft.seed = ui.meta.inputSeed.key; draft.state = state; }} deps={deps} maxHeight={layout.input - (layout.input >= 4 || (layout.input >= 2 && ui.meta.queued.length) ? 1 : 0)} onHelp={() => store.setMeta({ overlay: 'help' })} onSubmit={(text, raw) => controller.submit(text, raw)} />
         </>}
       </Box>
     </>}

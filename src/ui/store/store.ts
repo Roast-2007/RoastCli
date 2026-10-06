@@ -19,7 +19,8 @@ export interface UiMeta {
   /** 消息总线时间线（最近若干条） */
   messages: Envelope[];
   /** 输入框重置种子（中断后放回的排队插话） */
-  inputSeed: { key: number; text: string };
+  inputSeed: { key: number; text: string; screen?: 'inline' | 'hive' | 'providers' };
+  queued: string[];
   running: boolean;
   screen: 'inline' | 'hive' | 'providers';
   strategy?: string;
@@ -36,7 +37,7 @@ export interface UiStoreState {
 }
 
 export function defaultMeta(): UiMeta {
-  return { interactions: [], mode: 'default', contextPercent: 0, swarm: [], messages: [], inputSeed: { key: 0, text: '' }, running: false, screen: 'inline', overlay: null };
+  return { interactions: [], mode: 'default', contextPercent: 0, swarm: [], messages: [], inputSeed: { key: 0, text: '' }, queued: [], running: false, screen: 'inline', overlay: null };
 }
 
 export interface UiStore {
@@ -44,7 +45,7 @@ export interface UiStore {
   subscribe(listener: () => void): () => void;
   pushEvent(agentId: string, ev: UiEvent): void;
   addUser(agentId: string, text: string): void;
-  addNotice(agentId: string, text: string, tone?: Tone): void;
+  addNotice(agentId: string, text: string, tone?: Tone, quiet?: boolean): void;
   setMeta(patch: Partial<UiMeta> | ((m: UiMeta) => Partial<UiMeta>)): void;
   setFocus(agentId: string): void;
   /** 立即应用缓冲中的事件 */
@@ -111,9 +112,9 @@ export function createUiStore(opts: UiStoreOptions = {}): UiStore {
       update(agentId, (v) => pushItems(v, { kind: 'user', text }));
       emit();
     },
-    addNotice(agentId, text, tone = 'info') {
+    addNotice(agentId, text, tone = 'info', quiet = false) {
       flush();
-      update(agentId, (v) => pushItems(v, { kind: 'notice', text, tone }));
+      update(agentId, (v) => pushItems(v, { kind: 'notice', text, tone, quiet }));
       emit();
     },
     setMeta(patch) {

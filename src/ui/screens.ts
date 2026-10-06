@@ -161,7 +161,7 @@ export async function runInteractive(session: Session, opts: { initialPrompt?: i
       session = next;
       store = createUiStore();
       controller = makeController();
-      if (availableUpdate) store.addNotice('main', updateNotice(availableUpdate), 'info');
+      if (availableUpdate) controller.notify(updateNotice(availableUpdate));
       delete inputDraft.seed; delete inputDraft.state;
       delete hiveDraft.seed; delete hiveDraft.state;
       printedUpTo = undefined;
@@ -184,7 +184,7 @@ export async function runInteractive(session: Session, opts: { initialPrompt?: i
     void checkForUpdate({ signal: updateAbort.signal }).then((release) => {
       if (quitRequested || updateAbort.signal.aborted || !release) return;
       availableUpdate = release;
-      store.addNotice('main', updateNotice(release), 'info');
+      controller.notify(updateNotice(release));
     });
     await quit;
   } finally {

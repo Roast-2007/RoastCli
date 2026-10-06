@@ -6,39 +6,22 @@ import type { TokenUsage } from '../../core/types.js';
 import type { PermissionMode } from '../../tools/permissions/engine.js';
 import type { TodoItem } from '../../tools/interact/index.js';
 import type { AgentInfo } from '../../swarm/types.js';
-import { gradientChars, useTheme } from '../theme.js';
+import { useTheme } from '../theme.js';
 import { useSpinner } from './useSpinner.js';
 import { displayWidth, truncateDisplay } from '../../core/text-width.js';
 import { terminalText } from '../../core/terminal-text.js';
 import { useTerminal, useGlyphs } from '../terminal.js';
 import { VERSION } from '../../core/version.js';
+import path from 'node:path';
+import { gitBranch } from '../status-info.js';
+import { statusText } from '../hive/status.js';
 
-const LOGO = 'R O A S T';
-
-export function Banner({ model, cwd, resumed, warnings }: { model: string; cwd: string; resumed?: string; warnings: string[] }) {
+export function Banner({ model, cwd }: { model: string; cwd: string; resumed?: string; warnings: string[] }) {
   const theme = useTheme();
-  const { ascii } = useTerminal();
-  const glyph = useGlyphs();
   const { columns } = useWindowSize();
+  const branch = gitBranch(cwd);
   return (
-    <Box flexDirection="column" marginBottom={1}>
-      <Text>
-        {gradientChars(ascii ? LOGO : `🔥 ${LOGO}`, theme.gradient).map((c, i) => (
-          <Text key={i} color={c.color} bold>
-            {c.ch}
-          </Text>
-        ))}
-        <Text dimColor>  v{VERSION} · {truncateDisplay(model, Math.max(0, columns - 23 - VERSION.length))}</Text>
-      </Text>
-      <Text dimColor wrap="truncate-middle">{terminalText(cwd)}</Text>
-      {resumed ? <Text color={theme.info}>{ascii ? '>' : '↺'} {resumed}</Text> : null}
-      {warnings.map((w, i) => (
-        <Text key={i} color={theme.warn}>
-          {glyph.warning} {terminalText(w)}
-        </Text>
-      ))}
-      <Text dimColor wrap="truncate-end">? 帮助 · / 命令 · @ 文件 · ! shell · # 记忆 · Shift+Tab 模式 · Esc 中断</Text>
-    </Box>
+    <Text color={theme.accent} bold wrap="truncate-end">{truncateDisplay(terminalText(`ROAST v${VERSION} · ${model} · ${path.basename(cwd)}${branch ? ` ⎇ ${branch}` : ''}`), columns)}</Text>
   );
 }
 
@@ -91,26 +74,22 @@ export function StatusLine(p: StatusLineProps) {
   const { columns } = useWindowSize();
   const frame = useSpinner(p.running);
   const glyph = useGlyphs();
+  const { ascii } = useTerminal();
   const m = MODE[p.mode];
   const color = theme[m.key] as string | undefined;
-  const lastIn = p.last ? p.last.input + p.last.cacheRead : 0;
-  const cacheHit = p.last && lastIn > 0 ? Math.round((p.last.cacheRead / lastIn) * 100) : null;
   const base = ` ${m.text} `;
-  const separator = ` ${glyph.separator} `;
   const percent = Math.max(0, Math.min(100, Number.isFinite(p.contextPercent) ? Math.round(p.contextPercent) : 0));
-  const gaugeWidth = columns >= 100 ? 6 : 0;
-  const model = ` ${truncateDisplay(p.model, Math.max(5, Math.floor(columns / 4)))}${separator}ctx `;
-  const primary = `${model}${'#'.repeat(gaugeWidth)}${gaugeWidth ? ' ' : ''}${percent}%`;
-  const activity = p.running ? `${separator}${frame} ${Math.floor(p.elapsedMs / 1000)}s · step ${p.step}` : `${separator}? 帮助`;
-  const parts = [p.agents ? `${separator}${p.agents} agents` : '', p.cost ? `${separator}${p.cost}` : '', `${separator}${glyph.up}${k(p.total.input + p.total.cacheRead)} ${glyph.down}${k(p.total.output)}`, cacheHit !== null ? `${separator}缓存 ${cacheHit}%` : '', p.branch ? `${separator}${glyph.branch} ${terminalText(p.branch)}` : ''];
-  let text = primary;
-  for (const part of parts) if (displayWidth(base + text + part + activity) <= columns) text += part;
+  const hive = p.agents ? ` HIVE ${p.agents} ` : '';
+  const parts = statusText(columns, displayWidth(base + hive), { percent, total: p.total, cost: p.cost, branch: p.branch, activity: p.running ? `${frame} ${Math.floor(p.elapsedMs / 1000)}s step ${p.step}` : '', separator: glyph.separator, up: glyph.up, down: glyph.down, branchGlyph: glyph.branch, ascii });
+  const rightWidth = displayWidth(parts.right);
   return (
     <Box flexShrink={0} height={1} overflow="hidden">
       <Text color={color} inverse bold>
         {` ${m.text} `}
       </Text>
-      {p.toast ? <Text color={p.toast.tone === 'error' ? theme.danger : p.toast.tone === 'warn' ? theme.warn : p.toast.tone === 'success' ? theme.success : theme.info} wrap="truncate-end"> {terminalText(p.toast.text)}</Text> : gaugeWidth ? <Text dimColor wrap="truncate-end">{model}<Gauge percent={percent} width={gaugeWidth} />{text.slice(primary.length)}{activity}</Text> : <Text dimColor wrap="truncate-end">{truncateDisplay(text + activity, Math.max(0, columns - displayWidth(base)))}</Text>}
+      {hive ? <Text color={theme.accent2} inverse bold>{hive}</Text> : null}
+      <Box flexGrow={1} overflow="hidden"><Text color={p.toast ? p.toast.tone === 'error' ? theme.danger : p.toast.tone === 'warn' ? theme.warn : theme.info : theme.muted} wrap="truncate-end"> {p.toast ? truncateDisplay(terminalText(p.toast.text), Math.max(0, columns - displayWidth(base + hive) - rightWidth - 1)) : parts.left}</Text></Box>
+      <Box width={rightWidth} flexShrink={0}><Text dimColor wrap="truncate-end">{parts.right}</Text></Box>
     </Box>
   );
 }
@@ -128,14 +107,14 @@ export function AgentsPanel({ agents, activity, maxHeight = 11 }: { agents: Agen
   return (
     <Box flexDirection="column" borderStyle={border ? ascii ? 'classic' : 'round' : undefined} borderColor={theme.border} paddingX={border ? 1 : 0} flexShrink={0}>
       <Text color={theme.accent} bold>
-        Hive · {children.filter((a) => a.state === 'done').length}/{children.length} 完成
+        HIVE {children.filter((a) => ['running', 'queued', 'waiting', 'paused'].includes(a.state)).length}/{children.length} · Ctrl+G 指挥台
       </Text>
       {children.filter((a) => ['running', 'queued', 'waiting', 'paused'].includes(a.state)).slice(0, Math.max(0, maxHeight - 1 - (border ? 2 : 0))).map((a) => (
         <Text key={a.id} wrap="truncate-end">
           {'  '.repeat(Math.max(0, a.depth - 1))}
           <Text color={color(a.state)}>{ascii ? a.state === 'paused' ? '||' : '*' : AGENT_ICON[a.state]}</Text> <Text bold>{a.id}</Text> <Text dimColor>[{a.role}]</Text>{' '}
           <Text color={theme.tool}>{a.waitingFor ?? (a.state === 'running' ? activity(a.id) : a.report ? a.report.status : a.state)}</Text>{' '}
-          <Text dimColor>{terminalText(a.brief).replace(/\s+/g, ' ').slice(0, 40)}</Text>
+          <Text dimColor>{Math.floor(((a.endedAt ?? Date.now()) - a.startedAt) / 1000)}s</Text>
         </Text>
       ))}
     </Box>

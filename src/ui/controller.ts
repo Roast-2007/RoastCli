@@ -15,12 +15,15 @@ import type { RuntimeInput } from '../agent/runtime.js';
 import { loadStrategies, missionInput, DEFAULT_STRATEGY, DEFAULT_N } from '../swarm/strategies.js';
 import { isProjectTrusted, roastHome } from '../core/config.js';
 import { agentInstruction } from './hive/focus.js';
+import { ctrlC, type InterruptAction } from './hive/interrupt.js';
 
 const TIMELINE_MAX = 50;
 
 export interface UiController {
   submit(text: RuntimeInput, raw: string): void;
   interrupt(): void;
+  ctrlC(draft: string): InterruptAction;
+  notify(text: string, tone?: 'info' | 'warn'): void;
   respond(req: InteractionRequest, response: InteractionResponse): void;
   cycleMode(): void;
   /** 执行一条斜杠命令（不写入输入历史），如 Esc Esc 打开回退列表 */
@@ -42,15 +45,18 @@ export function createUiController(session: Session, store: UiStore, opts: { exi
   let running = false;
   let pending: Promise<void> = Promise.resolve();
   let shellRunning = false;
+  let quitArmedAt: number | null = null;
   const offs: (() => void)[] = [];
   let toastTimer: ReturnType<typeof setTimeout> | undefined;
-  const toast = (text: string, tone: 'info' | 'success' = 'info') => {
+  const toast = (text: string, tone: 'info' | 'success' | 'warn' = 'info', duration = 3000) => {
     clearTimeout(toastTimer);
     store.setMeta({ toast: { text, tone } });
-    toastTimer = setTimeout(() => { toastTimer = undefined; store.setMeta({ toast: null }); }, 3000);
+    toastTimer = setTimeout(() => { toastTimer = undefined; store.setMeta({ toast: null }); }, duration);
     toastTimer.unref?.();
   };
   if (session.resumedFrom && store.getState().agents['main']!.items.length === 0) store.restore('main', session.initialEvents);
+  const notify = (text: string, tone: 'info' | 'warn' = 'info') => { store.addNotice('main', text, tone, true); toast(text, tone, 6000); };
+  for (const warning of session.startupWarnings) notify(warning, 'warn');
 
   store.setMeta({ mode: session.permissions.mode, contextPercent: session.contextStats().percent, swarm: session.swarm.tree(), interactions: session.broker.pending(), strategy: session.config.swarm.strategy ?? DEFAULT_STRATEGY, n: session.config.swarm.n ?? DEFAULT_N });
   const refreshInteractions = () => store.setMeta({ interactions: session.broker.pending() });
@@ -84,9 +90,12 @@ export function createUiController(session: Session, store: UiStore, opts: { exi
     const controller = new AbortController();
     abort = controller;
     try {
+      let started = false;
       for await (const ev of session.loop.run(text, controller.signal)) {
+        if (ev.type === 'turn-start') { if (started) store.setMeta((m) => ({ queued: m.queued.slice(1) })); started = true; }
         store.pushEvent('main', ev);
-        if (ev.type === 'queue-restored') store.setMeta((m) => ({ inputSeed: { key: m.inputSeed.key + 1, text: ev.texts.join('\n') } }));
+        if (ev.type === 'queue-restored') store.setMeta((m) => ({ queued: [], inputSeed: { key: m.inputSeed.key + 1, text: ev.texts.join('\n'), screen: m.screen } }));
+        if (ev.type === 'user-injected') store.setMeta((m) => ({ queued: m.queued.slice(1) }));
         if (ev.type === 'usage' || ev.type === 'turn-end') store.setMeta({ contextPercent: session.contextStats().percent });
         if (ev.type === 'turn-end') pruneInteractions();
       }
@@ -95,7 +104,7 @@ export function createUiController(session: Session, store: UiStore, opts: { exi
     } finally {
       running = false;
       abort = null;
-      store.setMeta({ running: false });
+      store.setMeta({ running: false, queued: [] });
     }
   }
 
@@ -135,7 +144,7 @@ export function createUiController(session: Session, store: UiStore, opts: { exi
       store.addNotice('main', 'shell 正在执行，消息已保留在输入框；结束后可发送', 'info');
       return;
     }
-    if (running && session.loop.enqueue(text)) return store.addNotice('main', `⏳ 已排队，将在下一步送达：${shown.slice(0, 200)}`, 'info');
+    if (running && session.loop.enqueue(text)) return store.setMeta((m) => ({ queued: [...m.queued, shown] }));
     if (typeof text === 'string' || !('kind' in text)) store.addUser('main', shown);
     pending = runTurn(text);
   }
@@ -188,6 +197,15 @@ export function createUiController(session: Session, store: UiStore, opts: { exi
     interrupt() {
       if (running) abort?.abort();
     },
+    ctrlC(draft) {
+      const result = ctrlC(running, draft, quitArmedAt, Date.now()); quitArmedAt = result.armedAt;
+      if (result.action === 'interrupt') abort?.abort();
+      if (result.action === 'exit') opts.exit();
+      if (result.action === 'clear') toast('已清空 · 再按 Ctrl+C 退出');
+      if (result.action === 'hint') toast('再按一次 Ctrl+C 退出');
+      return result.action;
+    },
+    notify,
     respond(req, response) {
       if (session.broker.respond(req.id, response)) toast('已提交回答', 'success');
     },

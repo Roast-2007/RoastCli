@@ -31,7 +31,7 @@ function itemLines(item: DisplayItem, ascii = false): Line[] {
     case 'tool-group':
       return item.tools.map((tool) => ({ text: `${ascii ? '+' : '✓'} ${tool.name} ${argSummary(tool.name, tool.args)}`, tone: 'ok' as const }));
     case 'notice':
-      return [{ text: `${ascii ? '*' : '•'} ${item.text.split('\n')[0]}`, tone: item.tone === 'error' ? 'error' : item.tone === 'warn' ? 'warn' : 'muted' }];
+      return item.quiet ? [] : [{ text: `${ascii ? '*' : '•'} ${item.text.split('\n')[0]}`, tone: item.tone === 'error' ? 'error' : item.tone === 'warn' ? 'warn' : 'muted' }];
     case 'turn-summary':
       return [{ text: `${ascii ? '*' : '✻'} ${(item.durationMs / 1000).toFixed(1)}s · ${item.reason}`, tone: 'muted' }];
   }

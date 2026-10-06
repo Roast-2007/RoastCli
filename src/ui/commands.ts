@@ -12,7 +12,8 @@ import type { UiStore, OverlayKind } from './store/store.js';
 import { findRunLog } from '../cli/logs.js';
 import { logsRootOf } from '../agent/session.js';
 import { formatContextStats } from './format-context.js';
-import { formatCost } from './status-info.js';
+import { formatCost, gitBranch } from './status-info.js';
+import { VERSION } from '../core/version.js';
 import { formatUsageBreakdown } from '../core/usage-cost.js';
 import { parseRoleModels } from '../swarm/model-routing.js';
 import { pickTheme, THEMES } from './theme.js';
@@ -43,7 +44,7 @@ export const KEYS_HELP = [
   '快捷键：',
   '  Enter 发送 · Shift+Enter / Ctrl+J / 行尾 \\ 换行 · ↑↓ 选择 · Tab 补全 · Ctrl+R 搜索历史',
   '  ? / F1 帮助 · Esc 中断（空闲时连按两次：回退菜单）· Ctrl+C 中断 / 退出',
-  '  Shift+Tab 切换权限模式 · Ctrl+O 最近工具的完整输出 · Ctrl+G Mission Control',
+  '  Shift+Tab 切换权限模式 · Ctrl+O 最近工具的完整输出 · Ctrl+G Deck / Chat',
   '  鼠标滚轮翻阅聊天 · Shift+↑↓ / PgUp 阅读 · Home 顶部 · End / Enter / Esc 返回输入',
   '  前缀：/ 命令 · @ 文件 · ! shell · # 记忆',
 ].join('\n');
@@ -115,6 +116,10 @@ async function rewind(ctx: CommandContext, arg: string): Promise<void> {
 }
 
 export const COMMANDS: SlashCommand[] = [
+  { name: 'status', description: '版本、模型、目录、信任和 Hive 设置', run: (ctx) => {
+    const s = ctx.session, meta = ctx.store.getState().meta, cwd = s.log.header.cwd;
+    say(ctx, `RoastCli v${VERSION}\n模型：${s.providerName}:${s.model}\ncwd：${cwd}\n分支：${gitBranch(cwd) ?? '—'}\n信任：${isProjectTrusted(cwd) ? '已信任' : '未信任'}\n权限：${s.permissions.mode}\n首页：${s.config.ui?.home ?? 'hive'}\n策略：${meta.strategy ?? 'auto'} · n ${meta.n ?? 3}\nmaxAgents：${s.config.swarm.maxAgents}\nworktree：${s.config.swarm.worktrees === false ? '关' : '开'}`);
+  } },
   { name: 'clear', description: '清空显示，保留会话上下文和草稿', run: (ctx) => ctx.clearScreen ? ctx.clearScreen() : say(ctx, '当前界面不支持清屏') },
   { name: 'resume', description: '选择历史会话，或按运行 ID 恢复', args: '[runId]', run: (ctx, args) => {
     if (!args) return ctx.openOverlay ? ctx.openOverlay('sessions') : say(ctx, '使用 roast -c 继续最近会话，或 roast -r <runId>');

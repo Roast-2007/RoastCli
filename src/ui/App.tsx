@@ -21,7 +21,8 @@ import { FileIndex } from './input/files.js';
 import { loadHistory } from './input/history.js';
 import { COMMANDS, skillCommands, mcpPromptCommands } from './commands.js';
 import { pickTheme, ThemeContext, useTheme } from './theme.js';
-import type { EditorState } from './input/editor.js';
+import { createEditor, editorReducer, textOf, type EditorState } from './input/editor.js';
+import { QueueLine } from './hive/QueueLine.js';
 import { inlineLayout } from './layout.js';
 import { TerminalContext, terminalPreferences, useGlyphs } from './terminal.js';
 import { Overlay } from './components/Overlay.js';
@@ -75,6 +76,7 @@ function Item({ item, session, columns }: { item: StaticEntry; session: Session;
     case 'tool-group':
       return <Text wrap="truncate-end" color={theme.tool}>{glyph.ok} {item.tools[0]?.name} ×{item.tools.length} <Text dimColor>{item.tools.map((tool) => terminalText(String((tool.args as { path?: string } | undefined)?.path ?? ''))).filter(Boolean).join(' · ')}</Text></Text>;
     case 'notice':
+      if (item.quiet) return null;
       return (
         <Text color={item.tone === 'error' ? theme.danger : item.tone === 'warn' ? theme.warn : item.tone === 'success' ? theme.success : theme.info}>
           {toneIcon[item.tone]} {terminalText(item.text)}
@@ -123,7 +125,7 @@ const DOUBLE_ESC_MS = 600;
  * 全局按键：Shift+Tab 切换模式 · Esc 中断（空闲时连按两次打开回退列表）· Ctrl+O 工具输出详情 ·
  * Ctrl+G Mission Control · Ctrl+C 中断 / 退出
  */
-function useShellKeys(opts: { controller: UiController; exit(): void; active: boolean; onToggleDetail(): void; onMissionControl?: () => void; onHelp(): void }) {
+function useShellKeys(opts: { controller: UiController; onCtrlC(): void; active: boolean; onToggleDetail(): void; onMissionControl?: () => void; onHelp(): void }) {
   const lastEsc = useRef(0);
   const { stdin } = useStdin();
   useEffect(() => {
@@ -148,7 +150,7 @@ function useShellKeys(opts: { controller: UiController; exit(): void; active: bo
       }
       if (key.ctrl && ch === 'o') return opts.onToggleDetail();
       if (key.ctrl && ch === 'g' && opts.onMissionControl) return opts.onMissionControl();
-      if (key.ctrl && ch === 'c') return controller.isRunning() ? controller.interrupt() : opts.exit();
+      if (key.ctrl && ch === 'c') return opts.onCtrlC();
     },
     { isActive: opts.active },
   );
@@ -180,7 +182,7 @@ function Shell({ session, store: externalStore, controller: externalController, 
 
   const card = meta.interactions[0];
   const [detail, setDetail] = useState(false);
-  useShellKeys({ controller, exit, active: card === undefined && meta.overlay === null, onToggleDetail: () => setDetail((d) => !d), onHelp: () => store.setMeta({ overlay: 'help' }), ...(onMissionControl ? { onMissionControl } : {}) });
+  useShellKeys({ controller, onCtrlC: () => { if (controller.ctrlC(draft.state ? textOf(draft.state) : '') === 'clear') { draft.state = editorReducer(draft.state ?? createEditor(history), { type: 'set', text: '' }); store.setMeta((m) => ({ inputSeed: { key: m.inputSeed.key + 1, text: '', screen: 'inline' } })); draft.seed = store.getState().meta.inputSeed.key; } }, active: card === undefined && meta.overlay === null, onToggleDetail: () => setDetail((d) => !d), onHelp: () => store.setMeta({ overlay: 'help' }), ...(onMissionControl ? { onMissionControl } : {}) });
 
   // roast swarm：启动后自动提交目标（只执行一次）
   const autoSubmitted = useRef(false);
@@ -231,14 +233,16 @@ function Shell({ session, store: externalStore, controller: externalController, 
       <TodoPanel todos={view.todos} maxHeight={layout.todos} />
       {detail && layout.detail > 0 ? <Box maxHeight={layout.detail} overflow="hidden" flexShrink={0}><ToolDetail key={lastTool(view)?.callId} tool={lastTool(view)} maxLines={layout.detail} active={!card} /></Box> : null}
       {card ? (
-        <InteractionCard key={card.id} request={card} maxHeight={layout.interaction} onRespond={(r) => controller.respond(card, r)} />
+        <InteractionCard key={card.id} request={card} maxHeight={layout.interaction} onInterrupt={() => controller.ctrlC('')} onRespond={(r) => controller.respond(card, r)} />
       ) : layout.input > 0 ? (
+        <Box height={layout.input} flexDirection="column" overflow="hidden">
+        <QueueLine texts={meta.queued} />
         <InputBox
           key={meta.inputSeed.key}
           active={!detail}
-          maxHeight={layout.input}
+          maxHeight={Math.max(1, layout.input - (meta.queued.length ? 1 : 0))}
           onHelp={() => store.setMeta({ overlay: 'help' })}
-          placeholder={view.running ? '运行中…回车可排队插话 · Esc 中断' : '输入消息 · /命令 · @文件 · !shell · #记忆 · Ctrl+G 蜂群面板'}
+          placeholder={view.running ? '插话' : '输入消息'}
           initialHistory={history}
           initialText={meta.inputSeed.text}
           initialState={draft.seed === meta.inputSeed.key ? draft.state : undefined}
@@ -246,6 +250,7 @@ function Shell({ session, store: externalStore, controller: externalController, 
           deps={deps}
           onSubmit={(text, raw) => controller.submit(text, raw)}
         />
+        </Box>
       ) : null}
       </>}
       {layout.status > 0 ? <StatusLine

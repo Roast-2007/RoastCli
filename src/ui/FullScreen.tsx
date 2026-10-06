@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import path from 'node:path';
 import { Box, Text, useApp, useInput, useStdin, useWindowSize } from 'ink';
 import type { AppProps } from './App.js';
 import { createUiStore } from './store/store.js';
@@ -16,10 +17,11 @@ import { truncateDisplay } from '../core/text-width.js';
 import { COMMANDS, skillCommands, mcpPromptCommands } from './commands.js';
 import { FileIndex } from './input/files.js';
 import { loadHistory } from './input/history.js';
-import { createEditor, editorReducer, type EditorState } from './input/editor.js';
+import { createEditor, editorReducer, textOf, type EditorState } from './input/editor.js';
 import { InputBox } from './input/InputBox.js';
 import { Overlay } from './components/Overlay.js';
-import { Startup, ROAST_LOGO } from './components/Startup.js';
+import { Ignition, ROAST_LOGO } from './hive/Ignition.js';
+import { QueueLine } from './hive/QueueLine.js';
 import { AgentsPanel, StatusLine, TodoPanel } from './components/Chrome.js';
 import { InteractionCard } from './components/InteractionCard.js';
 import { ToolDetail } from './components/ToolCard.js';
@@ -82,7 +84,7 @@ function Workspace({ session, store: storeProp, controller: controllerProp, inpu
       if (next === scroll.max) leaveReading(); else read();
       return;
     }
-    if (key.ctrl && input === 'c') return controller.isRunning() ? controller.interrupt() : exit();
+    if (key.ctrl && input === 'c') { if (controller.ctrlC(draft.state ? textOf(draft.state) : '') === 'clear') { draft.state = editorReducer(draft.state ?? createEditor(history), { type: 'set', text: '' }); store.setMeta((m) => ({ inputSeed: { key: m.inputSeed.key + 1, text: '', screen: 'inline' } })); draft.seed = store.getState().meta.inputSeed.key; } return; }
     if (key.tab && key.shift) return controller.cycleMode();
     if (key.ctrl && input === 'g') return onMissionControl?.();
     if (key.ctrl && input === 'o') { leaveReading(); detailRef.current = !detailRef.current; setDetail(detailRef.current); return; }
@@ -121,14 +123,13 @@ function Workspace({ session, store: storeProp, controller: controllerProp, inpu
     return undefined;
   }, [view.tools, view.items]);
 
-  if (splash) return <Startup height={layout.height} columns={columns} onExit={exit} onDone={(text) => {
+  if (splash) return <Ignition session={session} height={layout.height} columns={columns} onExit={exit} onDone={(text) => {
     if (text) { draft.seed = meta.inputSeed.key; draft.state = editorReducer(draft.state ?? createEditor(history), { type: 'insert', text }); }
     setSplash(false);
   }} />;
   return <Box height={layout.height} width={columns} flexDirection="column" overflow="hidden">
     {layout.header ? <Box height={layout.header} flexDirection="column" flexShrink={0} paddingX={columns >= 40 ? 1 : 0}>
-      <Text bold color={accent} wrap="truncate-end">{truncateDisplay(`R O A S T  v${VERSION} · ${session.providerName}:${session.model}${session.resumedFrom ? ' · 已恢复' : ''}`, columns - (columns >= 40 ? 2 : 0))}</Text>
-      {layout.header > 1 ? <Text dimColor wrap="truncate-middle">{terminalText(cwd)}</Text> : null}
+      <Text bold color={accent} wrap="truncate-end">{truncateDisplay(`ROAST v${VERSION} · ${session.providerName}:${session.model} · ${path.basename(cwd)}${branch ? ` ⎇ ${branch}` : ''}`, columns - (columns >= 40 ? 2 : 0))}</Text>
     </Box> : null}
     {meta.overlay && !card ? <Overlay key={meta.overlay} kind={meta.overlay} session={session} store={store} controller={controller} height={layout.height - layout.header - layout.status} /> : <>
       <Box height={layout.body} flexShrink={0} flexDirection="column" overflow="hidden" paddingX={padding}>
@@ -136,9 +137,9 @@ function Workspace({ session, store: storeProp, controller: controllerProp, inpu
       </Box>
       {layout.agents ? <AgentsPanel agents={meta.swarm} activity={(id) => ui.agents[id]?.tools[0]?.name ?? '运行中'} maxHeight={layout.agents} /> : null}
       {layout.todos ? <TodoPanel todos={view.todos} maxHeight={layout.todos} /> : null}
-      {layout.hint ? <Text color={reading ? theme.info : theme.muted} wrap="truncate-end">{detail ? '工具详情 · ↑↓ 滚动 · Ctrl+O 返回' : reading ? `阅读 · ${start + 1}–${Math.min(transcriptRows.length, start + count)}/${transcriptRows.length} · ↑↓ 滚动 · End/Enter/Esc 返回输入` : view.running ? `${spinner} 运行中 · Shift+↑↓ 滚动 · Esc 中断 · Enter 排队插话` : 'Shift+↑↓ / PgUp 阅读 · ? 帮助 · Ctrl+G Hive'}</Text> : null}
+      {layout.hint ? meta.queued.length ? <QueueLine texts={meta.queued} /> : <Text color={reading ? theme.info : theme.muted} wrap="truncate-end">{detail ? '工具详情 · ↑↓ 滚动 · Ctrl+O 返回' : reading ? `阅读 · ${start + 1}–${Math.min(transcriptRows.length, start + count)}/${transcriptRows.length} · ↑↓ 滚动 · End/Enter/Esc 返回输入` : view.running ? `${spinner} 运行中` : ' '}</Text> : null}
       <Box height={layout.input} flexShrink={0} overflow="hidden" flexDirection="column">
-        {card ? <InteractionCard key={card.id} request={card} maxHeight={layout.input} onRespond={(response) => controller.respond(card, response)} /> : <InputBox key={meta.inputSeed.key} active={ready && !reading && !detail} maxHeight={layout.input} acceptInput={() => !readingRef.current && !detailRef.current && !store.getState().meta.overlay && store.getState().meta.interactions.length === 0} placeholder={reading ? '阅读中 · Enter / Esc 返回输入' : view.running ? '运行中…回车可排队插话' : '输入消息 · /命令 · @文件 · !shell · #记忆'} initialHistory={history} initialText={meta.inputSeed.text} initialState={draft.seed === meta.inputSeed.key ? draft.state : undefined} onStateChange={(state) => { draft.seed = meta.inputSeed.key; draft.state = state; }} deps={deps} onHelp={() => store.setMeta({ overlay: 'help' })} onSubmit={(text, raw) => { leaveReading(); controller.submit(text, raw); }} />}
+        {card ? <InteractionCard key={card.id} request={card} maxHeight={layout.input} onInterrupt={() => controller.ctrlC('')} onRespond={(response) => controller.respond(card, response)} /> : <InputBox key={meta.inputSeed.key} active={ready && !reading && !detail} maxHeight={layout.input} acceptInput={() => !readingRef.current && !detailRef.current && !store.getState().meta.overlay && store.getState().meta.interactions.length === 0} placeholder={view.running ? '插话' : '输入消息'} initialHistory={history} initialText={meta.inputSeed.screen && meta.inputSeed.screen !== 'inline' ? '' : meta.inputSeed.text} initialState={draft.seed === meta.inputSeed.key || (meta.inputSeed.screen && meta.inputSeed.screen !== 'inline') ? draft.state : undefined} onStateChange={(state) => { draft.seed = meta.inputSeed.key; draft.state = state; }} deps={deps} onHelp={() => store.setMeta({ overlay: 'help' })} onSubmit={(text, raw) => { leaveReading(); controller.submit(text, raw); }} />}
       </Box>
     </>}
     {layout.status ? <StatusLine mode={meta.mode} model={`${session.providerName}:${session.model}`} contextPercent={meta.contextPercent} total={view.totalUsage} last={view.lastUsage} running={view.running} elapsedMs={view.turnStartedAt ? now - view.turnStartedAt : 0} step={view.step} branch={branch} cost={cost === null ? null : formatCost(cost)} toast={meta.toast} agents={meta.swarm.filter((a) => a.parentId && ['queued', 'running', 'waiting', 'paused'].includes(a.state)).length} /> : null}
@@ -149,8 +150,7 @@ function Welcome({ height, columns, warnings }: { height: number; columns: numbe
   const theme = useTheme();
   const logo = height >= 12 && columns >= 34 ? ROAST_LOGO : ['R O A S T'];
   return <Box height={height} flexDirection="column" justifyContent="center" overflow="hidden">
-    {logo.map((line, index) => <Text key={index} color={theme.accent} bold wrap="truncate-end">{truncateDisplay(line, columns)}</Text>)}
-    {height > logo.length + 1 ? <Text dimColor wrap="truncate-end">{truncateDisplay('开始一个任务，或输入 / 查看命令', columns)}</Text> : null}
+    {!warnings.length ? logo.map((line, index) => <Text key={index} dimColor wrap="truncate-end">{truncateDisplay(line, columns)}</Text>) : null}
     {warnings.slice(0, Math.max(0, height - logo.length - 2)).map((warning, index) => <Text key={index} color={theme.warn} wrap="truncate-end">{terminalText(warning)}</Text>)}
   </Box>;
 }

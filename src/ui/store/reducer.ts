@@ -32,7 +32,7 @@ export type DisplayItem =
   | { id: number; kind: 'reasoning'; text: string }
   | { id: number; kind: 'tool'; tool: ToolView }
   | { id: number; kind: 'tool-group'; tools: ToolView[] }
-  | { id: number; kind: 'notice'; text: string; tone: Tone }
+  | { id: number; kind: 'notice'; text: string; tone: Tone; quiet?: boolean }
   | { id: number; kind: 'turn-summary'; durationMs: number; usage: TokenUsage; reason: string };
 
 export interface AgentView {

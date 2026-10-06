@@ -25,7 +25,7 @@ export function itemRows(item: DisplayItem, width: number, ascii = false, spacin
     case 'user': return [[], ...wrapSpans([{ ...s(`${ascii ? '>' : '›'} ${item.text}`, 'user'), bold: true }], width)];
     case 'markdown': return markdownRows(item.text, width, ascii, spacing);
     case 'reasoning': return wrapSpans([s(`${ascii ? '...' : '💭'} ${item.text.replace(/\s+/g, ' ').slice(0, 200)}`, undefined, true)], width);
-    case 'notice': return wrapSpans([s(`${ascii ? '*' : '•'} ${item.text}`, item.tone === 'error' ? 'danger' : item.tone === 'warn' ? 'warn' : item.tone === 'success' ? 'success' : 'info')], width);
+    case 'notice': return item.quiet ? [] : wrapSpans([s(`${ascii ? '*' : '•'} ${item.text}`, item.tone === 'error' ? 'danger' : item.tone === 'warn' ? 'warn' : item.tone === 'success' ? 'success' : 'info')], width);
     case 'tool': return toolRows(item.tool, width, ascii);
     case 'tool-group': return item.tools.flatMap((tool) => toolRows(tool, width, ascii));
     case 'turn-summary': return wrapSpans([s(`${ascii ? '*' : '✻'} 用时 ${(item.durationMs / 1000).toFixed(1)}s · ${ascii ? '^' : '↑'}${item.usage.input + item.usage.cacheRead} ${ascii ? 'v' : '↓'}${item.usage.output}${item.reason === 'completed' ? '' : item.reason === 'aborted' ? ' · 已中断' : item.reason === 'max-steps' ? ' · 步数上限' : ' · 出错'}`, undefined, true)], width);

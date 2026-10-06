@@ -10,9 +10,9 @@ import { textOf } from '../input/editor.js';
 import { useScroll } from '../scroll.js';
 import { motionColor, useEntrance } from '../motion.js';
 
-interface Props { request: InteractionRequest; onRespond(response: InteractionResponse): void; maxHeight?: number }
+interface Props { request: InteractionRequest; onRespond(response: InteractionResponse): void; onInterrupt?(): void; maxHeight?: number }
 
-export function InteractionCard({ request, onRespond, maxHeight = 16 }: Props) {
+export function InteractionCard({ request, onRespond, onInterrupt, maxHeight = 16 }: Props) {
   const theme = useTheme();
   const { ascii } = useTerminal();
   const glyph = useGlyphs();
@@ -40,6 +40,7 @@ export function InteractionCard({ request, onRespond, maxHeight = 16 }: Props) {
   const scroll = useScroll(detail.length, detailHeight), { start } = scroll;
   useInput((input, key) => {
     if (responded.current) return;
+    if (key.ctrl && input === 'c' && onInterrupt) return onInterrupt();
     if (key.escape || (key.ctrl && input === 'c')) return respond(question ? { kind: 'question', answer: '（用户未作答）' } : { kind: 'permission', decision: 'deny' });
     if (key.pageUp || key.pageDown) return scroll.onKey(input, key);
     if (options.length && (key.upArrow || key.downArrow) && !draftRef.current) { selectionRef.current = (selectionRef.current + (key.upArrow ? options.length - 1 : 1)) % options.length; return setSelected(selectionRef.current); }
