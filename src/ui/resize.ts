@@ -14,21 +14,35 @@ interface InkRenderer {
 }
 // Ink 7.1.1 clear() re-synchronizes the old output into its cache. It cannot
 // force a repaint. Keep the pinned-version private cache adapter here only.
-const renderers = () => import(new URL('./instances.js', pathToFileURL(createRequire(import.meta.url).resolve('ink'))).href) as Promise<{ default: WeakMap<NodeJS.WriteStream, InkRenderer> }>;
+const renderers = () =>
+  import(new URL('./instances.js', pathToFileURL(createRequire(import.meta.url).resolve('ink'))).href) as Promise<{
+    default: WeakMap<NodeJS.WriteStream, InkRenderer>;
+  }>;
 
-export function bindResizeRepaint(stdout: NodeJS.WriteStream, instance: Instance, tree: () => ReactNode): () => void {
+export function bindResizeRepaint(
+  stdout: NodeJS.WriteStream,
+  instance: Instance,
+  tree: () => ReactNode,
+  loadRenderers = renderers,
+): () => void {
   if (!stdout.isTTY) return () => {};
-  let timer: ReturnType<typeof setTimeout> | undefined, disposed = false;
-  const renderer = renderers().then(({ default: instances }) => {
-    const ink = instances.get(stdout);
-    // Prevent Ink's synchronous old-tree frame on a width decrease. React's
-    // The size hook still updates dimensions without a remount.
-    if (ink && !disposed) stdout.off('resize', ink.resized);
-    return ink;
-  });
+  let timer: ReturnType<typeof setTimeout> | undefined,
+    disposed = false;
+  const renderer = loadRenderers().then(
+    ({ default: instances }) => {
+      const ink = instances.get(stdout);
+      // Prevent Ink's synchronous old-tree frame on a width decrease. React's
+      // The size hook still updates dimensions without a remount.
+      if (ink && !disposed) stdout.off('resize', ink.resized);
+      return ink;
+    },
+    () => undefined,
+  ); // Private module missing (e.g. a different Ink build): fall back to instance.clear().
   const resize = () => {
     clearTimeout(timer);
-    timer = setTimeout(() => { void repaint(); }, 60);
+    timer = setTimeout(() => {
+      void repaint();
+    }, 60);
   };
   async function repaint() {
     const ink = await renderer;
@@ -37,7 +51,9 @@ export function bindResizeRepaint(stdout: NodeJS.WriteStream, instance: Instance
     if (disposed) return;
     if (ink) {
       ink.log.reset();
-      ink.lastOutput = ''; ink.lastOutputToRender = ''; ink.lastOutputHeight = 0;
+      ink.lastOutput = '';
+      ink.lastOutputToRender = '';
+      ink.lastOutputHeight = 0;
     } else instance.clear();
     stdout.write('\x1b[2J\x1b[H');
     instance.rerender(tree());
@@ -45,6 +61,8 @@ export function bindResizeRepaint(stdout: NodeJS.WriteStream, instance: Instance
   }
   stdout.on('resize', resize);
   return () => {
-    disposed = true; clearTimeout(timer); stdout.off('resize', resize);
+    disposed = true;
+    clearTimeout(timer);
+    stdout.off('resize', resize);
   };
 }
