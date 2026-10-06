@@ -48,7 +48,7 @@ describe('Mission Control', () => {
     const { stdin, lastFrame, unmount } = render(<MissionControl session={session} store={store} controller={controller} onExit={() => {}} />);
     try {
       await sleep(50);
-      stdin.write('\t'); await sleep(20); stdin.write('\t'); await sleep(20); stdin.write('2'); await sleep(20);
+      stdin.write('\x1b[17~'); await sleep(20); stdin.write('\x1b[17~'); await sleep(20); stdin.write('2'); await sleep(20);
       for (let i = 0; i < 20; i++) {
         stdin.write('b');
         await sleep(15);
@@ -92,7 +92,7 @@ describe('Mission Control', () => {
     expect(frame).toContain('ROAST HIVE');
     expect(frame).toContain('queen [queen]');
     expect(frame).toContain('s1 [scout]');
-    stdin.write('\t'); await sleep(30);
+    stdin.write('\x1b[17~'); await sleep(30);
     stdin.write('6');
     await sleep(30);
     expect(lastFrame()).toContain('/mission/login');

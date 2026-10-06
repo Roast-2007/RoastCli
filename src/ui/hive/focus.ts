@@ -1,7 +1,7 @@
 export type DeckFocus = 'input' | 'colony' | 'mission' | 'signals';
-export function nextFocus(current: DeckFocus, signals: boolean): DeckFocus {
+export function nextFocus(current: DeckFocus, signals: boolean, reverse = false): DeckFocus {
   const order: DeckFocus[] = ['input', 'colony', 'mission', ...(signals ? ['signals' as const] : [])];
-  return order[(order.indexOf(current) + 1) % order.length]!;
+  return order[(order.indexOf(current) + (reverse ? order.length - 1 : 1)) % order.length]!;
 }
 export function agentInstruction(text: string, ids: readonly string[]): { agent: string; body: string } | null {
   const match = /^@(\S+)\s+([\s\S]+)$/.exec(text.trim());

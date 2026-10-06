@@ -43,7 +43,7 @@ describe('usable viewport and full resize repaint', () => {
     const stop = bindResizeRepaint(tty as unknown as NodeJS.WriteStream, instance, () => tree);
     try {
       await tick(); stdin.write('中文 hive draft'); await tick();
-      stdin.write('\t'); await tick(); stdin.write('\r'); await tick();
+      stdin.write('\x1b[17~'); await tick(); stdin.write('\r'); await tick();
       const selected = store.getState().focus;
       for (const [columns, rows] of [[120, 40], [60, 20], [200, 60], [30, 10], [100, 30], [100, 20]]) {
         tty.chunks = []; tty.columns = columns!; tty.rows = rows!; tty.emit('resize'); await tick(150); await instance.waitUntilRenderFlush();

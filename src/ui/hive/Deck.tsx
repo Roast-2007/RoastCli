@@ -1,3 +1,4 @@
+import { useDeckFunctionKeys } from './function-keys.js';
 import { useViewport } from '../viewport.js';
 import path from 'node:path';
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
@@ -63,6 +64,7 @@ function Workspace({ session, store, controller, onExit, inputDraft, initialProm
   const mission = latestMission(main), phase = missionPhase(main, agents);
   useDiffReviews(session, store, ui, current?.id ?? 'main', !splash && tab === 2 && !card && !ui.meta.overlay);
   useMouseReporting();
+  useDeckFunctionKeys(!splash && !card && !ui.meta.overlay && !detail, reverse => changeFocus(nextFocus(focusRef.current, layout.signals > 0, reverse)));
   useEffect(() => { controller.setScreen('hive'); }, [controller]);
   useEffect(() => { store.setFocus(current?.id ?? 'main'); return () => store.setFocus('main'); }, [store, current?.id]);
   useEffect(() => { if (!main.running) return; const timer = setInterval(() => setNow(Date.now()), 1000); return () => clearInterval(timer); }, [main.running]);
@@ -80,16 +82,17 @@ function Workspace({ session, store, controller, onExit, inputDraft, initialProm
   const select = (delta: number) => { const index = Math.max(0, Math.min(agents.length - 1, agents.findIndex((agent) => agent.id === current?.id) + delta)); setSelected(agents[index]?.id ?? 'main'); setColonyOffset(Math.min(colonyMax, Math.max(0, index - Math.max(1, layout.body - 4) + 1))); setOffset(0); cancel.current = null; };
   const pickTab = (next: number) => { nav.current.tab = next; setTab(next); setOffset(0); if (layout.narrow) setNarrow(1); };
   useInput((input, key) => {
+    if (input === '\ue019') return;
     const wheel = mouseWheel(input);
     if (wheel !== null) { if (!wheel || detail) return; if (focusRef.current === 'colony') setColonyOffset((n) => Math.max(0, Math.min(colonyMax, n + wheel))); else move(-wheel); return; }
     if (key.ctrl && input === 'g') return onExit();
     if (key.ctrl && input === 'c') { if (controller.ctrlC(draft.state ? textOf(draft.state) : '') === 'clear') { draft.state = editorReducer(draft.state ?? createEditor(history), { type: 'set', text: '' }); store.setMeta((m) => ({ inputSeed: { key: m.inputSeed.key + 1, text: '', screen: 'hive' } })); draft.seed = store.getState().meta.inputSeed.key; } return; }
-    if (key.tab && key.shift) return controller.cycleMode();
+    if (key.tab && key.shift && focusRef.current === 'input') return controller.cycleMode();
     if (key.ctrl && input === 'o') return setDetail((value) => !value);
     if (detail) { if (key.escape) setDetail(false); return; }
     if (key.tab) {
-      if (focusRef.current === 'input' && suggestions(draft.state ?? createEditor(history), deps).length) return;
-      return changeFocus(nextFocus(focusRef.current, layout.signals > 0));
+      if (focusRef.current === 'input') return;
+      return changeFocus(nextFocus(focusRef.current, layout.signals > 0, key.shift));
     }
     if (focusRef.current === 'input') {
       if (key.escape) {
@@ -125,6 +128,13 @@ function Workspace({ session, store, controller, onExit, inputDraft, initialProm
     if (key.pageDown || input === 'f') move(-Math.max(1, layout.body - 4));
     if (key.home || input === 'g') move(focusRef.current === 'signals' ? signalMax : maxOffset);
     if (key.end || input === 'G') move(-(focusRef.current === 'signals' ? signalMax : maxOffset));
+    if (input && !key.ctrl && !key.meta && /^[^\x00-\x1f\x7f]+$/.test(input) && !/^[jkgGbfmpxdi0-9\[\]]$/.test(input)) {
+      const state = editorReducer(draft.state ?? createEditor(history), { type: 'insert', text: input });
+      draft.state = state;
+      store.setMeta(meta => ({ inputSeed: { key: meta.inputSeed.key + 1, text: textOf(state), screen: 'hive' } }));
+      draft.seed = store.getState().meta.inputSeed.key;
+      changeFocus('input');
+    }
   }, { isActive: !splash && !card && !ui.meta.overlay });
   const cost = session.cost(), runningChildren = agents.filter((agent) => agent.parentId && ['queued', 'running', 'waiting', 'paused'].includes(agent.state)).length;
   const center = <MissionPane session={session} ui={ui} tab={tab} selected={current?.id ?? 'main'} height={layout.body} width={layout.mission} focused={focus === 'mission'} offset={Math.min(offset, maxOffset)} narrow={layout.narrow} signals={!layout.signals && !layout.narrow} />;
@@ -141,7 +151,7 @@ function Workspace({ session, store, controller, onExit, inputDraft, initialProm
       <Box height={layout.input} flexShrink={0} flexDirection="column" overflow="hidden">
         {card ? <InteractionCard key={card.id} request={card} maxHeight={layout.input} onInterrupt={() => controller.ctrlC('')} onRespond={(response) => controller.respond(card, response)} /> : <>
           {layout.input >= 2 ? <Box height={1}><Box flexGrow={1} overflow="hidden"><QueueLine texts={ui.meta.queued} /></Box><Text dimColor wrap="truncate-end">策略 {ui.meta.strategy ?? 'auto'} · n {ui.meta.n ?? 3}</Text></Box> : null}
-          <InputBox key={ui.meta.inputSeed.key} active={focus === 'input' && !detail} acceptInput={() => focusRef.current === 'input' && !detail && !store.getState().meta.overlay && !store.getState().meta.interactions.length} placeholder={main.running ? '插话，或 @成员 发指示' : '输入目标'} initialHistory={history} initialText={ui.meta.inputSeed.screen && ui.meta.inputSeed.screen !== 'hive' ? '' : ui.meta.inputSeed.text} initialState={draft.seed === ui.meta.inputSeed.key || (ui.meta.inputSeed.screen && ui.meta.inputSeed.screen !== 'hive') ? draft.state : undefined} onStateChange={(state) => { draft.seed = ui.meta.inputSeed.key; draft.state = state; }} deps={deps} maxHeight={layout.input - (layout.input >= 2 ? 1 : 0)} onHelp={() => store.setMeta({ overlay: 'help' })} onSubmit={(text, raw) => controller.submit(text, raw)} />
+          <InputBox key={ui.meta.inputSeed.key} active={focus === 'input' && !detail} acceptInput={(input) => input !== '\ue019' && focusRef.current === 'input' && !detail && !store.getState().meta.overlay && !store.getState().meta.interactions.length} placeholder={main.running ? '插话，或 @成员 发指示' : '输入目标'} initialHistory={history} initialText={ui.meta.inputSeed.screen && ui.meta.inputSeed.screen !== 'hive' ? '' : ui.meta.inputSeed.text} initialState={draft.seed === ui.meta.inputSeed.key || (ui.meta.inputSeed.screen && ui.meta.inputSeed.screen !== 'hive') ? draft.state : undefined} onStateChange={(state) => { draft.seed = ui.meta.inputSeed.key; draft.state = state; }} deps={deps} maxHeight={layout.input - (layout.input >= 2 ? 1 : 0)} onHelp={() => store.setMeta({ overlay: 'help' })} onSubmit={(text, raw) => controller.submit(text, raw)} />
         </>}
       </Box>
     </>}
