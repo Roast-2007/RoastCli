@@ -5,7 +5,7 @@
 ## 目标
 
 1. **上下文不丢失**：旧内容折叠成占位符而不是删除，模型可以用 `recall` 取回原文；上下文变换尽量少地改动发给供应商的前缀，以保持缓存命中。
-2. **多 agent 协作**：Queen、Lead、Worker 和只读专家角色通过消息和黑板协作。等待子任务时不发请求、不消耗 token。
+2. **Hive 优先**：任务和策略是独立入口，默认 Deck 指挥 Queen、Lead、Worker 和只读专家通过消息、黑板与 worktree 协作。等待子任务时不发请求、不消耗 token，Chat 保留单 agent 工作面。
 3. **可重放**：模型看到的一切都先写入日志。恢复会话时重放日志，得到与当时完全相同的请求。
 4. **终端体验**：在小窗口、中文输入、慢速终端和 Windows 控制台中都能正常使用。
 
@@ -21,9 +21,9 @@
 | `src/context` | 上下文状态、视图投影、策略、调度、摘要、recall |
 | `src/providers` | 供应商无关的流协议，OpenAI 兼容与 Anthropic 两种驱动，模型发现，并发调度 |
 | `src/tools` | 工具抽象与执行管线、内置工具、权限引擎 |
-| `src/swarm` | 蜂群：supervisor、消息、黑板、租约、worktree、模板、模型路由 |
+| `src/swarm` | 蜂群：supervisor、消息、黑板、租约、worktree、策略、任务简报、模型路由 |
 | `src/ext` | 项目说明、skills、MCP、hooks、记忆、代码检索、prompt 覆盖、注入检查、检查点 |
-| `src/ui` | Ink 界面：store、对话、Mission Control、输入框、Markdown、配置向导 |
+| `src/ui` | Ink 界面：store、Chat、`hive/` 指挥台、输入框、Markdown、配置向导 |
 
 ## 基本约束
 
@@ -38,7 +38,7 @@
 
 ### Turn 循环
 
-`AgentRuntime`（`agent/runtime.ts`）的 `run(text)` 把用户输入放入队列并驱动循环。每个 turn 由若干 step 组成，最多 `maxSteps` 个（默认 50）。每个 step：
+`AgentRuntime`（`agent/runtime.ts`）的 `run(input)` 接受普通文本或 `MissionInput`，把输入放入队列并驱动循环。每个 turn 由若干 step 组成，最多 `maxSteps` 个（默认 50）。每个 step：
 
 1. **边界处理。** 从第二个 step 起投递排队的用户消息；`beforeRequest` 钩子执行上下文维护（折叠、压缩），并注入附件，比如蜂群的收件箱。
 2. 最后一条消息来自 assistant 时说明没有新内容，turn 结束。
@@ -66,11 +66,20 @@
 `session/history.ts` 把事件流折叠成模型可见的 `Message[]`：
 
 - 连续的用户内容合并成一条 user 消息；
+- `hive/mission` 与 `user/message` 共用追加分支，模型内容取日志中的 brief，合并规则完全相同；
 - 同一个 `turn:step` 的工具结果合并成一条；
 - attachment 追加到最后一条 user 消息，如果最后一条不是 user 消息就新建一条；
 - 每个 `turn/start` 记下该 turn 开始前的消息列表（不可变引用，开销很小），`rewind` 时恢复到目标 turn 的那一份。
 
 上下文状态（折叠、压缩、钉住）也由这个 reducer 维护，见[上下文引擎](#上下文引擎)。
+
+### Hive 任务事件
+
+`hive/mission` 取代任务的那条 `user/message`，记录 `turn`、`at`、`missionId`、`goal`、`strategy`、`n`、`brief` 和可选 `readOnly`。任务编号 m1、m2……由运行时在会话内递增，恢复后继续计数。brief 渲染一次后写入日志，恢复时不重新读取策略或渲染简报。
+
+模型读取完整 brief，UI reducer、transcript 和 `logs show` 投影原始 goal；stream-json 保留任务事件。简报是 user 内容，不加入 system。Deck / Chat 切换只改变 UI，不改 system、工具 schema 或历史前缀。`listTurns` 与抽取式摘要提取 brief 中的 `<goal>`，避免把策略指令当成用户目标。
+
+`UserPromptSubmit` 收到原始 goal 和 hive 元数据，可以拦截；hook 输出和检索上下文附加到 brief 后提交，goal 保持不变。`attachment/injected` 收件箱和内部检索附件不作为对话内容显示，未提交的 raw chunk 不参与恢复后的 UI 重放。
 
 ### 恢复
 
@@ -81,6 +90,7 @@
 - 写锁被仍在运行的进程持有时，分叉出一个新的 run，不和原进程抢写同一个文件。
 - 旧版（v0）日志通过 `history/import` 事件导入。
 - 同时重建文件读取状态和权限授权。
+- 0.5.0 接受已有 0.4 日志；含新 `hive/mission` 事件的日志不能由旧版程序读取。
 
 界面重放只使用已提交的事件，不重复未提交的 raw chunk，也不显示内部 attachment。
 
@@ -218,10 +228,36 @@ interface ContextState {
 
 ### 渲染
 
-- `screens.ts` 的 `runInteractive` 只创建一个 Ink 实例（alternate screen、`maxFps` 30、`incrementalRendering`、kitty 键盘协议自动检测），通过 `rerender` 在对话（`FullScreen.tsx`）、Mission Control 和会话内的配置向导之间切换。store、controller 和输入框草稿在切换时保留。首次启动的配置向导和信任确认在此之前用单独的 `render()` 显示。
+- `screens.ts` 的 `runInteractive` 只创建一个 Ink 实例（alternate screen、`maxFps` 30、`incrementalRendering`、kitty 键盘协议自动检测），通过 `rerender` 在 Hive Deck、Chat（`FullScreen.tsx`）和会话内的配置向导之间切换。首页取 `ui.home`，默认 hive，CLI 可以覆盖。store、controller 和两个工作面的独立编辑器草稿在切换时保留。首次配置向导和信任确认在此之前用单独的 `render()` 显示，旧 Mission Control 已删除。
 - 对话界面的标题、输入框和状态栏固定，中间是按行滚动的视口。`transcript.ts` 把消息转换成带样式的行（Markdown 由 `markdown/rows.ts` 通过 `marked.lexer` 解析，代码块用 cli-highlight 高亮并映射到主题色），按不可变的消息对象缓存在 WeakMap 中。每帧只重建流式输出的尾部、推理内容和运行中的工具，并且只把可见的行渲染成 `<Text>`。
 - 根容器高度为 `rows - 1`，避免 Windows 控制台在画面占满时滚动。`layout.ts` 按物理行分配高度，输入框和审批卡片优先，状态栏固定一行。
 - `App.tsx` 中还保留了旧的 inline 模式（`<Static>` 加水位线），只在 `fullScreen` 为假时使用，目前生产代码不走这条路径，主要用于测试和嵌入。
+
+### Hive Deck
+
+新 UI 按功能放在 `src/ui/hive/`：
+
+| 文件 | 作用 |
+|---|---|
+| `Deck.tsx`、`layout.ts` | 编排、键盘路由，三栏 / 两栏 / 单栏和矮屏高度分配 |
+| `ColonyPane.tsx`、`MissionPane.tsx`、`SignalsPane.tsx`、`Pane.tsx` | 蜂群树、任务页、信号和按显示宽度滚动的通用面板 |
+| `plan.ts`、`phase.ts` | 纯函数解析计划、关联 taskId、推导任务状态与结果 |
+| `focus.ts` | 四焦点循环和成员指示解析 |
+| `diffs.ts`、`usage.ts`、`lines.ts` | 改动缓存、任务费用聚合和输出行投影 |
+| `Ignition.tsx`、`status.ts`、`interrupt.ts`、`QueueLine.tsx` | 640ms 启动、统一状态栏、Ctrl+C 状态机与排队条 |
+| `terminal-effects.ts` | TTY 通知和标题的单一生命周期 |
+
+焦点默认 input，Tab 在 input → colony → mission → signals 之间循环，缺少独立信号栏时跳过。输入框有补全候选时 Tab 先补全；单字母操作仅在面板聚焦时执行。鼠标滚轮只滚动面板，输入焦点时滚动中栏，不切成员或历史。两个草稿独立保存 editor state，带 screen 的 inputSeed 只更新对应工作面，排队消息中断后恢复到输入框。
+
+Queen 用 `board_write` 写 `/mission/plan` JSON，`plan.ts` 对缺字段、重复 id 和错误 JSON 容错，失败时用成员生成行；`spawn_agent` / `task` 的 `task_id` 映射到 `AgentInfo.taskId`。任务行的状态来自成员 state / report，不要求反复更新黑板。黑板没有持久化，恢复会话后计划板为空，最近任务由日志中的 goal、strategy、turn/end 结果投影。
+
+`phase.ts` 依据当前任务所属 turn 推导计划中、执行中、整合中，以及 completed / aborted / error / max-steps 的结束标签。成员关联限制在该任务 turn 内，活跃派发阶段也识别新启动成员，避免后续 Chat turn 污染任务用量。任务用量按 turn、agent、provider / model 汇总既有账本；缺少定价时显示未知，不输出部分总价。
+
+`swarm/diff.ts` 只读运行禁用 pager、外部 diff 和 textconv 的 git 命令；子成员用真实基线比较已提交、未提交和新文件，Queen 用工作区 git diff。不触碰索引、HEAD、检查点或文件。`diffs.ts` 在打开改动页后异步读取，支持 AbortSignal，缓存到成员状态变化；计划行使用已有缓存中的增删统计。输出有超时和大小上限，避免渲染线程同步调用 git。
+
+审批预览在权限引擎得到 ask 后生成，不授予读写权限。`tools/permissions/preview.ts` 复用文件工具的状态检查和 diff 生成，只预览 cwd 内、读权限允许且状态有效的路径；直接子成员的合并显示 diffstat。审批卡最多展示 12 行，Ctrl+O 切换完整详情，bash 保留完整命令及强制询问原因。读失败、越界、UNC 或过大内容跳过预览，执行时仍走原权限和检查点管线。
+
+通知和标题仅向 TTY 写出，`ui.notify` / `ui.title` 在配置合并时只接受用户层。auto 检测 Windows Terminal、iTerm、WezTerm、Kitty 的环境变量后用 OSC 9，bell 用 BEL；首次出现审批或运行至少 20 秒后结束时通知。OSC 2 标题每秒最多更新一次，renderer 退出时清理订阅、定时器并重置为 roast；切工作面不重复创建生命周期。
 
 ### Store
 
@@ -241,7 +277,7 @@ interface ContextState {
 ### 主题与动画
 
 - `theme.tsx` 定义语义色（accent、muted、success、warn、danger、diffAdd、diffDel 等）和四套主题。ember 的主色是 `#ff4e1a → #ff7a18 → #ffb347` 渐变。真彩色不可用时降级到 256 色或 16 色；`NO_COLOR`、`FORCE_COLOR=0` 或 `TERM=dumb` 时使用 mono。
-- `components/useSpinner.ts` 让所有旋转动画共用一个 80 毫秒的计时器，没有订阅者时停止。`motion.ts` 处理面板的颜色过渡。启动动画（`components/Startup.tsx`）持续 704 毫秒，有初始任务时跳过。
+- `components/useSpinner.ts` 让所有旋转动画共用一个 80 毫秒的计时器，没有订阅者时停止。`motion.ts` 处理面板的颜色过渡。`hive/Ignition.tsx` 取代 Startup，ASCII 蜂巢径向点亮、字标逐列显示，持续 640 毫秒，最后一帧与 Deck 头部对齐；可跳过并传递可打印字符。reduced motion、TERM=dumb 或有初始任务时跳过，尺寸不足时降级为单行或 ROAST。
 - `terminal.tsx` 提供 ASCII 和减少动画两个开关，`TERM=dumb` 时两者都开启。
 
 ### 命令
@@ -260,7 +296,8 @@ interface ContextState {
 | `board.ts` | 黑板 |
 | `lease.ts` | 文件租约 |
 | `isolation.ts`、`worktree.ts`、`dependencies.ts` | 隔离模式、git worktree、`node_modules` 复制 |
-| `roles.ts`、`templates.ts`、`model-routing.ts` | 角色说明、策略模板、角色模型路由 |
+| `roles.ts`、`prompts.ts`、`strategies.ts`、`templates.ts`、`model-routing.ts` | 角色卡、共享提示词、任务策略、旧模板适配和模型路由 |
+| `diff.ts` | 只读 worktree / 工作区改动审阅 |
 | `watchdog.ts` | 无进展检测 |
 | `types.ts` | 公共类型，如 `AgentInfo`、消息信封 |
 
@@ -289,7 +326,7 @@ interface ContextState {
 
 | 工具 | 行为 |
 |---|---|
-| `spawn_agent({role, task, refs?, model?, reasoning_effort?, isolation?})` | 派生子 agent，返回 agentId |
+| `spawn_agent({role, task, task_id?, refs?, model?, reasoning_effort?, isolation?})` | 派生子 agent，返回 agentId，task_id 用于计划关联 |
 | `send_message({to, kind, subject, body, refs?, reply_to?})` | 发送消息；超限、路由不通或重复时返回原因 |
 | `await_agents({ids?, mode, timeout_s})` | 阻塞等待子 agent（默认等全部，超时 1800 秒），等待期间不发请求。返回 `{reason, reports, pending}` |
 | `report({status, summary, refs?})` | 向父 agent 报告，同时写入黑板 `/reports/<id>`。每个 agent 只能 report 一次，工具结果会要求模型结束本轮，但不强制。status 为 done、failed、partial 或 changes_requested |
@@ -297,13 +334,14 @@ interface ContextState {
 | `board_write`、`board_read`、`board_list`、`board_watch` | 黑板操作 |
 | `agents_status` | 查看 agent 树和状态 |
 | `configure_swarm({models})` | 只有 Queen 可用，为未锁定的角色设置默认模型 |
-| `task({prompt, role, model?, reasoning_effort?})` | 派生一个一次性的 worker 或 scout，同步等待它的报告，适合并行调研或隔离的小改动 |
+| `task({prompt, role, task_id?, model?, reasoning_effort?})` | 派生一个一次性的 worker 或 scout，同步等待报告，支持计划关联 |
 
 ### 防失控
 
 - **等待**：只有父 agent 能等待后代，问题等待有超时。
 - **无进展检测**：连续 12 个已完成的 step 没有进展时提醒父 agent。进展指得到一个新的成功结果（按工具名、参数和内容的 hash 判断），或调用了产出类工具；出错的结果不算。模型重试、未完成的工具和等待用户授权不计入步数。
 - **只读角色**：scout、critic、judge 的直接文件修改由 `roleGuardHook` 拒绝；它们的执行请求带上 `readOnlyRole`，除了能确认只读的 bash 命令，都由权限引擎强制询问。
+- **只读任务**：supervisor 观察 turn/start、hive/mission 和 turn/end，在 readOnly 任务运行期间拒绝 worker / lead，返回“本任务为只读调研”；Queen 的写操作照常由权限引擎判断，turn 结束时清除任务标记。
 - **上限**：`maxAgents` 是一次会话派生的 agent 总数（包括已结束的），`maxDepth` 是层级，`maxMinutes` 是单个子 agent 的运行时长，超时后取消它的子树。不限制 token。
 - **取消**：父 agent 的 AbortController 上挂监听，递归调用 `cancelSubtree`。取消时为未完成的工具调用补上合成结果，释放租约，保留 worktree 供检查，并向父 agent 发送状态为 cancelled 的报告。
 
@@ -320,9 +358,11 @@ interface ContextState {
 - 内部 git 调用都带 `core.autocrlf=false` 和 `commit.gpgsign=false`。
 - **清理**：会话结束时删除没有改动的 worktree，有未合并改动或检查失败的保留并返回路径。`roast worktrees prune` 只删除当前仓库中已登记、不在使用、相对基线没有改动的 worktree。
 
-### 模板与模型路由
+### 策略与模型路由
 
-模板（`templates.ts`）是交给 Queen 的一条指令，而不是写死的编排流程，这样 Queen 可以按实际情况调整，所有协作也都走同一套工具。内置 fanout、best-of-n、critique（最多 3 轮）、research，用户可以在 `~/.roast/templates/` 和 `.roast/templates/` 中用 YAML 自定义（字段 name、description、prompt，prompt 中可用 `{{goal}}` 和 `{{n}}`）。
+策略（`strategies.ts`）是 Queen 简报中的 playbook，不是写死的编排流程，所有协作走同一套工具。内置 auto（默认）、fanout、best-of-n、critique（最多 3 轮）、research。`renderBrief` 按 missionId、goal、strategy、n、readOnly 和 playbook 拼接 `prompts.ts` 中的固定结构；英文共享提示词和角色卡要求用用户的语言回复，报告固定为 RESULT / CHANGES / VERIFY / RISKS / BOARD。
+
+YAML 兼容 `~/.roast/templates/` 和 `.roast/templates/`，新增同级 `strategies/`，同一层内同名策略优先。字段为 name、description、playbook（兼容 prompt）、可选 n / readOnly，支持 `{{goal}}` 和 `{{n}}`；不合法文件跳过。未受信任的项目不能覆盖已有同名策略。`templates.ts` 只保留旧接口适配，生产任务入口用 MissionInput。`swarm.strategy` 默认 auto，`swarm.n` 默认 3。
 
 模型路由（`model-routing.ts`）：用户指定的角色模型（配置的 `swarm.models`、`--role-model`，包括 `inherit`）优先且锁定。其余角色由 Queen 通过 `configure_swarm` 或在 `spawn_agent` 时指定，可选范围是已配置、受信任的模型，Queen 能看到它们的价格和上下文长度。都没有指定时跟随主会话。
 

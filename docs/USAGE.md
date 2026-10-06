@@ -2,6 +2,164 @@
 
 安装和入门见 [README](../README.md)。本文按功能说明 RoastCli 的全部用法。
 
+## Hive
+
+`roast` 默认打开 Hive Deck，输入目标即可发起任务。Queen 负责理解、规划、派发、整合与验证，子 agent 通过消息和黑板协作；等待子 agent 时不发模型请求，不消耗 token。简单或耦合紧密的工作可以由 Queen 自己完成。
+
+`Ctrl+G` 在 Deck 和 [Chat](#chat) 之间切换，两边分别保留输入草稿。`ui.home: "chat"` 把 Chat 设为首页；`--chat`（别名 `--solo`）或 `--hive` 只覆盖本次启动。首次配置和文件夹信任流程不变。Ignition 蜂巢动画最多 640 毫秒，任意键跳过，可打印字符会进入输入框；reduced motion 或 `TERM=dumb` 直接进入首页。带目标启动 Hive 时跳过动画。
+
+```sh
+roast hive                                          # 打开 Deck
+roast hive "给登录接口加上限流"                        # 立即发起任务
+roast hive --strategy best-of-n -n 4 "实现一个 LRU 缓存"
+roast hive --strategy research --print "调研项目里的错误处理方式"
+```
+
+`roast swarm` 是兼容命令；`--strategy` 的旧别名 `-t/--template` 仍可用。`roast -p` 保持单 agent 管道语义；`roast hive --print` 和 `roast swarm --print` 使用 Hive 任务。非 TTY 必须提供目标。
+
+### 任务与输入
+
+| Deck 输入 | 行为 |
+|---|---|
+| 空闲时发送目标 | 用当前策略和并行数发起新任务 |
+| 运行中发送文字 | 排队给 Queen，在下一个 step 送达 |
+| `@w2 文本` | 向成员 w2 发 steer 指示；`@queen` 给 Queen 插话 |
+| `/hive [策略] [n] [目标]` | 无参数进入 Deck；带目标发起任务；`/swarm` 是别名 |
+| `/strategy [名称] [n]` | 设置本会话默认策略；无参数打开选择面板 |
+| `/chat` | 切换到 Chat |
+
+`@` 补全优先列出成员，其次是文件；文件补全只插入路径文本。两种工作面都显示排队消息的数量和首条摘要；中断后排队内容回到输入框。策略和 n 显示在 Deck 输入区右侧。界面和 `logs show` 显示你输入的目标，发给模型的任务简报保存在日志中，恢复时使用原文。
+
+任务状态由事件推导：尚未派出成员时为“计划中”，有活跃子 agent 时为“执行中”，子 agent 全部结束而 Queen 仍在运行时为“整合中”；turn 结束后显示“完成”“中断”“出错”或“步数上限”。
+
+### 策略
+
+| 策略 | 做法 |
+|---|---|
+| `auto`（默认） | Queen 按任务选择最轻的结构：自行完成、fanout、critique、best-of-n 或 research |
+| `fanout` | 分拆独立任务，写入范围分开；合并后按改动风险安排 critic |
+| `best-of-n` | N 个 worker 独立实现同一目标，judge 比较和验证，合并胜者并丢弃其余方案 |
+| `critique` | worker 实现、Queen 合并、critic 评审，再修正，最多 3 轮 |
+| `research` | N 个 scout 从互补角度只读调研，写黑板，由 Queen 汇总 |
+
+`swarm.strategy` 默认 `auto`；`swarm.n` 默认 3，`-n` 范围 2–8。`roast hive --list-strategies` 列出策略，`--list-templates` 仍可用。策略是交给 Queen 的指令，Queen 使用同一套协作工具执行，可以按实际情况调整。
+
+自定义 YAML 放在 `~/.roast/strategies/` 或 `.roast/strategies/`，也兼容原 `templates/` 目录及 `prompt` 字段；同一配置层同名时 `strategies/` 优先。项目策略覆盖同名内置或用户策略需要文件夹信任。
+
+```yaml
+name: bug-hunt
+description: 分头定位问题，再汇总证据
+n: 3
+readOnly: true
+prompt: |
+  目标：{{goal}}
+  派 {{n}} 个 scout 分别排查不同模块，把证据写到 /research/ 下。
+  最后汇总原因、证据和不确定性。
+```
+
+也可以把 `prompt` 写成 `playbook`。`n` 是可选的策略默认并行数；`readOnly: true` 标记只读任务。只读任务运行期间，supervisor 拒绝派生 worker / lead，返回“本任务为只读调研”；Queen 自己的写请求仍由权限引擎判断。
+
+### Deck 与计划板
+
+宽度 ≥112 列时，Deck 是蜂群、任务、信号三栏；70–111 列保留蜂群与任务，把信号放在中栏第 4 页；<70 列只显示一栏，用 `[` / `]` 切换蜂群、计划、输出、改动、信号。高度 <12 行隐藏头部，<8 行只保留摘要、输入和状态栏。空闲画布只有暗色 HIVE 字标；恢复会话时还显示最近任务。
+
+| 宽屏任务页 | 内容 |
+|---|---|
+| `1` 计划 | Queen 在黑板 `/mission/plan` 写的任务计划；没有有效计划时按子 agent 生成行 |
+| `2` 输出 | 选中成员的流式输出，默认 Queen |
+| `3` 改动 | 成员 worktree 相对基线的 diffstat / diff；Queen 显示当前工作区的 git diff |
+| `4` 消息 | 消息时间线 |
+| `5` 黑板 | 键、版本、作者和值 |
+| `6` 用量 | 本任务按 agent / 模型聚合的 token 和费用；缺少定价时总价显示“未知” |
+
+中屏插入信号页后，消息、黑板、用量依次为 `5`、`6`、`7`。改动页打开时才读取 git，切页可中断，结果缓存到成员下一次状态变化，不修改索引、HEAD 或文件。大型 diff 会截断。
+
+计划格式为 `{"tasks":[{"id":"t1","title":"实现限流","role":"worker","acceptance":"测试通过","dependsOn":[]}]}`。Queen 派发时传 `task_id`，Deck 按成员的 `taskId` 关联任务并推导状态，不需要 Queen 反复改写计划。每行显示任务、成员、状态；读取过该成员的改动后还显示缓存中的 `+增 −删`。黑板和计划板不随会话保存。
+
+### Deck 按键
+
+默认聚焦输入框。`Tab` 按输入框 → 蜂群 → 中栏 → 信号循环；布局没有独立信号栏时跳过。聚焦面板的边框高亮。单字母快捷键只在面板聚焦时生效，输入框中照常输入。
+
+| 按键 | 作用 |
+|---|---|
+| `Enter` | 输入框发送；蜂群栏选中成员并打开输出 |
+| `Tab` | 输入框有补全候选时补全，否则切焦点 |
+| `Shift+Tab` | 切换权限模式 |
+| `i` 或 `Esc` | 面板返回输入框 |
+| `↑↓`、`j` / `k` | 面板选择成员或滚动 |
+| `PgUp` / `PgDn`、`g` / `G` | 翻页、到顶 / 到底 |
+| `1`–`6` | 面板聚焦时切任务页；中屏用量为 `7` |
+| `[` / `]` | 窄屏面板切页 |
+| `m` | 在输入框预填 `@选中成员 ` |
+| `p` | 暂停或继续选中成员 |
+| 连按两次 `x` | 取消选中成员及其子树 |
+| `d` | 查看选中成员改动 |
+| `Ctrl+O` | 查看选中成员最近工具的完整输出 |
+| `Ctrl+G` | 切到 Chat |
+| 鼠标滚轮 | 滚动聚焦面板；输入框聚焦时滚动中栏，不切成员或输入历史 |
+| `Esc`（输入框） | 运行中中断 Queen；空闲时 600 毫秒内按两次打开回退菜单 |
+| `Ctrl+C` | 运行中中断；空闲有草稿时清空；无草稿时提示，两秒内再按一次退出 |
+
+`Ctrl+C` 清草稿后也会提示“已清空 · 再按 Ctrl+C 退出”。暂停在 step 之间生效，正在执行的工具会正常完成。换行、编辑、输入历史、斜杠命令与 Chat 共用，见下文。
+
+### 提醒与状态栏
+
+统一状态栏显示权限模式、活跃成员 HIVE 胶囊、上下文、费用、tokens、按 token 加权的缓存命中率与分支；运行中显示计时和 step。宽度不足时依次省略分支、缓存、tokens、费用，帮助入口在最右侧。更新提醒和启动警告留在 Deck 信号栏，Chat 显示六秒 toast，仍可回看 notice。
+
+`ui.notify` 默认 `auto`：Windows Terminal、iTerm、WezTerm 和 Kitty 中使用 OSC 9；其他终端静默。`bell` 使用响铃，`off` 关闭。需要审批或用时 ≥20 秒的 turn / 任务结束时提醒，管道模式不发。`ui.title` 默认 `true`，设置目录与运行状态标题，每秒最多更新一次，退出时重置为 `roast`。这两个配置项仅用户配置生效，项目配置和 `ROASTCLI_CONFIG` 的其他配置层不生效。
+
+### 成员角色
+
+| 角色 | 职责 |
+|---|---|
+| Queen | 主 agent，负责整个任务的规划、整合、验证与最终答复 |
+| lead | 负责一个子目标，可以继续派生 worker |
+| worker | 按任务范围实现和验证 |
+| scout | 只读调研，报告证据和不确定性 |
+| critic | 只读评审，按严重程度列出问题和修正建议 |
+| judge | 只读比较候选方案，返回评分和胜者理由 |
+
+### 角色模型
+
+可以为每个角色指定模型：
+
+- `/hive models` 打开面板，为 lead、worker、scout、critic、judge 选择模型和推理强度，保存在配置的 `swarm.models` 和 `swarm.efforts` 中。值为 `inherit` 表示跟随主会话。
+- 命令行临时指定，可以重复使用，不写入配置：
+
+  ```sh
+  roast swarm "修复测试并评审" --role-model worker=deepseek:deepseek-chat --role-model critic=claude:claude-sonnet-5-5
+  ```
+
+  `/hive`（`/swarm`）里同样可以加 `--role-model`。Queen 的模型用 `-m`、`/model` 或 `--role-model queen=…` 设置。
+
+没有指定模型的角色，由 Queen 根据已配置模型的价格和上下文长度选择，信息不够时跟随主会话。你指定过的角色（包括 `inherit`）Queen 不能更改。
+
+### worktree
+
+在 git 仓库中，worker 和 lead 默认各自在独立的 worktree 里改代码，完成后由上级审阅合并。合并前会先检查冲突，有冲突时一个文件也不会写入。只读角色和非 git 项目共用工作目录，通过文件租约避免两个 agent 同时改同一个文件。设置 `swarm.worktrees: false` 可以关闭 worktree。
+
+- worktree 位于 `~/.roast/worktrees/<runId>/<agentId>`，基于父 agent 工作区的当前状态创建，包括未提交的改动。整个过程不会动你的分支、索引和 HEAD。
+- 顶层的 `node_modules` 会复制一份到 worktree（文件系统支持时使用写时复制），这会增加启动时间和磁盘占用。
+- worktree 只隔离文件修改，不是沙箱，shell 等外部命令仍然能访问其他目录。所以在 worktree 中执行命令每次都需要你批准，yolo 模式和 allow 规则也不例外。非交互模式下这类命令会被拒绝，可以等合并后由主会话验证。
+- 会话结束时，没有改动的 worktree 会被删除，有未合并改动的会保留，并在 stderr 列出路径。`roast worktrees list` 查看保留的 worktree，`roast worktrees prune` 删除已结束且没有改动的。正在使用、有未合并改动或缺少基线记录的不会被删除。
+
+### 只读角色
+
+scout、critic 和 judge 不能直接修改文件。它们执行的命令中，能确认是只读的（如 `git log`、`rg`、`cat`）按普通规则处理；无法确认的每次都要你批准，不能设为始终允许。MCP 等其他执行类工具也一样。等待批准时，agent 在蜂群树中显示为"等待用户授权"。deny 规则和 plan 模式仍然有效。
+
+一个 agent 连续 12 个 step 没有新进展（重复同样的调用，或者一直失败）时，会提醒它的上级检查。读取、搜索和验证得到新结果都算作进展，所以长时间的调研不会被误判。
+
+### 限制
+
+- `swarm.maxAgents`：一次会话最多派生的 agent 数（包括已结束的），默认 12。
+- `swarm.maxDepth`：最大层级，默认 3。
+- `swarm.maxMinutes`：单个子 agent 的最长运行时间，默认 60 分钟，超时后取消它和它的子 agent。
+- 不限制 token 用量。
+
+供应商的 `maxConcurrency` 是主会话和蜂群共享的并发上限，默认是 16 和 `maxAgents + 1` 中较小的一个。实际并发从最多 4 个开始，遇到 429 减半并遵守 `retry-after`，连续成功 10 次后加 1。等待中的 agent 不占用并发名额。
+
+黑板和任务计划板只保存在内存中，恢复会话后为空；Deck 可以回看日志中的最近任务目标、策略与结果。
+
 ## 配置供应商
 
 运行 `roast config` 打开配置向导（对话中用 `/provider` 或 `/config`）。依次选择供应商、填写地址和模型、输入 API Key 和推理强度，最后确认保存。
@@ -74,7 +232,7 @@ echo "$API_KEY" | roast init --provider deepseek --api-key-stdin   # 或者从�
 - hooks、MCP 服务器和 `permissions.allow`。
 - `memory`、`rag`、`webSearch`、`debugLog`，以及指向项目目录之外的 `logsDir`。未受信任时这些设置会被忽略。
 
-未受信任的项目也不能覆盖同名的 prompt、skill 和蜂群模板。deny 和 ask 规则不需要信任，始终生效。
+未受信任的项目也不能覆盖同名的 prompt、skill 和 Hive 策略（包括旧模板）。deny 和 ask 规则不需要信任，始终生效。
 
 非交互模式（`-p`）不会询问，也不会自动信任；如果项目配置改了供应商连接，会直接拒绝启动。脚本中可以先运行 `roast trust`，它会列出信任后将启用的内容。
 
@@ -82,13 +240,16 @@ echo "$API_KEY" | roast init --provider deepseek --api-key-stdin   # 或者从�
 
 | 命令 | 说明 |
 |---|---|
-| `roast` | 打开对话界面 |
+| `roast` | 按 `ui.home` 打开首页，默认 Hive Deck |
+| `roast --chat`（`--solo`） / `roast --hive` | 本次启动进入 Chat / Deck |
 | `roast -p "<任务>"` | 非交互执行，输出结果后退出。加 `--output-format stream-json` 以 JSON 行输出所有事件，包括子 agent |
 | `roast -c` | 继续当前目录最近的会话 |
 | `roast -r [runId]` | 恢复指定会话；不带 ID 时列出当前目录最近 20 个会话 |
 | `roast -m provider:model` | 本次使用指定的模型 |
 | `roast --permission-mode <模式>` | 以指定权限模式启动：`default`、`acceptEdits`、`plan`、`yolo` |
-| `roast swarm "<目标>"` | 用蜂群完成目标，见[蜂群](#蜂群) |
+| `roast hive [目标]`（`roast swarm`） | 打开 Deck 或立即发起任务，见 [Hive](#hive) |
+| `roast hive --strategy <名称> -n <数量> <目标>` | 指定策略和并行数，旧 `-t/--template` 仍可用 |
+| `roast hive --list-strategies` | 列出策略，旧 `--list-templates` 仍可用 |
 | `roast config` | 配置向导 |
 | `roast init` | 不经向导生成配置，见[不用向导](#不用向导) |
 | `roast doctor` | 检查 Node.js 版本、配置、密钥、信任状态、shell、git、ripgrep、项目说明、skills、hooks 和 MCP |
@@ -106,13 +267,13 @@ echo "$API_KEY" | roast init --provider deepseek --api-key-stdin   # 或者从�
 
 Windows 上 bash 工具和 `!命令` 优先使用 Git Bash（`C:\Program Files\Git\bin\bash.exe`），找不到时使用 cmd。
 
-每次启动交互式 `roast` 或 `roast swarm`，都会在后台从官方 GitHub Releases 检查最新正式版本，超时 3 秒，不缓存到下次启动。有更新时在对话里显示当前版本、新版本和更新指令，不打断输入或任务。断网、超时、限流时静默跳过；管道模式、`--help`、`--version` 不自动联网检查。
+每次启动交互式 `roast`、`roast hive` 或 `roast swarm`，都会在后台从官方 GitHub Releases 检查最新正式版本，超时 3 秒，不缓存到下次启动。有更新时在 Deck 信号栏或 Chat toast / notice 显示当前版本、新版本和更新指令，不打断输入或任务。断网、超时、限流时静默跳过；管道模式、`--help`、`--version` 不自动联网检查。
 
 更新完全自愿：退出会话后运行 `roast update`，它会调用 npm 安装对应版本的官方发布附件。`roast update --check` 只检查。npm 不可用或安装失败时会给出手动安装指令，不自动提权。Windows 执行策略拦截命令时用 `roast.cmd update`、`npm.cmd`。
 
-## 对话界面
+## Chat
 
-交互启动后进入全屏界面，输入框和状态栏固定在底部。启动动画按任意键跳过，按下的字符会进入输入框。
+Chat 是单 agent 对话工作面，用 `--chat`、`/chat` 或 `Ctrl+G` 进入。标题只占一行，输入框和状态栏固定在底部，空白页只显示暗色字标。完整环境与配置状态用 `/status` 查看。
 
 ### 按键
 
@@ -121,7 +282,7 @@ Windows 上 bash 工具和 `!命令` 优先使用 Git Bash（`C:\Program Files\G
 | `Enter` | 发送 |
 | `Shift+Enter`、`Alt+Enter`、`Ctrl+J`，或在行尾输入 `\` | 换行 |
 | `Esc` | 运行中：中断。空闲时在 600 毫秒内按两次：打开回退菜单 |
-| `Ctrl+C` | 运行中：中断。空闲时：退出 |
+| `Ctrl+C` | 运行中中断；空闲清草稿；无草稿时提示，两秒内再按一次退出 |
 | `Shift+Tab` | 切换权限模式：default → acceptEdits → plan → yolo |
 | `Ctrl+O` | 查看最近一个工具的完整输出，再按一次或 `Esc` 返回 |
 | `Shift+↑↓`、`Ctrl+↑↓`、`PgUp` | 进入阅读模式 |
@@ -131,7 +292,7 @@ Windows 上 bash 工具和 `!命令` 优先使用 Git Bash（`C:\Program Files\G
 | `Ctrl+R` | 搜索输入历史；再按一次找更早的匹配，`Enter` 载入，`Esc` 取消 |
 | `Ctrl+A` / `Ctrl+E` | 移到行首 / 行尾 |
 | `Ctrl+U` / `Ctrl+W` | 删除到行首 / 删除前一个词 |
-| `Ctrl+G` | 打开 Mission Control |
+| `Ctrl+G` | 切到 Hive Deck，保留两边草稿 |
 | `F1`，或输入框为空时按 `?` | 帮助 |
 
 阅读模式下，`↑↓` 或 `j`/`k` 逐行滚动，`PgUp`/`PgDn` 翻页，`Home` 或 `g` 到顶部，`End`、`G`、`Enter` 或 `Esc` 回到输入框。阅读时新的输出不会把视图拉回底部，回到底部后恢复跟随。
@@ -171,7 +332,10 @@ agent 运行时输入的消息会排队，在下一个 step 送达，不用先�
 | `/skills` | 选择并运行技能 |
 | `/mcp` | MCP 服务器的连接状态 |
 | `/logs` | 运行日志 |
-| `/swarm [模板] <目标>`（`/hive`） | 启动蜂群；`/hive models` 设置各角色的模型 |
+| `/hive [策略] [n] [目标]`（`/swarm`） | 无参数进入 Deck，带目标发起任务；`/hive models` 设置角色模型 |
+| `/strategy [名称] [n]` | 设置本会话默认策略，无参数打开面板 |
+| `/chat` | 切到 Chat |
+| `/status` | 查看版本、模型、cwd、分支、信任、权限、首页、策略、maxAgents 和 worktree |
 | `/agents` | 蜂群成员：查看任务和报告，暂停、发送指示或取消 |
 | `/board [key]` | 查看黑板 |
 | `/exit`（`/quit`） | 退出 |
@@ -199,6 +363,8 @@ agent 运行时输入的消息会排队，在下一个 step 送达，不用先�
 | `acceptEdits` | 在 default 的基础上，自动允许修改工作区内的文件 |
 | `plan` | 只允许只读操作。模型用 `exit_plan_mode` 提交计划，你批准后才能修改 |
 | `yolo` | 除了高危命令，全部自动允许 |
+
+文件 edit / multi_edit / write 审批卡片会在读权限允许且文件状态有效时预览 diff，最多 12 行，超出部分用 `Ctrl+O` 查看完整详情。新文件可以直接预览；越界、UNC、未读取或过大的现有文件不自动预览。merge_worktree 审批显示 diffstat；bash 显示完整命令和高危、worktree 或只读角色触发强制询问的原因。预览和 `Ctrl+O` 不会批准操作。
 
 审批时，`1` 或 `y` 允许一次，`2` 本会话内始终允许，`3` 本项目始终允许，`4`、`n` 或 `Esc` 拒绝；也可以用 `↑↓` 选择后按 `Enter`。高危操作只能选允许一次或拒绝。本会话的授权写在会话日志里，恢复会话后仍然有效。本项目的授权保存在 `~/.roast/projects/<hash>/settings.json`，不会进入仓库。
 
@@ -232,110 +398,6 @@ agent 运行时输入的消息会排队，在下一个 step 送达，不用先�
 - yolo 模式下每条 bash 命令执行前都会打快照，因为无法可靠判断一条命令会不会改文件。
 
 `/rewind` 或空闲时连按两次 `Esc` 打开回退菜单，选择要回到的 turn，按两次 `Enter` 确认。`/rewind N` 直接回到第 N 个 turn 开始之前。文件和对话会一起回退，回退前会先备份当前状态，期间新建的文件会被删除。回退不会退还已经消耗的费用。
-
-## 蜂群
-
-```sh
-roast swarm "给登录接口加上限流"
-roast swarm -t best-of-n -n 4 "实现一个 LRU 缓存"
-roast swarm -t research --print "调研项目里的错误处理方式"
-```
-
-对话中用 `/swarm [模板] <目标>`。
-
-Queen 负责拆解任务、派生子 agent 和汇总结果。子 agent 的角色有：
-
-| 角色 | 职责 |
-|---|---|
-| lead | 负责一块子任务，可以继续派生 worker |
-| worker | 写代码 |
-| scout | 只读调研 |
-| critic | 只读评审 |
-| judge | 只读，比较多个方案 |
-
-agent 之间通过消息和黑板（一个共享的键值存储）协作。等待子 agent 时不消耗 token。
-
-### 模板
-
-| 模板 | 做法 |
-|---|---|
-| `fanout`（默认） | 拆成互不依赖的子任务并行完成，审阅后合并 |
-| `best-of-n` | N 个 worker 各自独立实现同一个任务，judge 比较后合并最好的一个 |
-| `critique` | worker 实现，critic 评审，不通过就派新的 worker 修改，最多 3 轮 |
-| `research` | N 个 scout 从不同角度只读调研，把结果写到黑板上，由 Queen 汇总 |
-
-`-n` 设置并行数量，默认 3，范围 2–8。`roast swarm --list-templates` 列出所有模板。
-
-模板只是交给 Queen 的一段指令，Queen 会按实际情况调整。自定义模板放在 `~/.roast/templates/*.yaml` 或 `.roast/templates/*.yaml`：
-
-```yaml
-name: bug-hunt
-description: 先分头定位问题，再派 worker 修复
-prompt: |
-  目标：{{goal}}
-  先派 {{n}} 个 scout 分别排查不同模块，把怀疑点写到黑板 /bugs/ 下，
-  确认原因后再派 worker 修复，最后让 critic 评审。
-```
-
-### Mission Control
-
-按 `Ctrl+G` 打开。窗口宽度不少于 112 列时分三栏：agent 树、当前视图和侧栏；70 列以上去掉侧栏；更窄时只显示当前视图。
-
-| 按键 | 作用 |
-|---|---|
-| `1`–`4` 或 `Tab` | 切换视图：输出、消息、黑板、上下文 |
-| `j`/`k` | 在输出视图中选择 agent，在其他视图中滚动 |
-| `↑↓` | 滚动 |
-| `b`/`f` 或 `PgUp`/`PgDn` | 翻页 |
-| `Home` / `G` 或 `End` | 到顶部 / 底部 |
-| `m` | 给选中的 agent 发送指示 |
-| `p` | 暂停或继续 |
-| `x` 按两次 | 取消选中的 agent 及其所有子 agent |
-| `q`、`Esc` 或 `Ctrl+G` | 返回对话 |
-| `Ctrl+C` | 中断主 agent 并返回对话 |
-
-暂停在两个 step 之间生效，正在执行的工具会正常完成。
-
-### 角色模型
-
-可以为每个角色指定模型：
-
-- `/hive models` 打开面板，为 lead、worker、scout、critic、judge 选择模型和推理强度，保存在配置的 `swarm.models` 和 `swarm.efforts` 中。值为 `inherit` 表示跟随主会话。
-- 命令行临时指定，可以重复使用，不写入配置：
-
-  ```sh
-  roast swarm "修复测试并评审" --role-model worker=deepseek:deepseek-chat --role-model critic=claude:claude-sonnet-5-5
-  ```
-
-  `/swarm` 里同样可以加 `--role-model`。Queen 的模型用 `-m`、`/model` 或 `--role-model queen=…` 设置。
-
-没有指定模型的角色，由 Queen 根据已配置模型的价格和上下文长度选择，信息不够时跟随主会话。你指定过的角色（包括 `inherit`）Queen 不能更改。
-
-### worktree
-
-在 git 仓库中，worker 和 lead 默认各自在独立的 worktree 里改代码，完成后由上级审阅合并。合并前会先检查冲突，有冲突时一个文件也不会写入。只读角色和非 git 项目共用工作目录，通过文件租约避免两个 agent 同时改同一个文件。设置 `swarm.worktrees: false` 可以关闭 worktree。
-
-- worktree 位于 `~/.roast/worktrees/<runId>/<agentId>`，基于父 agent 工作区的当前状态创建，包括未提交的改动。整个过程不会动你的分支、索引和 HEAD。
-- 顶层的 `node_modules` 会复制一份到 worktree（文件系统支持时使用写时复制），这会增加启动时间和磁盘占用。
-- worktree 只隔离文件修改，不是沙箱，shell 等外部命令仍然能访问其他目录。所以在 worktree 中执行命令每次都需要你批准，yolo 模式和 allow 规则也不例外。非交互模式下这类命令会被拒绝，可以等合并后由主会话验证。
-- 会话结束时，没有改动的 worktree 会被删除，有未合并改动的会保留，并在 stderr 列出路径。`roast worktrees list` 查看保留的 worktree，`roast worktrees prune` 删除已结束且没有改动的。正在使用、有未合并改动或缺少基线记录的不会被删除。
-
-### 只读角色
-
-scout、critic 和 judge 不能直接修改文件。它们执行的命令中，能确认是只读的（如 `git log`、`rg`、`cat`）按普通规则处理；无法确认的每次都要你批准，不能设为始终允许。MCP 等其他执行类工具也一样。等待批准时，agent 在蜂群树中显示为"等待用户授权"。deny 规则和 plan 模式仍然有效。
-
-一个 agent 连续 12 个 step 没有新进展（重复同样的调用，或者一直失败）时，会提醒它的上级检查。读取、搜索和验证得到新结果都算作进展，所以长时间的调研不会被误判。
-
-### 限制
-
-- `swarm.maxAgents`：一次会话最多派生的 agent 数（包括已结束的），默认 12。
-- `swarm.maxDepth`：最大层级，默认 3。
-- `swarm.maxMinutes`：单个子 agent 的最长运行时间，默认 60 分钟，超时后取消它和它的子 agent。
-- 不限制 token 用量。
-
-供应商的 `maxConcurrency` 是主会话和蜂群共享的并发上限，默认是 16 和 `maxAgents + 1` 中较小的一个。实际并发从最多 4 个开始，遇到 429 减半并遵守 `retry-after`，连续成功 10 次后加 1。等待中的 agent 不占用并发名额。
-
-黑板只保存在内存中，恢复会话后为空。
 
 ## 上下文、缓存与费用
 
@@ -489,7 +551,7 @@ roast mcp remove github
 |---|---|
 | `PreToolUse` | 工具执行前、权限检查之前。退出码 2 阻止这次调用 |
 | `PostToolUse` | 工具执行后。退出码 2 时 stderr 作为反馈附加到工具结果，退出码 0 的输出会被忽略 |
-| `UserPromptSubmit` | 用户发送消息时。可以拦截，stdout 会作为附加上下文 |
+| `UserPromptSubmit` | 用户发送消息时。可以拦截，stdout 会作为附加上下文；Hive 的 prompt 为原始 goal，另带 hive 元数据，追加内容进入 brief |
 | `Stop` | agent 准备结束 turn 时。退出码 2 让它继续，每个 turn 最多 3 次 |
 | `SessionStart` | 会话开始时，stdout 加入 system prompt |
 
@@ -555,8 +617,13 @@ roast mcp remove github
 | `logsDir` | 运行日志目录，默认 `logs`，**相对于当前目录**。记得加进项目的 `.gitignore`，或改成绝对路径 |
 | `debugLog` | 记录完整的请求体，也可以用环境变量 `ROAST_DEBUG_LOG=1` 开启 |
 | `context` | `compactAt`（默认 0.8）、`elideAt`（0.7）、`minSavings`（4000）、`keepTurns`（3）、`agingTurns`（8）、`agingMinTokens`（2000）、`previewLines`（20）、`cacheTtlMs`（300000）、`summaryModel`、`summaryMaxTokens`（2048） |
-| `swarm` | `models`、`efforts`、`maxAgents`、`maxDepth`、`maxMinutes`、`worktrees` |
-| `ui` | `theme`、`motion`、`ascii`、`shellTimeoutMs`、`markdown` |
+| `swarm` | `models`、`efforts`、`maxAgents`、`maxDepth`、`maxMinutes`、`worktrees`、`strategy`、`n` |
+| `swarm.strategy` | 默认策略，默认 `"auto"` |
+| `swarm.n` | 默认并行数，默认 3，范围 2–8 |
+| `ui` | `theme`、`motion`、`ascii`、`shellTimeoutMs`、`markdown`、`home`、`notify`、`title` |
+| `ui.home` | `"hive"`（默认）或 `"chat"` |
+| `ui.notify` | `"auto"`（默认）、`"bell"` 或 `"off"`，仅用户配置生效 |
+| `ui.title` | 是否设置窗口标题，默认 `true`，仅用户配置生效 |
 | `webSearch` | `driver`、`baseURL`、`apiKeyRef`、`timeoutMs` |
 | `memory` | 见[长期记忆](#长期记忆) |
 | `rag.embeddings` | 见[代码检索](#代码检索) |
@@ -593,7 +660,7 @@ roast mcp remove github
 | `memory/` | 长期记忆 |
 | `indexes/` | 代码向量缓存 |
 | `worktrees/` | 蜂群 worktree |
-| `skills/`、`prompts/`、`templates/` | 用户级技能、prompt 覆盖和蜂群模板 |
+| `skills/`、`prompts/`、`strategies/`、`templates/` | 用户级技能、prompt 覆盖和 Hive 策略（兼容模板） |
 
 项目目录：
 
@@ -601,7 +668,7 @@ roast mcp remove github
 |---|---|
 | `.roast/config.json` | 项目配置 |
 | `.roast/shadow.git`、`.roast/snapshots/` | 检查点 |
-| `.roast/skills/`、`.roast/prompts/`、`.roast/templates/` | 项目级技能、prompt 覆盖和蜂群模板 |
+| `.roast/skills/`、`.roast/prompts/`、`.roast/strategies/`、`.roast/templates/` | 项目级技能、prompt 覆盖和 Hive 策略（兼容模板） |
 | `ROAST.md` | 项目说明，`#` 写入的记忆也在这里 |
 | `logs/` | 运行日志（默认位置） |
 
@@ -649,4 +716,5 @@ DuckDuckGo 有时会要求验证码或限流，换成 Brave、Tavily 或 SearXNG
 - 没有在 Windows Terminal 和 conhost 中手工验证过中文输入法候选框的位置，以及 `Shift+Enter` 的行为。
 - 内置的语义工具只支持 TS/JS。
 - 终端窗口缩小时，界面可能整屏重绘一次。
-- 黑板不随会话保存，恢复会话后为空。
+- 黑板和任务计划板不随会话保存，恢复会话后为空。
+- 0.5.0 可以恢复 0.4 日志；含 hive/mission 的新日志需用 0.5.0 或更新版本读取。

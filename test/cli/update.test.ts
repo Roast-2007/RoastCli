@@ -7,7 +7,7 @@ import { VERSION } from '../../src/core/version.js';
 
 vi.mock('node:child_process', async (original) => ({ ...(await original<typeof import('node:child_process')>()), spawn: vi.fn() }));
 
-const release = (version = '0.4.2') => ({
+const release = (version = '0.5.1') => ({
   tag_name: `v${version}`,
   draft: false,
   prerelease: false,
@@ -41,8 +41,8 @@ describe('release update detection', () => {
   });
 
   it('checks the fixed official endpoint on every launch without credentials or redirects', async () => {
-    expect(await checkForUpdate()).toEqual({ version: '0.4.2' });
-    expect(await checkForUpdate()).toEqual({ version: '0.4.2' });
+    expect(await checkForUpdate()).toEqual({ version: '0.5.1' });
+    expect(await checkForUpdate()).toEqual({ version: '0.5.1' });
     expect(request).toHaveBeenCalledTimes(2);
     const [url, options] = request.mock.calls[0]!;
     expect(String(url)).toBe('https://api.github.com/repos/Roast-2007/RoastCli/releases/latest');
@@ -109,14 +109,14 @@ describe('explicit update command', () => {
     expect(await runUpdate()).toBe(0);
     const [command, args, options] = vi.mocked(spawn).mock.calls[0]!;
     expect(command).toBe(process.platform === 'win32' ? 'cmd.exe' : 'npm');
-    expect(args).toContain('https://github.com/Roast-2007/RoastCli/releases/download/v0.4.2/roastcli.tgz');
+    expect(args).toContain('https://github.com/Roast-2007/RoastCli/releases/download/v0.5.1/roastcli.tgz');
     expect(args).toContain('--global');
     expect(args).toContain('--prefer-online');
     expect(options).toMatchObject({ stdio: 'inherit' });
     expect(options).not.toHaveProperty('shell');
     expect(options?.cwd).not.toBe(process.cwd());
     expect(existsSync(String(options?.cwd))).toBe(false);
-    expect(out.mock.calls.flat().join('')).toContain('已更新到 0.4.2');
+    expect(out.mock.calls.flat().join('')).toContain('已更新到 0.5.1');
   });
 
   it('does not reinstall or downgrade when already current', async () => {
