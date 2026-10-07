@@ -60,6 +60,7 @@
 - 首行是 `{type: 'session', version: 1}` 头，之后每行一个事件，都带 `seq` 和 `agentId`。事件类型定义在 `session/events.ts`。
 - 同一个 tick 内的事件用 `setImmediate` 合并成一次 `appendFileSync`。进程退出时，exit hook 写入剩余事件并释放锁。
 - 子 agent 的日志在同一目录下的 `agents/<agentId>.jsonl`。
+- Hive 界面与协作状态在同目录的 `hive.jsonl`，主日志事件类型不变，0.5.0 可继续读取 0.5.1 主日志。
 
 ### History reducer
 
@@ -92,7 +93,27 @@
 - 同时重建文件读取状态和权限授权。
 - 0.5.0 接受已有 0.4 日志；含新 `hive/mission` 事件的日志不能由旧版程序读取。
 
-界面重放只使用已提交的事件，不重复未提交的 raw chunk，也不显示内部 attachment。
+`Session.displayEvents()` 合并恢复源日志与本进程 committer 已提交的事件，跳过用于导入模型历史的 `history/import`，避免覆盖原始显示。分叉的 import 可选字段 `fromSeq` 固定来源水位，`turn` / `turnStarts` / `missionSeq` 保存轮次快照与任务编号（`turnStarts` 按引用去重为消息池加下标，体积随消息数线性增长），支持新日志的重放和原轮次回退；旧程序可忽略这些字段。
+
+界面不重放 raw chunk 或内部 attachment。流式文本只有提交成功才进入模型历史；中断的文本单独写 Hive partial，UI 在该 turn 的结束小结之前显示 Markdown 和弱化标记“（已中断，未发送给模型）”，Queen 与子 agent 相同。子成员 partial 可带 `agentTurn`，主 turn 用于全体回退，子 turn 用于成员界面定位。projection 和请求摘要比对不读取 partial。
+
+### Hive 日志与成员恢复
+
+`swarm/hive-journal.ts` 对 `<runDir>/hive.jsonl` 单写者同步追加，写失败仅降级；每行 `v: 1`，读取跳过坏行、未知版本和 type。记录为：
+
+| type | 字段与用途 |
+|---|---|
+| `board` | `turn, entry`，成功的黑板写入，包含计划与 `/reports/<id>` |
+| `message` | `turn, envelope, recipients`，与 UI 同源，按 envelope.id 去重 |
+| `partial` | `turn, agentId, text, at`，未提交的中断文本；子成员可带 agentTurn |
+| `rewind` | `toTurn, at`，丢弃 turn ≥ toTurn 的协作状态 |
+| `snapshot` | `turn, board, messages, partials`，分叉恢复后的初始状态 |
+
+`turn` 为 supervisor 观察 `turn/start` 后的 Queen 当前轮次。按顺序折叠记录，snapshot 替换当前积累状态，rewind 删除目标轮次及之后的记录；board 取每个 key 最新 entry，保留 version / author / at；messages 返回最近 50 条。snapshot 的 board 和 messages 保留带原 turn 的历史记录，才能在新 run 再次回退到旧版本。`Blackboard.restore` 整体替换而不触发 watch 或写监听，Queen 工具与计划页读取同一份重建结果。
+
+`session/hive-restore.ts` 从来源 run 的主日志及 `agents/*.jsonl` 配对 spawn_agent 调用与成功结果，得到 parentId、role、brief、taskId 和 spawnTurn，孙辈继承父的 Queen spawnTurn。header 给出模型与开始时间，最后成功 report 或 turn/end 推导 done / failed / cancelled；无结束记录视为 cancelled。缺少 spawn 时按 id 前缀推角色并归属 Queen，损坏子日志跳过。父链计算 depth 和 children，不恢复 worktree。分叉链沿原目录读取，不能改读新目录的空 agents。
+
+恢复成员只进入 UI 合并树与历史 view，live 同名数据优先，不放入 supervisor recs，不占 maxAgents，也不可路由、暂停、取消或合并。id 序号同时读取来源日志与恢复成员，回退不降低水位。费用仍按原模型与事件计价，来源主日志和子日志只观察一次，回退不退款。
 
 ## 权限与检查点
 
@@ -132,6 +153,8 @@ deny → plan 模式（只放行只读和交互类工具）→ 强制询问 → 
 - `file-snapshots.ts` 在 git 不可用或初始化失败时使用。快照按字节保存为 `.roast/snapshots/<uuid>.json`，保留二进制内容和 CRLF；跳过符号链接和 junction、依赖、日志和 Roast 自身状态；累计超过 128 MiB 时报错。恢复时同样删除快照中没有的文件。
 - `rewind` 事件为 `{type: 'rewind', toTurn, checkpoint?, backup?, deleted?}`。对话按 history reducer 记下的 turn 起点恢复；文件使用 turn 编号不小于目标的最早检查点恢复。turn 编号之后继续递增，不复用。
 - 回退后，文件读取状态以文件内容的 sha1 为准，不一致时 edit 会要求重新 read。
+
+没有 worktree 且 cwd 与主工作区相同的成员，在写类工具执行前复用主 CheckpointManager，以 Queen 当前 turn 串行创建首个基线；多个成员并发只快照一次，checkpoint 写主日志。worktree 的检查点仍独立，合并经过主检查点。主模型和所有子成员空闲才允许 rewind。成功后追加 Hive rewind、重建黑板和消息、移除该轮次起派生的终态成员及 UI diff 缓存，并用 displayEvents 重放 Queen。store.restore 从当前 nextId 继续分配显示 id，保证 `/clear` 的 Static 水位不会隐藏重放内容；未合并 worktree 留给退出清理，id 不复用。
 
 ## 上下文引擎
 
@@ -229,7 +252,7 @@ interface ContextState {
 ### 渲染
 
 - `screens.ts` 的 `runInteractive` 只创建一个 Ink 实例（alternate screen、`maxFps` 30、`incrementalRendering`、kitty 键盘协议自动检测），通过 `rerender` 在 Hive Deck、Chat（`FullScreen.tsx`）和会话内的配置向导之间切换。首页取 `ui.home`，默认 hive，CLI 可以覆盖。store、controller 和两个工作面的独立编辑器草稿在切换时保留。首次配置向导和信任确认在此之前用单独的 `render()` 显示，旧 Mission Control 已删除。
-- 对话界面的标题、输入框和状态栏固定，中间是按行滚动的视口。`transcript.ts` 把消息转换成带样式的行（Markdown 由 `markdown/rows.ts` 通过 `marked.lexer` 解析，代码块用 cli-highlight 高亮并映射到主题色），按不可变的消息对象缓存在 WeakMap 中。每帧只重建流式输出的尾部、推理内容和运行中的工具，并且只把可见的行渲染成 `<Text>`。
+- 对话界面的标题、输入框和状态栏固定，中间是按行滚动的视口。`output-rows.ts` 共享 `OutputRow {spans: Span[]; callId?: string}`，Markdown 由 `markdown/rows.ts` 通过 marked 解析，代码块高亮映射主题。工具摘要、diff、错误和 live 行带各自 callId，其他行不带；WeakMap 按不可变消息对象缓存，签名含 width / ascii / spacing / compact。compact 段落间距为 0，只保留工具摘要、两行 live 尾部和一行错误；非 compact 保持 Chat 的 diff 预览。`transcript.ts` 保留兼容导出，`OutputLine` 共用 spans 绘制，所有外部文字经过 terminalText。
 - `viewport.ts` 统一读取窗口尺寸，所有布局接收 `columns = max(1, rawColumns - gutter)`、`rows = max(1, rawRows - 1)`；底部一行避免 Windows 控制台滚屏。`ui.gutter` 为 0–4，默认 2，`ROAST_GUTTER` 优先，rawColumns <30 时归零。根容器和浮层使用扣留白后的尺寸，输入与审批优先。
 - `resize.ts` 为各 Ink 实例监听任一维度的 resize，防抖 60ms；等待绘制完成后丢弃输出缓存、写清屏序列并 rerender 原树。Ink 7.1.1 的公开 `clear()` 会把旧输出重新同步进缓存，不能强制重绘，因此版本相关的私有实例映射与缓存适配集中在此处，并移除 Ink 同步绘制旧尺寸树的 resize 监听。尺寸 hook 继续更新，根不 remount；偏移在渲染时夹紧，草稿、焦点、页签、浮层与动画时钟保留。
 - `App.tsx` 中还保留了旧的 inline 模式（`<Static>` 加水位线），只在 `fullScreen` 为假时使用，目前生产代码不走这条路径，主要用于测试和嵌入。
@@ -257,7 +280,13 @@ interface ContextState {
 
 `ui.hints` 控制 full 引导、compact KeyBar 或 off。KeyBar 只取能完整放入的一组优先级前缀，高度不足 14 行时隐藏；Deck 命中图和 Chat DOM 坐标都对应实际显示项。点击提交复用 InputBox 的 Enter 处理，保留命令补全、历史搜索、换行和折叠粘贴展开；点击审批复用 InteractionCard 的选项及单次响应守卫，强制审批不提供持久授权。Chat 阅读位置和排队数量留在输入区，不随 hints 关闭而丢失。Deck 专属帮助经 Overlay 的 deck 标记分流。
 
-Queen 用 `board_write` 写 `/mission/plan` JSON，`plan.ts` 对缺字段、重复 id 和错误 JSON 容错，失败时用成员生成行；`spawn_agent` / `task` 的 `task_id` 映射到 `AgentInfo.taskId`。任务行的状态来自成员 state / report，不要求反复更新黑板。黑板没有持久化，恢复会话后计划板为空，最近任务由日志中的 goal、strategy、turn/end 结果投影。
+Queen 用 `board_write` 写 `/mission/plan` JSON，`plan.ts` 对缺字段、重复 id 和错误 JSON 容错，失败时用成员生成行；`spawn_agent` / `task` 的 `task_id` 映射到 `AgentInfo.taskId`。任务行的状态来自成员 state / report，不要求反复更新黑板。计划从 Hive 日志恢复，最近任务由主日志中的 goal、strategy、turn/end 投影；恢复时有效计划优先，否则选 Queen 输出页。
+
+Deck 输出页使用 paneMetrics 内宽生成 compact OutputRow，绘制、滚动上限与 hitmap 共用同一份 rows；Pane 对 rows 不二次换行。输出窗格双击或任务区 Enter 打开本地 zoom，替换 body 为整宽非 compact 输出，使用 Chat 留白和间距。zoom 的 start 与底部跟随独立于原窗格 offset，关闭详情或缩放窗口不丢阅读状态，退出保留页签 / 成员 / offset。compact 矮屏没有全屏入口。
+
+`tool-nav.ts` 按显示顺序去重 callId 并使用最新状态；latestTool 保持运行中优先。Chat 按正文和左右留白计算鼠标行号，双击 tool:callId 打开对应工具，阅读时 Ctrl+O 选择视口最后一个工具。Deck 小窗格双击进入 zoom，zoom 中工具双击打开精确详情，其他行双击返回。详情在 `components/ToolDetail.tsx` 独立滚动，完整显示参数、diff 与结果，可切换工具，入口 callId 固定而同 callId 状态持续更新。Shift 点击和 mouse off 不处理；KeyBar / 状态栏点击仍用原组件路径。
+
+通知存 UI meta.signals，不属于 main 显示条目；更新信号固定在信号栏顶部用 accent，启动警告与通知去重。界面回退重放不清除这些信号，重启时由启动检测重新填入。
 
 `phase.ts` 依据当前任务所属 turn 推导计划中、执行中、整合中，以及 completed / aborted / error / max-steps 的结束标签。成员关联限制在该任务 turn 内，活跃派发阶段也识别新启动成员，避免后续 Chat turn 污染任务用量。任务用量按 turn、agent、provider / model 汇总既有账本；缺少定价时显示未知，不输出部分总价。
 
@@ -330,7 +359,7 @@ Queen 用 `board_write` 写 `/mission/plan` JSON，`plan.ts` 对缺字段、重�
 - `body` 最多 4000 字符，大块内容放在黑板或文件中，用 `refs` 引用。
 - 只有 question、answer、steer、alert 和 report 会唤醒等待中的 agent，其他消息在下一个 step 边界送达。
 - 每个发送者每分钟最多 30 条，hop 最多 4，按 `sha1(from|kind|subject|body)` 在最近 200 条中去重。
-- 黑板是内存中的版本化键值存储，键形如 `/mission/auth/api-contract`。`board_write` 带 `expect_version` 时做 CAS，版本不匹配返回 `{ok: false, current: <版本号>}`。订阅者只收到"某个键已更新"的通知，正文需要用 `board_read` 拉取，这样通信内容不会自动塞进每个 agent 的上下文。黑板不写入日志，恢复会话后为空。
+- 黑板是版本化键值存储，键形如 `/mission/auth/api-contract`。`board_write` 带 `expect_version` 时做 CAS，版本不匹配返回 `{ok: false, current: <版本号>}`。订阅者只收到"某个键已更新"的通知，正文需要用 `board_read` 拉取，这样通信内容不会自动塞进每个 agent 的上下文。成功写入追加 Hive 日志，恢复时整体重建，恢复动作不通知订阅者。
 
 ### 工具
 
@@ -373,6 +402,8 @@ Queen 用 `board_write` 写 `/mission/plan` JSON，`plan.ts` 对缺字段、重�
 策略（`strategies.ts`）是 Queen 简报中的 playbook，不是写死的编排流程，所有协作走同一套工具。内置 auto（默认）、fanout、best-of-n、critique（最多 3 轮）、research。`renderBrief` 按 missionId、goal、strategy、n、readOnly 和 playbook 拼接 `prompts.ts` 中的固定结构；英文共享提示词和角色卡要求用用户的语言回复，报告固定为 RESULT / CHANGES / VERIFY / RISKS / BOARD。
 
 YAML 兼容 `~/.roast/templates/` 和 `.roast/templates/`，新增同级 `strategies/`，同一层内同名策略优先。字段为 name、description、playbook（兼容 prompt）、可选 n / readOnly，支持 `{{goal}}` 和 `{{n}}`；不合法文件跳过。未受信任的项目不能覆盖已有同名策略。`templates.ts` 只保留旧接口适配，生产任务入口用 MissionInput。`swarm.strategy` 默认 auto，`swarm.n` 默认 3。
+
+strategyUsesN 根据 playbook 中允许空格的 n 占位符或 YAML n 判断，两步策略面板仅对使用 n 的策略显示 2–8 的并行数。当前策略保留会话 n，其他优先 YAML n，确认一次更新 strategy / n。文本命令支持名称加 n 或纯数字 n，非法输入不改变 meta。任务面板使用当前会话 n，Deck 标记与 `/status` 仅在 usesN 时显示 n，显式 n 对所有策略仍是 writer 并发上限。
 
 模型路由（`model-routing.ts`）：用户指定的角色模型（配置的 `swarm.models`、`--role-model`，包括 `inherit`）优先且锁定。其余角色由 Queen 通过 `configure_swarm` 或在 `spawn_agent` 时指定，可选范围是已配置、受信任的模型，Queen 能看到它们的价格和上下文长度。都没有指定时跟随主会话。
 

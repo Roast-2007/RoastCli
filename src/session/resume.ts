@@ -9,7 +9,7 @@ import { canonicalPath } from '../core/paths.js';
 import type { ContentBlock, Message, ToolResultBlock } from '../core/types.js';
 import type { FileState } from '../tools/fs-state.js';
 import type { LogHeader, SessionEvent, SessionEventBody } from './events.js';
-import { foldHistory, initialHistory, type HistoryState } from './history.js';
+import { foldHistory, initialHistory, packTurnStarts, type HistoryState } from './history.js';
 import { isLogLocked, RunLogWriter, type RunLogInfo } from './log-writer.js';
 import { deriveMessages, loadRunLog } from './projection.js';
 import { listRuns, type RunSummary } from '../cli/logs.js';
@@ -63,7 +63,8 @@ export function rebuildFileStates(events: SessionEvent[]): [string, FileState][]
     const fs = ev.metadata['fileState'];
     if (typeof p === 'string' && isFileState(fs)) map.set(canonicalPath(p), [p, fs]);
     const states = ev.metadata['fileStates'];
-    if (states && typeof states === 'object') for (const [file, state] of Object.entries(states)) if (isFileState(state)) map.set(canonicalPath(file), [file, state]);
+    if (states && typeof states === 'object')
+      for (const [file, state] of Object.entries(states)) if (isFileState(state)) map.set(canonicalPath(file), [file, state]);
   }
   return [...map.values()];
 }
@@ -131,13 +132,18 @@ export function loadResumeState(logPath: string): ResumeState {
       events,
     };
   }
-  const messages = header.version >= 1 ? [...foldHistory(events).messages] : deriveMessages([header, ...events]);
+  const folded = header.version >= 1 ? foldHistory(events) : undefined;
+  const messages = folded ? [...folded.messages] : deriveMessages([header, ...events]);
   const maxTurn = events.reduce((n, e) => ('turn' in e && typeof e.turn === 'number' ? Math.max(n, e.turn) : n), 0);
   return {
     header,
     logPath,
     appendable: false,
-    history: { ...initialHistory(), turn: maxTurn },
+    history: {
+      ...initialHistory(),
+      turn: maxTurn,
+      ...(folded ? { turnStarts: folded.turnStarts, missionSeq: folded.missionSeq } : {}),
+    },
     importMessages: repairPairing(messages),
     dangling: [],
     fileStates,
@@ -202,7 +208,17 @@ export async function openRunLog(params: { logsRoot: string; info: RunLogInfo; r
     log,
     initialHistory: state.history,
     fileStates: state.fileStates,
-    finalize: (commit) => commit({ type: 'history/import', at: at(), fromRunId: state.header.runId, messages: state.importMessages }),
+    finalize: (commit) =>
+      commit({
+        type: 'history/import',
+        at: at(),
+        fromRunId: state.header.runId,
+        messages: state.importMessages,
+        fromSeq: state.events.at(-1)?.seq,
+        turn: state.history.turn,
+        turnStarts: packTurnStarts(state.history.turnStarts),
+        missionSeq: state.history.missionSeq,
+      }),
     resumedFrom: { runId: state.header.runId, messageCount: state.importMessages.length },
     ...(state.lockedByOther ? { forkedFromLocked: true } : {}),
     permissions: state.permissions,

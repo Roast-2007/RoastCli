@@ -4,7 +4,16 @@
  * 各自独立：日志（agents/<id>.jsonl）、services（读写状态、后台任务、待办）、上下文引擎、mailbox、工作目录
  * （写入型子 agent 在 git 仓库中使用独立 worktree，见 swarm/isolation.ts）。
  */
-import { parseModelRef, roastHome, isProjectTrusted, untrustedProviderOverrides, reasoningEfforts, type ReasoningEffort, type ModelRef, type RoastConfig } from '../core/config.js';
+import {
+  parseModelRef,
+  roastHome,
+  isProjectTrusted,
+  untrustedProviderOverrides,
+  reasoningEfforts,
+  type ReasoningEffort,
+  type ModelRef,
+  type RoastConfig,
+} from '../core/config.js';
 import { RoastError } from '../core/errors.js';
 import type { InteractionBroker } from '../core/interaction.js';
 import type { ProviderRegistry } from '../providers/adapter.js';
@@ -29,6 +38,8 @@ import type { UiEvent } from './ui-events.js';
 import type { SessionEvent } from '../session/events.js';
 import { CheckpointManager } from '../ext/audit/checkpoints.js';
 import { ShadowGit } from '../ext/audit/shadow-git.js';
+import type { HiveJournal } from '../swarm/hive-journal.js';
+import { canonicalPath } from '../core/paths.js';
 
 export interface SwarmSetupInput {
   cwd: string;
@@ -51,6 +62,8 @@ export interface SwarmSetupInput {
   windowFor(ref: ModelRef): number;
   signal: AbortSignal;
   debugLog: boolean;
+  journal?: HiveJournal;
+  sharedCheckpoint?: PreExecuteHook;
   onAgentEvent(agentId: string, ev: UiEvent): void;
   onSessionEvent?(ref: ModelRef, event: SessionEvent): void;
   onChange(): void;
@@ -70,11 +83,16 @@ export function setupSwarm(input: SwarmSetupInput): SwarmSetup {
     const model = override ? parseModelRef(override) : ref && ref !== 'inherit' ? parseModelRef(ref) : { ...input.mainRef };
     const profile = input.config.providers[model.provider];
     if (!profile) throw new RoastError('CONFIG', `未配置 provider ${model.provider}`);
-    if (!isProjectTrusted(input.cwd) && untrustedProviderOverrides(input.cwd).includes(model.provider)) throw new RoastError('UNTRUSTED_CONFIG', '子 agent 的 provider 连接尚未信任，请运行 roast trust');
+    if (!isProjectTrusted(input.cwd) && untrustedProviderOverrides(input.cwd).includes(model.provider))
+      throw new RoastError('UNTRUSTED_CONFIG', '子 agent 的 provider 连接尚未信任，请运行 roast trust');
     input.providers.get(model);
     const selected = effort !== undefined ? effort : override || ref === 'inherit' ? undefined : swarm.efforts?.[role];
     if (selected !== undefined) model.reasoningEffort = selected;
-    if (model.reasoningEffort != null && !reasoningEfforts(profile.driver, profile.baseURL, profile.models?.[model.model]).includes(model.reasoningEffort)) throw new RoastError('CONFIG', '子 agent 模型不支持所选 reasoning effort');
+    if (
+      model.reasoningEffort != null &&
+      !reasoningEfforts(profile.driver, profile.baseURL, profile.models?.[model.model]).includes(model.reasoningEffort)
+    )
+      throw new RoastError('CONFIG', '子 agent 模型不支持所选 reasoning effort');
     return model;
   };
   const live = new Set(['queued', 'running', 'waiting', 'paused']);
@@ -89,6 +107,7 @@ export function setupSwarm(input: SwarmSetupInput): SwarmSetup {
     maxAgents: swarm.maxAgents,
     maxDepth: swarm.maxDepth,
     maxAgentMs: swarm.maxMinutes * 60_000,
+    journal: input.journal,
     ...(swarm.worktrees === false ? {} : { worktrees: new WorktreeManager({ runId: input.mainLog.header.runId, home: roastHome() }) }),
     onAgentEvent: input.onAgentEvent,
     onSessionEvent: input.onSessionEvent,
@@ -107,7 +126,16 @@ export function setupSwarm(input: SwarmSetupInput): SwarmSetup {
       if (worktree) services.set(EXECUTION_ROOT_KEY, worktree.root);
       if (READ_ONLY_ROLES.has(role)) services.set(READ_ONLY_ROLE_KEY, role);
       const checkpoints = new CheckpointManager(new ShadowGit(cwd), () => input.engine.mode);
-      const ctl = new ContextController({ window: input.windowFor(modelRef), config: input.config.context, overhead: input.overhead, summarizer: modelSummarizer(input.config, modelRef, input.providers, cwd) });
+      const checkpoint =
+        !worktree && canonicalPath(cwd) === canonicalPath(input.cwd) && input.sharedCheckpoint
+          ? input.sharedCheckpoint
+          : checkpoints.hook();
+      const ctl = new ContextController({
+        window: input.windowFor(modelRef),
+        config: input.config.context,
+        overhead: input.overhead,
+        summarizer: modelSummarizer(input.config, modelRef, input.providers, cwd),
+      });
       const rt = new AgentRuntime({
         agentId: id,
         providers: input.providers,
@@ -117,14 +145,29 @@ export function setupSwarm(input: SwarmSetupInput): SwarmSetup {
         log,
         cwd,
         services,
-        hooks: { preExecute: [...(input.prePermission ?? []), ...(worktree ? [worktreeGuardHook(worktree)] : []), roleGuardHook(role), input.permissionHook, lease, checkpoints.hook()], postExecute: input.postExecute ?? [] },
+        hooks: {
+          preExecute: [
+            ...(input.prePermission ?? []),
+            ...(worktree ? [worktreeGuardHook(worktree)] : []),
+            roleGuardHook(role),
+            input.permissionHook,
+            lease,
+            checkpoint,
+          ],
+          postExecute: input.postExecute ?? [],
+        },
         boundary: composeBoundary(ctl.hooks(), boundary),
         maxSteps: input.config.maxSteps,
         signal: input.signal,
         debugLog: input.debugLog,
+        onPartial: (turn, text, at) =>
+          input.journal?.append({ v: 1, type: 'partial', turn: supervisor.currentTurn, agentTurn: turn, agentId: id, text, at }),
         ...(input.config.temperature !== undefined ? { temperature: input.config.temperature } : {}),
       });
-      ctl.attach((b) => rt.committer.commit(b), () => rt.committer.state);
+      ctl.attach(
+        (b) => rt.committer.commit(b),
+        () => rt.committer.state,
+      );
       checkpoints.attach((event) => rt.committer.commit(event));
       rt.committer.onCommit((ev) => ctl.observe(ev));
       services.set(CONTEXT_ACCESS_KEY, { state: () => rt.committer.state });
@@ -136,7 +179,7 @@ export function setupSwarm(input: SwarmSetupInput): SwarmSetup {
     const requests = input.broker.pending();
     for (const agent of supervisor.tree()) {
       const request = requests.find((r) => r.agentId === agent.id);
-      supervisor.setInteractionWaiting(agent.id, request ? request.kind === 'permission' ? '等待用户授权' : '等待用户回答' : undefined);
+      supervisor.setInteractionWaiting(agent.id, request ? (request.kind === 'permission' ? '等待用户授权' : '等待用户回答') : undefined);
     }
   });
   input.signal.addEventListener('abort', offInteractions, { once: true });

@@ -118,6 +118,39 @@ describe('runPrintMode', () => {
     expect(code).toBe(1);
   });
 
+  it('只有丢弃了已写出的文本才提示重试；无输出的失败与中断文本不额外提示', async () => {
+    const err = sink();
+    await runPrintMode(
+      mockLoop([
+        { type: 'reasoning-delta', text: 'think' },
+        { type: 'stream-reset' },
+        { type: 'error', error: new RoastError('UNKNOWN', 'boom') },
+        { type: 'turn-end', reason: 'error', usage: emptyUsage() },
+      ]),
+      'hi',
+      sink(),
+      err,
+    );
+    expect(err.text()).toBe('error [UNKNOWN] boom\n');
+    const out = sink(), retried = sink();
+    await runPrintMode(
+      mockLoop([
+        { type: 'text-delta', text: 'half' },
+        { type: 'stream-reset' },
+        { type: 'text-delta', text: 'full' },
+        { type: 'stream-commit' },
+        { type: 'text-delta', text: ' cut' },
+        { type: 'partial', text: ' cut' },
+        { type: 'turn-end', reason: 'aborted', usage: emptyUsage() },
+      ]),
+      'hi',
+      out,
+      retried,
+    );
+    expect(out.text()).toBe('half\nfull cut\n');
+    expect(retried.text()).toBe('[流中断，已丢弃部分输出，重试中]\n');
+  });
+
   it('aborted / max-steps 退出码非零', async () => {
     for (const reason of ['aborted', 'max-steps'] as const) {
       const code = await runPrintMode(

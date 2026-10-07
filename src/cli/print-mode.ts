@@ -63,8 +63,12 @@ export async function runPrintMode(
       case 'turn-start':
       case 'user-injected':
       case 'queue-restored':
+      case 'stream-commit':
+      case 'partial':
         break;
       case 'stream-reset':
+        // 只有已经写到 stdout 的文本被丢弃时才提示；失败但没有可见输出的 step 不是重试
+        if (!textOpen) break;
         closeText();
         err.write('[流中断，已丢弃部分输出，重试中]\n');
         break;

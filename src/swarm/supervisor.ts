@@ -23,6 +23,7 @@ import type { Worktree } from './worktree.js';
 import { ProgressWatchdog } from './watchdog.js';
 import type { SessionEvent } from '../session/events.js';
 import type { DiffTarget } from './diff.js';
+import type { HiveJournal } from './hive-journal.js';
 
 export interface CreateRuntimeInput {
   id: string;
@@ -59,6 +60,7 @@ export interface SupervisorDeps {
   /** git worktree 隔离（未提供时所有 agent 共享工作区） */
   worktrees?: WorktreeProvider;
   now?: () => number;
+  journal?: HiveJournal;
 }
 
 interface Rec {
@@ -104,10 +106,15 @@ export class Supervisor {
   private seq = 0;
   private msgSeq = 0;
   private readOnlyMission = false;
+  currentTurn = 0;
+  private readonly retired: Rec[] = [];
 
   observeMission(event: SessionEvent): void {
     if (event.agentId && event.agentId !== 'main') return;
-    if (event.type === 'turn/start') this.readOnlyMission = false;
+    if (event.type === 'turn/start') {
+      this.readOnlyMission = false;
+      this.currentTurn = event.turn;
+    }
     if (event.type === 'hive/mission') this.readOnlyMission = event.readOnly === true;
     if (event.type === 'turn/end') this.readOnlyMission = false;
   }
@@ -138,13 +145,27 @@ export class Supervisor {
 
   constructor(private readonly deps: SupervisorDeps) {
     this.now = deps.now ?? Date.now;
-    this.bus = new MessageBus({ resolve: (from, to) => this.resolve(from, to), deliver: (id, e) => this.deliver(id, e) }, { now: this.now });
+    this.bus = new MessageBus(
+      { resolve: (from, to) => this.resolve(from, to), deliver: (id, e) => this.deliver(id, e, false) },
+      { now: this.now },
+    );
     this.board = new Blackboard(
       (watcher, meta) =>
-        this.deliver(watcher, this.systemEnvelope('board', watcher, 'info', `黑板更新 ${meta.key} v${meta.version}`, `${meta.author} 更新了 ${meta.key}（${meta.chars} 字），需要时 board_read 读取`)),
+        this.deliver(
+          watcher,
+          this.systemEnvelope(
+            'board',
+            watcher,
+            'info',
+            `黑板更新 ${meta.key} v${meta.version}`,
+            `${meta.author} 更新了 ${meta.key}（${meta.chars} 字），需要时 board_read 读取`,
+          ),
+        ),
       this.now,
     );
-    this.bus.onSend((e) => {
+    this.board.onWrite((entry) => this.deps.journal?.append({ v: 1, type: 'board', turn: this.currentTurn, entry }));
+    this.bus.onSend((e, recipients) => {
+      this.deps.journal?.message(this.currentTurn, e, recipients);
       if (e.kind === 'question') this.openQuestions.set(e.from, new Set([...(this.openQuestions.get(e.from) ?? []), e.id]));
     });
   }
@@ -156,8 +177,52 @@ export class Supervisor {
 
   registerRoot(id: string, model: string): void {
     const dir = path.join(path.dirname(this.deps.mainLogPath), 'agents');
-    if (existsSync(dir)) for (const name of readdirSync(dir)) { const match = /^[qlwscj](\d+)\.jsonl$/.exec(name); if (match) this.seq = Math.max(this.seq, Number(match[1])); }
-    this.recs.set(id, this.makeRec({ id, parentId: null, role: 'queen', depth: 0, state: 'running', brief: '主会话', model, startedAt: this.now(), children: [] }, this.deps.cwd));
+    if (existsSync(dir))
+      for (const name of readdirSync(dir)) {
+        const match = /^[qlwscj](\d+)\.jsonl$/.exec(name);
+        if (match) this.seq = Math.max(this.seq, Number(match[1]));
+      }
+    this.recs.set(
+      id,
+      this.makeRec(
+        { id, parentId: null, role: 'queen', depth: 0, state: 'running', brief: '主会话', model, startedAt: this.now(), children: [] },
+        this.deps.cwd,
+      ),
+    );
+  }
+  /** 恢复成员不加入 recs，只保留 id 水位与系统消息水位。 */
+  reserveHistory(runDirs: readonly string[], ids: readonly string[], messages: readonly Envelope[]): void {
+    for (const dir of runDirs) {
+      try {
+        ids = [...ids, ...readdirSync(path.join(dir, 'agents')).map((name) => name.replace(/\.jsonl$/, ''))];
+      } catch {
+        /* 旧 run 可没有子日志。 */
+      }
+    }
+    for (const id of ids) {
+      const match = /^[qlwscj](\d+)$/.exec(id);
+      if (match) this.seq = Math.max(this.seq, Number(match[1]));
+    }
+    for (const message of messages) {
+      const match = /-(\d+)$/.exec(message.id);
+      if (match) this.msgSeq = Math.max(this.msgSeq, Number(match[1]));
+    }
+  }
+  removeEndedFrom(turn: number): string[] {
+    const removed: string[] = [];
+    for (const [id, rec] of this.recs)
+      if (rec.info.parentId && !LIVE.has(rec.info.state) && rec.info.spawnTurn !== undefined && rec.info.spawnTurn >= turn) {
+        this.recs.delete(id);
+        this.openQuestions.delete(id);
+        this.retired.push(rec);
+        removed.push(id);
+      }
+    for (const rec of this.recs.values()) {
+      rec.info = { ...rec.info, children: rec.info.children.filter((id) => !removed.includes(id)) };
+      rec.mailbox.remove((message) => removed.includes(message.from));
+    }
+    this.deps.onChange?.();
+    return removed;
   }
 
   setRootModel(model: string): void {
@@ -195,7 +260,10 @@ export class Supervisor {
     if (!me) return [];
     if (to === 'broadcast') return me.parentId === null ? this.tree().map((a) => a.id) : null;
     if ('agent' in to) return this.recs.has(to.agent) ? [to.agent] : [];
-    if ('role' in to) return this.tree().filter((a) => a.role === to.role).map((a) => a.id);
+    if ('role' in to)
+      return this.tree()
+        .filter((a) => a.role === to.role)
+        .map((a) => a.id);
     if ('topic' in to) return [];
     if (to.rel === 'parent') return me.parentId ? [me.parentId] : [];
     if (to.rel === 'children') return me.children;
@@ -203,7 +271,8 @@ export class Supervisor {
     return parent ? parent.children : [];
   }
 
-  private deliver(id: string, e: Envelope): void {
+  private deliver(id: string, e: Envelope, journal = true): void {
+    if (journal) this.deps.journal?.message(this.currentTurn, e, [id]);
     if (e.kind === 'answer') {
       const open = this.openQuestions.get(id);
       if (open) {
@@ -220,7 +289,18 @@ export class Supervisor {
     return { id: `m-${from}-${++this.msgSeq}`, from, to: { agent: to }, kind, subject, body, refs, hop: 0, at: this.now() };
   }
 
-  spawn(parentId: string, opts: { role: AgentRole; task: string; taskId?: string; refs?: string[]; isolation?: IsolationMode; model?: string; reasoningEffort?: ReasoningEffort | null }): SpawnResult {
+  spawn(
+    parentId: string,
+    opts: {
+      role: AgentRole;
+      task: string;
+      taskId?: string;
+      refs?: string[];
+      isolation?: IsolationMode;
+      model?: string;
+      reasoningEffort?: ReasoningEffort | null;
+    },
+  ): SpawnResult {
     const parent = this.recs.get(parentId);
     if (!parent) return { ok: false, reason: `未知的上级 ${parentId}` };
     if (this.readOnlyMission && (opts.role === 'worker' || opts.role === 'lead')) return { ok: false, reason: '本任务为只读调研' };
@@ -234,27 +314,39 @@ export class Supervisor {
     try {
       const userRoute = this.deps.roleModels?.[opts.role];
       if (userRoute && opts.model && opts.model !== userRoute) throw new Error(`${opts.role} 已由用户指定为 ${userRoute}`);
-      modelRef = { ...this.deps.modelFor(opts.role, userRoute ? undefined : opts.model ?? this.roleModels.get(opts.role), opts.reasoningEffort) };
+      modelRef = {
+        ...this.deps.modelFor(opts.role, userRoute ? undefined : (opts.model ?? this.roleModels.get(opts.role)), opts.reasoningEffort),
+      };
+    } catch (err) {
+      return { ok: false, reason: err instanceof Error ? err.message : '模型选择失败' };
     }
-    catch (err) { return { ok: false, reason: err instanceof Error ? err.message : '模型选择失败' }; }
     const id = `${ROLE_INFO[opts.role].prefix}${++this.seq}`;
-    const rec = this.makeRec({
-      id,
-      parentId,
-      role: opts.role,
-      depth: parent.info.depth + 1,
-      state: 'running',
-      brief: opts.task,
-      ...(opts.taskId ? { taskId: opts.taskId } : {}),
-      model: `${modelRef.provider}:${modelRef.model}`,
-      ...(modelRef.reasoningEffort !== undefined ? { reasoningEffort: modelRef.reasoningEffort } : {}),
-      startedAt: this.now(),
-      children: [],
-    }, parent.cwd, opts.isolation ?? 'auto');
+    const rec = this.makeRec(
+      {
+        id,
+        parentId,
+        role: opts.role,
+        depth: parent.info.depth + 1,
+        state: 'running',
+        brief: opts.task,
+        ...(opts.taskId ? { taskId: opts.taskId } : {}),
+        model: `${modelRef.provider}:${modelRef.model}`,
+        ...(modelRef.reasoningEffort !== undefined ? { reasoningEffort: modelRef.reasoningEffort } : {}),
+        startedAt: this.now(),
+        children: [],
+        spawnTurn: parent.info.parentId ? parent.info.spawnTurn : this.currentTurn,
+      },
+      parent.cwd,
+      opts.isolation ?? 'auto',
+    );
     parent.controller.signal.addEventListener('abort', () => rec.controller.abort(), { once: true });
     this.recs.set(id, rec);
     parent.info = { ...parent.info, children: [...parent.info.children, id] };
-    const run = this.run(rec, modelRef, roleCard({ id, role: opts.role, parentId, task: opts.task, taskId: opts.taskId, refs: opts.refs ?? [] }));
+    const run = this.run(
+      rec,
+      modelRef,
+      roleCard({ id, role: opts.role, parentId, task: opts.task, taskId: opts.taskId, refs: opts.refs ?? [] }),
+    );
     rec.finished = run;
     this.runs.add(run);
     void run.finally(() => this.runs.delete(run));
@@ -271,8 +363,13 @@ export class Supervisor {
       if (userRoute && userRoute !== model) throw new Error(`${role} 已由用户指定为 ${userRoute}`);
       this.deps.modelFor(role as AgentRole, model === 'inherit' ? undefined : model);
     }
-    for (const [role, model] of Object.entries(models)) { if (model === 'inherit') this.roleModels.delete(role as AgentRole); else this.roleModels.set(role as AgentRole, model); }
-    return Object.entries(models).map(([role, model]) => `${role}=${model}`).join(', ');
+    for (const [role, model] of Object.entries(models)) {
+      if (model === 'inherit') this.roleModels.delete(role as AgentRole);
+      else this.roleModels.set(role as AgentRole, model);
+    }
+    return Object.entries(models)
+      .map(([role, model]) => `${role}=${model}`)
+      .join(', ');
   }
 
   /** 按隔离策略准备工作区；返回追加到角色卡的说明 */
@@ -294,19 +391,32 @@ export class Supervisor {
   private async start(rec: Rec, modelRef: ModelRef): Promise<{ log: RunLogWriter; runtime: AgentRuntime; note: string }> {
     const id = rec.info.id;
     const note = await this.isolate(rec);
-    const log = await RunLogWriter.create('', { cwd: rec.cwd, provider: modelRef.provider, model: modelRef.model }, {
-      runDir: path.dirname(this.deps.mainLogPath),
-      runId: this.deps.runId,
-      fileName: path.join('agents', `${id}.jsonl`),
-      agentId: id,
-    });
+    const log = await RunLogWriter.create(
+      '',
+      { cwd: rec.cwd, provider: modelRef.provider, model: modelRef.model },
+      {
+        runDir: path.dirname(this.deps.mainLogPath),
+        runId: this.deps.runId,
+        fileName: path.join('agents', `${id}.jsonl`),
+        agentId: id,
+      },
+    );
     try {
       const runtime = this.deps.createRuntime({
-        id, role: rec.info.role, log, services: this.deps.createServices(id), boundary: this.hooksFor(id), modelRef, cwd: rec.cwd,
+        id,
+        role: rec.info.role,
+        log,
+        services: this.deps.createServices(id),
+        boundary: this.hooksFor(id),
+        modelRef,
+        cwd: rec.cwd,
         ...(rec.worktree ? { worktree: rec.worktree } : {}),
       });
       return { log, runtime, note };
-    } catch (err) { await log.close().catch(() => {}); throw err; }
+    } catch (err) {
+      await log.close().catch(() => {});
+      throw err;
+    }
   }
 
   private async run(rec: Rec, modelRef: ModelRef, prompt: string): Promise<void> {
@@ -327,8 +437,16 @@ export class Supervisor {
         this.deps.onSessionEvent?.(modelRef, event);
         const alert = watchdog.observe(event);
         if (!alert || !rec.info.parentId || rec.controller.signal.aborted || rec.info.report) return;
-        this.deliver(rec.info.parentId, this.systemEnvelope(id, rec.info.parentId, 'alert', `${id} 需要检查进展`,
-          `${id} 已连续 ${alert.steps} 个已完成步骤没有新增工具结果或产出。${alert.denied ? '其中有操作被拒绝，请先检查权限拒绝原因。' : '请检查是否重复相同操作或遇到工具错误。'}可用 agents_status 查看状态，再 send_message 给它 steer，或让它 report 当前结论。`));
+        this.deliver(
+          rec.info.parentId,
+          this.systemEnvelope(
+            id,
+            rec.info.parentId,
+            'alert',
+            `${id} 需要检查进展`,
+            `${id} 已连续 ${alert.steps} 个已完成步骤没有新增工具结果或产出。${alert.denied ? '其中有操作被拒绝，请先检查权限拒绝原因。' : '请检查是否重复相同操作或遇到工具错误。'}可用 agents_status 查看状态，再 send_message 给它 steer，或让它 report 当前结论。`,
+          ),
+        );
       });
       runtime.setPaused(rec.info.state === 'paused');
       timer = setTimeout(() => this.cancelSubtree(id, `运行超过 ${Math.round(limit / 60_000)} 分钟`), limit);
@@ -344,13 +462,21 @@ export class Supervisor {
     } finally {
       offWatchdog?.();
       clearTimeout(timer);
-      await log?.close().catch((err: unknown) => { lastReason = 'error'; lastText = err instanceof Error ? err.message : String(err); });
-      const cancelled = rec.controller.signal.aborted;
+      await log?.close().catch((err: unknown) => {
+        lastReason = 'error';
+        lastText = err instanceof Error ? err.message : String(err);
+      });
+      const cancelled = rec.controller.signal.aborted || lastReason === 'aborted';
       if (!rec.info.report) {
         const status: Report['status'] = cancelled ? 'cancelled' : lastReason === 'completed' ? 'done' : 'failed';
         this.report(id, { agentId: id, status, summary: lastText.trim() || '（没有输出）', refs: [] });
       }
-      const state: AgentInfo['state'] = cancelled ? 'cancelled' : rec.info.report?.status === 'failed' || lastReason === 'error' ? 'failed' : 'done';
+      const state: AgentInfo['state'] =
+        cancelled || rec.info.report?.status === 'cancelled'
+          ? 'cancelled'
+          : rec.info.report?.status === 'failed' || lastReason === 'error'
+            ? 'failed'
+            : 'done';
       const { waitingFor: _waiting, ...info } = rec.info;
       rec.info = { ...info, state, endedAt: this.now() };
       this.deps.onAgentEnd?.(id);
@@ -376,7 +502,10 @@ export class Supervisor {
 
   private serialize<T>(parentId: string, fn: () => Promise<T>): Promise<T> {
     const next = (this.workspaceChains.get(parentId) ?? Promise.resolve()).then(fn);
-    this.workspaceChains.set(parentId, next.catch(() => undefined));
+    this.workspaceChains.set(
+      parentId,
+      next.catch(() => undefined),
+    );
     return next;
   }
 
@@ -392,13 +521,19 @@ export class Supervisor {
     const rec = this.recs.get(childId);
     if (!rec || rec.info.parentId !== callerId) return { ok: false, text: `${childId} 不是你的直接下级` };
     if (!rec.worktree || !this.deps.worktrees) {
-      return { ok: false, text: rec.merged ? `${childId} 的 worktree 已经处理过了` : `${childId} 没有使用独立 worktree（与你共享工作区，改动已直接生效）` };
+      return {
+        ok: false,
+        text: rec.merged ? `${childId} 的 worktree 已经处理过了` : `${childId} 没有使用独立 worktree（与你共享工作区，改动已直接生效）`,
+      };
     }
     if (!rec.info.report) return { ok: false, text: `${childId} 还没有 report，请等它完成后再处理（await_agents）` };
     // report 之后通常只剩最后一步收尾：短暂等待；超过宽限期仍在运行（如在等它的下级）则不阻塞
     if (LIVE.has(rec.info.state) && rec.finished) await settleWithin(rec.finished, FINISH_GRACE_MS);
     if (LIVE.has(rec.info.state)) {
-      return { ok: false, text: `${childId} 已 report 但仍在运行（可能在收尾或等待它的下级），请稍后再处理；可先 await_agents 或查看 agents_status` };
+      return {
+        ok: false,
+        text: `${childId} 已 report 但仍在运行（可能在收尾或等待它的下级），请稍后再处理；可先 await_agents 或查看 agents_status`,
+      };
     }
     if (discard) {
       const files = await this.deps.worktrees.changedFiles(rec.worktree).catch(() => []);
@@ -422,7 +557,7 @@ export class Supervisor {
   /** 收尾：删除没有任何改动的 worktree；有未合并改动的保留（返回其路径，供提示用户） */
   async cleanupWorktrees(): Promise<string[]> {
     const kept: string[] = [];
-    for (const rec of this.recs.values()) {
+    for (const rec of [...this.recs.values(), ...this.retired]) {
       const wt = rec.worktree;
       if (!wt || !this.deps.worktrees) continue;
       const changed = await this.deps.worktrees.changedFiles(wt).catch(() => ['?']);
@@ -433,7 +568,9 @@ export class Supervisor {
           const { worktree: _removed, ...info } = rec.info;
           rec.info = info;
           continue;
-        } catch { kept.push(wt.root); }
+        } catch {
+          kept.push(wt.root);
+        }
       } else kept.push(wt.root);
       await this.deps.worktrees.release?.(wt).catch(() => {});
     }
@@ -450,7 +587,9 @@ export class Supervisor {
     const targets = (ids.length ? ids : (parent?.info.children ?? [])).filter((t) => this.recs.has(t));
     const deadline = opts.timeoutMs ? this.now() + opts.timeoutMs : Number.POSITIVE_INFINITY;
     let timer: ReturnType<typeof setTimeout> | undefined;
-    const timeout = Number.isFinite(deadline) ? new Promise<void>((r) => (timer = setTimeout(r, Math.max(0, deadline - this.now())))) : new Promise<void>(() => {});
+    const timeout = Number.isFinite(deadline)
+      ? new Promise<void>((r) => (timer = setTimeout(r, Math.max(0, deadline - this.now()))))
+      : new Promise<void>(() => {});
     try {
       for (;;) {
         const reports = targets.map((t) => this.recs.get(t)!.info.report).filter((r): r is Report => r !== undefined);
@@ -458,10 +597,15 @@ export class Supervisor {
         // 中断时不消费报告：结果不会到达模型，报告必须留在 inbox 里随下一个 step 送达
         if (opts.signal.aborted) return { reason: 'aborted', reports, pending };
         this.consumeReports(parentId, reports);
-        if ((mode === 'all' && pending.length === 0) || (mode === 'any' && reports.length > 0) || targets.length === 0) return { reason: 'done', reports, pending };
+        if ((mode === 'all' && pending.length === 0) || (mode === 'any' && reports.length > 0) || targets.length === 0)
+          return { reason: 'done', reports, pending };
         if (parent?.mailbox.hasWaking()) return { reason: 'message', reports, pending };
         if (this.now() >= deadline) return { reason: 'timeout', reports, pending };
-        await Promise.race([...pending.map((t) => this.recs.get(t)!.reported), parent?.mailbox.waitForWake(opts.signal) ?? timeout, timeout]);
+        await Promise.race([
+          ...pending.map((t) => this.recs.get(t)!.reported),
+          parent?.mailbox.waitForWake(opts.signal) ?? timeout,
+          timeout,
+        ]);
       }
     } finally {
       if (timer) clearTimeout(timer);
@@ -495,7 +639,11 @@ export class Supervisor {
     const rec = this.recs.get(id);
     if (!rec || !LIVE.has(rec.info.state) || rec.info.waitingFor === reason) return;
     const { waitingFor: _previous, ...info } = rec.info;
-    rec.info = { ...info, state: info.state === 'paused' ? 'paused' : reason ? 'waiting' : 'running', ...(reason ? { waitingFor: reason } : {}) };
+    rec.info = {
+      ...info,
+      state: info.state === 'paused' ? 'paused' : reason ? 'waiting' : 'running',
+      ...(reason ? { waitingFor: reason } : {}),
+    };
     this.deps.onChange?.();
   }
 

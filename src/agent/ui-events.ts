@@ -8,12 +8,24 @@ import type { TokenUsage } from '../core/types.js';
 export type TurnEndReason = 'completed' | 'aborted' | 'error' | 'max-steps';
 
 export type UiEvent =
-  | { type: 'hive/mission'; turn: number; at: string; missionId: string; goal: string; strategy: string; n: number; brief: string; readOnly?: boolean }
+  | {
+      type: 'hive/mission';
+      turn: number;
+      at: string;
+      missionId: string;
+      goal: string;
+      strategy: string;
+      n: number;
+      brief: string;
+      readOnly?: boolean;
+    }
   | { type: 'turn-start'; turn: number }
   | { type: 'text-delta'; text: string }
   | { type: 'reasoning-delta'; text: string }
   /** 重试前丢弃已流出的部分内容 */
   | { type: 'stream-reset' }
+  | { type: 'stream-commit' }
+  | { type: 'partial'; text: string }
   | { type: 'retry'; attempt: number; delayMs: number; code: string; message: string }
   | { type: 'tool-call-start'; callId: string; name: string; args: unknown }
   | { type: 'tool-progress'; callId: string; text: string }

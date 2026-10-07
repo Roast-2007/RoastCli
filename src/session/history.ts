@@ -33,6 +33,40 @@ export function initialHistory(): HistoryState {
   return { messages: [], toolKey: null, turn: 0, lastSeq: 0, turnStarts: {}, context: initialContext() };
 }
 
+export interface PackedTurnStarts {
+  pool: Message[];
+  turns: Record<number, number[]>;
+}
+
+/** 各 turn 的快照共享同一批消息对象：按引用去重后只存下标，日志体积随消息数线性增长 */
+export function packTurnStarts(starts: HistoryState['turnStarts']): PackedTurnStarts {
+  const pool: Message[] = [],
+    index = new Map<Message, number>(),
+    turns: Record<number, number[]> = {};
+  for (const [turn, messages] of Object.entries(starts)) {
+    turns[Number(turn)] = messages.map((message) => {
+      let at = index.get(message);
+      if (at === undefined) {
+        at = pool.length;
+        pool.push(message);
+        index.set(message, at);
+      }
+      return at;
+    });
+  }
+  return { pool, turns };
+}
+
+/** 下标越界的 turn 视为损坏，直接丢弃（只是不能回退到该轮） */
+export function unpackTurnStarts(packed: PackedTurnStarts): HistoryState['turnStarts'] {
+  const starts: Record<number, readonly Message[]> = {};
+  for (const [turn, indexes] of Object.entries(packed.turns)) {
+    if (indexes.every((at) => Number.isInteger(at) && at >= 0 && at < packed.pool.length))
+      starts[Number(turn)] = indexes.map((at) => packed.pool[at]!);
+  }
+  return starts;
+}
+
 function appendToTrailingUser(messages: readonly Message[], blocks: ContentBlock[]): readonly Message[] {
   const last = messages[messages.length - 1];
   if (last && last.role === 'user') {
@@ -72,9 +106,14 @@ function applyMessages(state: HistoryState, ev: SessionEvent): HistoryState {
     case 'user/message': {
       const message: Message = ev.type === 'hive/mission' ? { role: 'user', content: [{ type: 'text', text: ev.brief }] } : ev.message;
       const last = state.messages[state.messages.length - 1];
-      const messages =
-        last?.role === 'user' ? appendToTrailingUser(state.messages, message.content) : [...state.messages, message];
-      return { ...state, messages, toolKey: null, lastSeq, ...(ev.type === 'hive/mission' ? { missionSeq: Math.max(state.missionSeq ?? 0, Number(ev.missionId.slice(1)) || 0) } : {}) };
+      const messages = last?.role === 'user' ? appendToTrailingUser(state.messages, message.content) : [...state.messages, message];
+      return {
+        ...state,
+        messages,
+        toolKey: null,
+        lastSeq,
+        ...(ev.type === 'hive/mission' ? { missionSeq: Math.max(state.missionSeq ?? 0, Number(ev.missionId.slice(1)) || 0) } : {}),
+      };
     }
     case 'assistant/message':
       return { ...state, messages: [...state.messages, ev.message], toolKey: null, lastSeq };
@@ -91,7 +130,15 @@ function applyMessages(state: HistoryState, ev: SessionEvent): HistoryState {
     case 'attachment/injected':
       return { ...state, messages: appendToTrailingUser(state.messages, ev.blocks), lastSeq };
     case 'history/import':
-      return { ...state, messages: ev.messages, toolKey: null, lastSeq };
+      return {
+        ...state,
+        messages: ev.messages,
+        toolKey: null,
+        lastSeq,
+        ...(ev.turn !== undefined ? { turn: ev.turn } : {}),
+        ...(ev.turnStarts ? { turnStarts: unpackTurnStarts(ev.turnStarts) } : {}),
+        ...(ev.missionSeq !== undefined ? { missionSeq: ev.missionSeq } : {}),
+      };
     default:
       return state.lastSeq === lastSeq ? state : { ...state, lastSeq };
   }

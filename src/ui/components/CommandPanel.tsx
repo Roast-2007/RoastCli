@@ -2,9 +2,8 @@ import { useEffect, useMemo, useState } from 'react';
 import { existsSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Session } from '../../agent/session.js';
-import { isProjectTrusted, roastHome } from '../../core/config.js';
 import { saveConfigPatch } from '../../cli/provider-settings.js';
-import { missionInput, loadStrategies } from '../../swarm/strategies.js';
+import { missionInput } from '../../swarm/strategies.js';
 import { MODE_CYCLE, type PermissionMode } from '../../tools/permissions/engine.js';
 import { renderTodos } from '../../tools/interact/index.js';
 import type { UiController } from '../controller.js';
@@ -16,6 +15,8 @@ import { DEFAULT_THEME, THEMES } from '../theme.js';
 import { SelectPanel, type SelectEntry } from './SelectPanel.js';
 import { ModelPanel } from './ModelPanel.js';
 import { MessagePanel, PromptPanel } from './MessagePanel.js';
+import { StrategyPanel } from './StrategyPanel.js';
+import { sessionStrategies } from '../strategy.js';
 
 export function CommandPanel({
   kind,
@@ -39,8 +40,8 @@ export function CommandPanel({
   const close = () => store.setMeta({ overlay: null });
   const cwd = session.log.header.cwd;
   const templates = useMemo(
-    () => (kind === 'swarm' || kind === 'strategy' ? loadStrategies(cwd, roastHome(), { trusted: isProjectTrusted(cwd) }) : new Map()),
-    [kind, cwd],
+    () => (kind === 'swarm' || kind === 'strategy' ? sessionStrategies(session, true) : new Map()),
+    [kind, session],
   );
   useEffect(() => {
     if (kind !== 'memory') return;
@@ -132,20 +133,7 @@ export function CommandPanel({
         }}
       />
     );
-  if (kind === 'strategy')
-    return (
-      <SelectPanel
-        title="策略"
-        entries={[...templates.values()].map((strategy) => ({ id: strategy.name, label: `${strategy.name} · ${strategy.description}` }))}
-        height={height}
-        searchable
-        onClose={close}
-        onSelect={(entry) => {
-          store.setMeta({ strategy: entry.id, n: templates.get(entry.id)?.n ?? store.getState().meta.n ?? 3 });
-          close();
-        }}
-      />
-    );
+  if (kind === 'strategy') return <StrategyPanel store={store} strategies={templates} height={height} />;
   if (kind === 'swarm' || kind === 'skills') {
     if (selected && prompt)
       return (
@@ -157,7 +145,7 @@ export function CommandPanel({
           onClose={() => setPrompt(false)}
           onSubmit={(text) => {
             const result =
-              kind === 'swarm' ? missionInput(templates, text, selected.id, session.config.swarm.n) : skillPrompt(selected.id, text);
+              kind === 'swarm' ? missionInput(templates, text, selected.id, store.getState().meta.n ?? 3) : skillPrompt(selected.id, text);
             close();
             controller.submit(result, kind === 'swarm' ? `/swarm ${selected.id} ${text}` : `/${selected.id} ${text}`);
           }}
@@ -237,7 +225,7 @@ export function CommandPanel({
               return;
             }
             if (entry.id === 'cancel') return setConfirmCancel(true);
-            const info = session.swarm.info(agent);
+            const info = store.getState().meta.swarm.find((info) => info.id === agent);
             setSelected(entry);
             setBody(info ? `${info.model} · ${info.state}\n\n${info.brief}\n\n${info.report?.summary ?? '尚无报告'}` : '成员已结束');
           }}
@@ -249,9 +237,9 @@ export function CommandPanel({
         searchable
         title="Hive · 成员"
         height={height}
-        entries={session.swarm
-          .tree()
-          .map((info) => ({ id: info.id, label: `${info.id} [${info.role}] ${info.state} · ${info.model} · ${info.brief}` }))}
+        entries={store
+          .getState()
+          .meta.swarm.map((info) => ({ id: info.id, label: `${info.id} [${info.role}] ${info.state} · ${info.model} · ${info.brief}` }))}
         onClose={close}
         onSelect={(entry) => setAgent(entry.id)}
       />

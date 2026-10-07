@@ -72,7 +72,17 @@ export type SessionEventBody =
   /** 完整请求体（仅 debugLog） */
   | { type: 'request/body'; turn: number; step: number; at: string; request: Omit<GenerateOptions, 'signal'> }
   | { type: 'user/message'; turn: number; at: string; message: Message; source?: UserMessageSource }
-  | { type: 'hive/mission'; turn: number; at: string; missionId: string; goal: string; strategy: string; n: number; brief: string; readOnly?: boolean }
+  | {
+      type: 'hive/mission';
+      turn: number;
+      at: string;
+      missionId: string;
+      goal: string;
+      strategy: string;
+      n: number;
+      brief: string;
+      readOnly?: boolean;
+    }
   /** 流式 chunk（仅 debugLog；不参与投影） */
   | { type: 'assistant/chunk'; turn: number; step: number; chunk: StreamChunk }
   | { type: 'assistant/message'; turn: number; step: number; at: string; message: Message; usage?: TokenUsage; finishReason?: string }
@@ -95,7 +105,17 @@ export type SessionEventBody =
   /** v1：模型可见的附加内容（提醒、inbox 等），追加到末尾 user 消息 */
   | { type: 'attachment/injected'; turn: number; step: number; at: string; source: string; blocks: ContentBlock[] }
   /** v1：从旧格式日志导入历史（resume v0 日志时） */
-  | { type: 'history/import'; at: string; fromRunId: string; messages: Message[] }
+  | {
+      type: 'history/import';
+      at: string;
+      fromRunId: string;
+      messages: Message[];
+      fromSeq?: number;
+      turn?: number;
+      /** 分叉时来源各 turn 开始前的快照（消息去重进 pool，turns 记下标），供回退到来源轮次 */
+      turnStarts?: { pool: Message[]; turns: Record<number, number[]> };
+      missionSeq?: number;
+    }
   /** v1：在已有日志上继续（resume 标记） */
   | { type: 'session/resume'; at: string; pid: number }
   /** v1：用户"始终允许"授权（resume 时恢复会话级授权） */
@@ -103,14 +123,28 @@ export type SessionEventBody =
   /** v1：上下文变换决策（折叠 / 取消折叠 tool-result） */
   | { type: 'context/transform'; at: string; ops: ElideOp[] }
   /** v1：上下文压缩决策：messages[0, upTo) 由 summary 替代（摘要原文入日志，回放不重算） */
-  | { type: 'context/compact'; at: string; upTo: number; summary: string; focus?: string; auxUsage?: TokenUsage; auxModel?: import('../core/config.js').ModelRef }
+  | {
+      type: 'context/compact';
+      at: string;
+      upTo: number;
+      summary: string;
+      focus?: string;
+      auxUsage?: TokenUsage;
+      auxModel?: import('../core/config.js').ModelRef;
+    }
   /** v1：turn 内第一次写操作前的工作区快照（影子 git commit） */
   | { type: 'checkpoint'; at: string; turn: number; hash: string }
   /** v1：回退到 toTurn 开始前（对话由 history reducer 回退；文件已按 checkpoint 恢复） */
   | { type: 'rewind'; at: string; toTurn: number; checkpoint?: string; backup?: string; deleted?: string[] }
   /** v1：权限模式切换（default / acceptEdits / plan / yolo） */
   | { type: 'mode/change'; at: string; mode: 'default' | 'acceptEdits' | 'plan' | 'yolo' }
-  | { type: 'model/change'; at: string; provider: string; model: string; reasoningEffort?: import('../core/config.js').ReasoningEffort | null }
+  | {
+      type: 'model/change';
+      at: string;
+      provider: string;
+      model: string;
+      reasoningEffort?: import('../core/config.js').ReasoningEffort | null;
+    }
   | { type: 'error'; at: string; where: string; code: string; message: string };
 
 export type SessionEvent = SessionEventBody & EventEnvelope;

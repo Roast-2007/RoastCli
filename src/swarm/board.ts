@@ -37,6 +37,11 @@ export class Blackboard {
     this.writeListeners.add(l);
     return () => this.writeListeners.delete(l);
   }
+  /** 整体恢复，不触发 watch 或持久化监听。 */
+  restore(entries: readonly BoardEntry[]): void {
+    this.entries.clear();
+    for (const entry of entries) this.entries.set(entry.key, { ...entry });
+  }
 
   read(key: string): BoardEntry | undefined {
     return this.entries.get(normalizeKey(key));

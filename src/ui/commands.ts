@@ -19,7 +19,8 @@ import { parseRoleModels } from '../swarm/model-routing.js';
 import { pickTheme, THEMES } from './theme.js';
 import type { SkillMeta } from '../ext/skills.js';
 import { isProjectTrusted, roastHome, ReasoningEffortSchema } from '../core/config.js';
-import { missionInput, DEFAULT_STRATEGY, describeStrategies, loadStrategies } from '../swarm/strategies.js';
+import { missionInput, DEFAULT_STRATEGY, describeStrategies, loadStrategies, strategyUsesN } from '../swarm/strategies.js';
+import { setStrategy, strategyLabel, sessionStrategies } from './strategy.js';
 import type { RuntimeInput } from '../agent/runtime.js';
 
 export interface CommandContext {
@@ -44,7 +45,7 @@ export const KEYS_HELP = [
   '快捷键：',
   '  Enter 发送 · Shift+Enter / Ctrl+J / 行尾 \\ 换行 · ↑↓ 选择 · Tab 补全 · Ctrl+R 搜索历史',
   '  ? / F1 帮助 · Esc 中断（空闲时连按两次：回退菜单）· Ctrl+C 中断 / 退出',
-  '  Shift+Tab 切换权限模式 · Ctrl+O 最近工具的完整输出 · Ctrl+G Deck / Chat',
+  '  Shift+Tab 切换权限模式 · 双击工具 / Ctrl+O 工具详情 · ←→ 切换 · Esc/Ctrl+O 关闭 · Ctrl+G Deck / Chat',
   '  鼠标滚轮翻阅聊天 · Shift+↑↓ / PgUp 阅读 · Home 顶部 · End / Enter / Esc 返回输入',
   '  前缀：/ 命令 · @ 文件 · ! shell · # 记忆',
 ].join('\n');
@@ -153,7 +154,7 @@ export const COMMANDS: SlashCommand[] = [
         cwd = s.log.header.cwd;
       say(
         ctx,
-        `RoastCli v${VERSION}\n模型：${s.providerName}:${s.model}\ncwd：${cwd}\n分支：${gitBranch(cwd) ?? '—'}\n信任：${isProjectTrusted(cwd) ? '已信任' : '未信任'}\n权限：${s.permissions.mode}\n首页：${s.config.ui?.home ?? 'hive'}\n策略：${meta.strategy ?? 'auto'} · n ${meta.n ?? 3}\nmaxAgents：${s.config.swarm.maxAgents}\nworktree：${s.config.swarm.worktrees === false ? '关' : '开'}`,
+        `RoastCli v${VERSION}\n模型：${s.providerName}:${s.model}\ncwd：${cwd}\n分支：${gitBranch(cwd) ?? '—'}\n信任：${isProjectTrusted(cwd) ? '已信任' : '未信任'}\n权限：${s.permissions.mode}\n首页：${s.config.ui?.home ?? 'hive'}\n${strategyLabel(s, meta)}\nmaxAgents：${s.config.swarm.maxAgents}\nworktree：${s.config.swarm.worktrees === false ? '关' : '开'}`,
       );
     },
   },
@@ -323,11 +324,26 @@ export const COMMANDS: SlashCommand[] = [
     description: '设置本会话的默认策略和并行数',
     args: '[名称] [n]',
     run: (ctx, args) => {
-      if (!args) return ctx.openOverlay?.('strategy');
-      const [name, count] = args.split(/\s+/);
-      const strategies = loadStrategies(ctx.session.log.header.cwd, roastHome(), { trusted: isProjectTrusted(ctx.session.log.header.cwd) });
-      const input = missionInput(strategies, '', name, count === undefined ? ctx.store.getState().meta.n : Number(count));
-      ctx.store.setMeta({ strategy: input.strategy.name, n: input.n });
+      if (!args) {
+        ctx.store.setMeta({ strategyStep: undefined });
+        return ctx.openOverlay?.('strategy');
+      }
+      const parts = args.split(/\s+/),
+        meta = ctx.store.getState().meta;
+      const numeric = /^\d+$/.test(parts[0]!);
+      const name = numeric ? (meta.strategy ?? 'auto') : parts[0]!;
+      const count = numeric ? parts[0] : parts[1];
+      if (parts.length > (numeric ? 1 : 2)) return say(ctx, '用法：/strategy [名称] [2–8] 或 /strategy 2–8', 'warn');
+      const strategies = sessionStrategies(ctx.session, true);
+      const strategy = strategies.get(name);
+      if (!strategy) return say(ctx, `未知策略：${name}`, 'warn');
+      if (count !== undefined && (!/^\d+$/.test(count) || Number(count) < 2 || Number(count) > 8))
+        return say(ctx, '并行数应为 2–8 的整数', 'warn');
+      if (count === undefined && strategyUsesN(strategy) && ctx.openOverlay) {
+        ctx.store.setMeta({ strategyStep: name });
+        return ctx.openOverlay('strategy');
+      }
+      setStrategy(ctx.store, name, count === undefined ? (meta.n ?? 3) : Number(count), count !== undefined || strategyUsesN(strategy));
     },
   },
   {

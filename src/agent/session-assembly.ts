@@ -2,7 +2,17 @@
  * 会话装配的各个步骤（由 createSession 编排）：
  * 核心（services / 权限 / system prompt / 扩展 / 钩子）→ 上下文引擎 → 蜂群 → 主运行时 → 对外 API。
  */
-import { isProjectTrusted, roastHome, trustState, untrustedProviderOverrides, parseModelRef, reasoningEfforts, type ReasoningEffort, type ModelRef, type RoastConfig } from '../core/config.js';
+import {
+  isProjectTrusted,
+  roastHome,
+  trustState,
+  untrustedProviderOverrides,
+  parseModelRef,
+  reasoningEfforts,
+  type ReasoningEffort,
+  type ModelRef,
+  type RoastConfig,
+} from '../core/config.js';
 import { ModelDiscovery } from '../providers/models.js';
 import { saveConfigPatch } from '../cli/provider-settings.js';
 import { RoastError } from '../core/errors.js';
@@ -36,6 +46,9 @@ import { existsSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { loadRunLog } from '../session/projection.js';
 import { modelCatalogSection } from '../swarm/model-routing.js';
+import { displaySource, restoreHiveMembers, type RestoredMember } from '../session/hive-restore.js';
+import { HiveJournal, readHiveRecords } from '../swarm/hive-journal.js';
+import type { PreExecuteHook } from '../tools/tool.js';
 
 /** 模型未配置 contextWindow 时的默认窗口 */
 const DEFAULT_CONTEXT_WINDOW = 128_000;
@@ -84,7 +97,14 @@ async function assembleCore(input: AssemblyInput): Promise<Core> {
   const instructions = findInstructionFiles(cwd, { home: roastHome() });
   const systemPrompt = input.buildSystemPrompt(cwd, instructions);
   systemPrompt.register({ name: 'agent-models', order: 301, text: modelCatalogSection(input.config) });
-  const ext = await setupExtensions({ cwd, home: roastHome(), systemPrompt, date: new Date().toISOString().slice(0, 10), trusted: isProjectTrusted(cwd), config: input.config });
+  const ext = await setupExtensions({
+    cwd,
+    home: roastHome(),
+    systemPrompt,
+    date: new Date().toISOString().slice(0, 10),
+    trusted: isProjectTrusted(cwd),
+    config: input.config,
+  });
   ext.provide(services);
   const hooks = await setupHooks({ cwd, sessionId: opened.log.header.runId, resumed: !!opened.resumedFrom, systemPrompt });
   return { services, perms, instructions, systemPrompt, ext, hooks };
@@ -94,11 +114,25 @@ function contextFor(input: AssemblyInput, core: Core) {
   const toolsTokens = estimateText(JSON.stringify(input.tools.schemas()));
   const windowFor = (r: ModelRef) => input.providers.get(r).resolveModel?.(r.model)?.contextWindow ?? DEFAULT_CONTEXT_WINDOW;
   const overhead = () => estimateText(core.systemPrompt.assemble()) + toolsTokens;
-  const controller = new ContextController({ window: windowFor(input.ref), config: input.config.context, overhead, summarizer: modelSummarizer(input.config, input.ref, input.providers, input.cwd) });
+  const controller = new ContextController({
+    window: windowFor(input.ref),
+    config: input.config.context,
+    overhead,
+    summarizer: modelSummarizer(input.config, input.ref, input.providers, input.cwd),
+  });
   return { windowFor, overhead, controller };
 }
 
-function buildSwarm(input: AssemblyInput, core: Core, ctx: ReturnType<typeof contextFor>, listeners: Listeners, signal: AbortSignal, debugLog: boolean) {
+function buildSwarm(
+  input: AssemblyInput,
+  core: Core,
+  ctx: ReturnType<typeof contextFor>,
+  listeners: Listeners,
+  signal: AbortSignal,
+  debugLog: boolean,
+  journal: HiveJournal,
+  sharedCheckpoint: PreExecuteHook,
+) {
   return setupSwarm({
     cwd: input.cwd,
     config: input.config,
@@ -117,6 +151,8 @@ function buildSwarm(input: AssemblyInput, core: Core, ctx: ReturnType<typeof con
     windowFor: ctx.windowFor,
     signal,
     debugLog,
+    journal,
+    sharedCheckpoint,
     onAgentEvent: (id, ev) => listeners.agent.forEach((l) => l(id, ev)),
     onSessionEvent: (ref, event) => listeners.usage.forEach((listener) => listener(ref, event)),
     onChange: () => listeners.swarm.forEach((l) => l()),
@@ -130,10 +166,34 @@ export async function assembleSession(input: AssemblyInput): Promise<Session> {
   const listeners: Listeners = { agent: new Set(), swarm: new Set(), usage: new Set() };
   const lifetime = new AbortController();
   const debugLog = config.debugLog || process.env['ROAST_DEBUG_LOG'] === '1';
-  const { supervisor: swarm, leaseHook } = buildSwarm(input, core, ctx, listeners, lifetime.signal, debugLog);
-  core.services.set(SWARM_KEY, { supervisor: swarm, agentId: 'main' });
+  const source = opts.resumeLogPath
+    ? displaySource(opts.resumeLogPath, path.isAbsolute(config.logsDir) ? config.logsDir : path.join(cwd, config.logsDir))
+    : { events: [], runDirs: [] };
+  const display = [...source.events];
+  const members = restoreHiveMembers(source.runDirs, display);
+  const journal = new HiveJournal(path.dirname(opened.log.path), source.runDirs.flatMap(readHiveRecords));
+  if (opts.resumeLogPath && path.resolve(opts.resumeLogPath) !== path.resolve(opened.log.path))
+    journal.snapshot(opened.initialHistory.turn);
   const checkpoints = new CheckpointManager(new ShadowGit(cwd), () => core.perms.engine.mode);
-  checkpoints.restoreFromEvents(opened.events);
+  checkpoints.restoreFromEvents(display);
+  const shared = checkpoints.hook(true);
+  const { supervisor: swarm, leaseHook } = buildSwarm(
+    input,
+    core,
+    ctx,
+    listeners,
+    lifetime.signal,
+    debugLog,
+    journal,
+    (tool, args, context) => shared(tool, args, { ...context, turn: swarm.currentTurn }),
+  );
+  swarm.reserveHistory(
+    source.runDirs,
+    members.map((member) => member.info.id),
+    journal.state().messages,
+  );
+  swarm.board.restore(journal.state().board);
+  core.services.set(SWARM_KEY, { supervisor: swarm, agentId: 'main' });
   const inputGuard = chainInputGuards(opts.extensions?.inputGuard, core.hooks.inputGuard);
   const loop = new AgentRuntime({
     providers: input.providers,
@@ -144,15 +204,22 @@ export async function assembleSession(input: AssemblyInput): Promise<Session> {
     log: opened.log,
     cwd,
     services: core.services,
-    hooks: { preExecute: [...core.hooks.preExecute, core.perms.hook, leaseHook, checkpoints.hook()], postExecute: [...core.ext.postExecute, ...core.hooks.postExecute] },
+    hooks: {
+      preExecute: [...core.hooks.preExecute, core.perms.hook, leaseHook, checkpoints.hook()],
+      postExecute: [...core.ext.postExecute, ...core.hooks.postExecute],
+    },
     initialHistory: opened.initialHistory,
     signal: lifetime.signal,
     maxSteps: config.maxSteps,
     debugLog,
+    onPartial: (turn, text, at) => journal.append({ v: 1, type: 'partial', turn, agentId: 'main', text, at }),
     ...(config.temperature !== undefined ? { temperature: config.temperature } : {}),
     extensions: { ...opts.extensions, ...(inputGuard ? { inputGuard } : {}) },
   });
   const commit = (body: Parameters<typeof loop.committer.commit>[0]) => loop.committer.commit(body);
+  loop.committer.onCommit((event) => {
+    if (event.type !== 'history/import') display.push(event);
+  });
   opened.finalize(commit);
   core.perms.attach(commit);
   checkpoints.attach(commit);
@@ -160,7 +227,22 @@ export async function assembleSession(input: AssemblyInput): Promise<Session> {
   loop.committer.onCommit((ev) => ctx.controller.observe(ev));
   loop.committer.onCommit((ev) => swarm.observeMission(ev));
   core.services.set(CONTEXT_ACCESS_KEY, { state: () => loop.committer.state });
-  return sessionApi({ input, core, loop, swarm, checkpoints, contextCtl: ctx.controller, listeners, lifetime });
+  return sessionApi({
+    input,
+    core,
+    loop,
+    swarm,
+    checkpoints,
+    contextCtl: ctx.controller,
+    listeners,
+    lifetime,
+    journal,
+    members,
+    display,
+    sourceDirs: source.runDirs,
+    sourceRef: source.header ?? opened.log.header,
+    rewindListeners: new Set(),
+  });
 }
 
 interface ApiParts {
@@ -172,13 +254,26 @@ interface ApiParts {
   contextCtl: ContextController;
   listeners: Listeners;
   lifetime: AbortController;
+  journal: HiveJournal;
+  members: RestoredMember[];
+  display: SessionEvent[];
+  sourceDirs: string[];
+  sourceRef: { provider: string; model: string };
+  rewindListeners: Set<(removed: string[]) => void>;
 }
 
-export const TRUST_CHANGED_WARNING = '仓库配置中的钩子 / MCP / provider 连接 / allow 规则自信任以来已被修改，已按未信任处理；确认无误后重新运行 roast trust';
+export const TRUST_CHANGED_WARNING =
+  '仓库配置中的钩子 / MCP / provider 连接 / allow 规则自信任以来已被修改，已按未信任处理；确认无误后重新运行 roast trust';
 
 function startupWarnings(cwd: string, core: Core, mcp: McpSetup): string[] {
   const allow = core.perms.ignoredRepoAllow.length;
-  return [...(trustState(cwd) === 'changed' ? [TRUST_CHANGED_WARNING] : []), ...(allow ? [`项目配置中的 ${allow} 条 allow 规则未生效（未信任项目，可运行 roast trust）`] : []), ...core.ext.warnings, ...core.hooks.warnings, ...mcp.warnings];
+  return [
+    ...(trustState(cwd) === 'changed' ? [TRUST_CHANGED_WARNING] : []),
+    ...(allow ? [`项目配置中的 ${allow} 条 allow 规则未生效（未信任项目，可运行 roast trust）`] : []),
+    ...core.ext.warnings,
+    ...core.hooks.warnings,
+    ...mcp.warnings,
+  ];
 }
 
 function sessionApi(p: ApiParts): Session {
@@ -187,23 +282,39 @@ function sessionApi(p: ApiParts): Session {
     const next = parseModelRef(value.includes(':') ? value : `${input.ref.provider}:${value}`);
     const profile = input.config.providers[next.provider];
     if (!profile) throw new RoastError('CONFIG', `未配置 provider ${next.provider}`);
-    if (!isProjectTrusted(input.cwd) && untrustedProviderOverrides(input.cwd).includes(next.provider)) throw new RoastError('UNTRUSTED_CONFIG', '该 provider 的项目连接信息尚未信任，请运行 roast trust');
+    if (!isProjectTrusted(input.cwd) && untrustedProviderOverrides(input.cwd).includes(next.provider))
+      throw new RoastError('UNTRUSTED_CONFIG', '该 provider 的项目连接信息尚未信任，请运行 roast trust');
     input.providers.get(next);
     if (!next.model.trim() || /[\s\x00-\x1f\x7f]/.test(next.model)) throw new RoastError('CONFIG', '无效的模型 ID');
-    if (effort != null && !reasoningEfforts(profile.driver, profile.baseURL, profile.models?.[next.model]).includes(effort)) throw new RoastError('CONFIG', '该模型不支持所选 reasoning effort');
+    if (effort != null && !reasoningEfforts(profile.driver, profile.baseURL, profile.models?.[next.model]).includes(effort))
+      throw new RoastError('CONFIG', '该模型不支持所选 reasoning effort');
     return { ...next, ...(effort !== undefined ? { reasoningEffort: effort } : {}) };
   };
-  const discovery = new ModelDiscovery(input.config, (provider) => { validateModel(`${provider}:discovery`); });
-  const usageCost = new UsageCost({ provider: input.opened.log.header.provider, model: input.opened.log.header.model }, input.config);
-  for (const event of input.opened.events) usageCost.observe(event);
+  const discovery = new ModelDiscovery(input.config, (provider) => {
+    validateModel(`${provider}:discovery`);
+  });
+  const usageCost = new UsageCost(p.sourceRef, input.config);
+  for (const event of p.display) usageCost.observe(event);
   usageCost.setModel(input.ref);
-  const agentsDir = path.join(path.dirname(input.opened.log.path), 'agents');
-  if (existsSync(agentsDir)) for (const name of readdirSync(agentsDir).filter((file) => file.endsWith('.jsonl'))) {
-    try {
-      const loaded = loadRunLog(path.join(agentsDir, name));
-      const ref = { provider: loaded.header.provider, model: loaded.header.model };
-      for (const event of loaded.events) usageCost.observe({ ...event, agentId: event.agentId ?? name.slice(0, -6) }, ref);
-    } catch { /* Incomplete child logs never prevent restoring the main conversation. */ }
+  const observed = new Set<string>();
+  for (const dir of new Set([...p.sourceDirs, path.dirname(input.opened.log.path)])) {
+    const agentsDir = path.join(dir, 'agents');
+    if (existsSync(agentsDir))
+      for (const name of readdirSync(agentsDir).filter((file) => file.endsWith('.jsonl'))) {
+        try {
+          const loaded = loadRunLog(path.join(agentsDir, name));
+          const ref = { provider: loaded.header.provider, model: loaded.header.model };
+          for (const [index, event] of loaded.events.entries()) {
+            const agentId = event.agentId ?? name.slice(0, -6),
+              key = `${agentId}:${event.seq ?? index}`;
+            if (observed.has(key)) continue;
+            observed.add(key);
+            usageCost.observe({ ...event, agentId }, ref);
+          }
+        } catch {
+          /* Incomplete child logs never prevent restoring the main conversation. */
+        }
+      }
   }
   listeners.usage.add((ref, event) => usageCost.observe(event, ref));
   loop.committer.onCommit((event) => usageCost.observe(event));
@@ -217,30 +328,48 @@ function sessionApi(p: ApiParts): Session {
     log: input.opened.log,
     config: input.config,
     initialEvents: input.opened.events,
-    get providerName() { return input.ref.provider; },
-    get model() { return input.ref.model; },
-    get reasoningEffort() { return input.ref.reasoningEffort === undefined ? input.config.providers[input.ref.provider]?.models?.[input.ref.model]?.reasoningEffort : input.ref.reasoningEffort; },
+    get restoredHive() {
+      return { ...p.journal.state(), members: p.members };
+    },
+    displayEvents: () => p.display,
+    onRewind(listener) {
+      p.rewindListeners.add(listener);
+      return () => p.rewindListeners.delete(listener);
+    },
+    get providerName() {
+      return input.ref.provider;
+    },
+    get model() {
+      return input.ref.model;
+    },
+    get reasoningEffort() {
+      return input.ref.reasoningEffort === undefined
+        ? input.config.providers[input.ref.provider]?.models?.[input.ref.model]?.reasoningEffort
+        : input.ref.reasoningEffort;
+    },
     listModels: (opts) => discovery.list(opts),
     setSwarmModel(role, value, effort) {
       if (role === 'queen') throw new RoastError('CONFIG', 'Queen 使用主会话模型，请用 /model 修改');
       const validated = value === 'inherit' ? undefined : validateModel(value, effort);
       const ref = validated ? `${validated.provider}:${validated.model}` : 'inherit';
       saveConfigPatch(input.cwd, { swarm: { models: { [role]: ref }, efforts: { [role]: effort ?? null } } });
-      Object.assign(input.config.swarm.models ??= {}, { [role]: ref });
+      Object.assign((input.config.swarm.models ??= {}), { [role]: ref });
       input.config.swarm.efforts = { ...input.config.swarm.efforts, [role]: effort ?? null };
       listeners.swarm.forEach((listener) => listener());
     },
     configureSwarmModels(models) {
-      if (loop.busy || swarm.tree().some((agent) => agent.parentId && ['queued', 'running', 'waiting', 'paused'].includes(agent.state))) throw new RoastError('INVALID_REQUEST', '请等蜂群空闲后指定角色模型');
+      if (loop.busy || swarm.tree().some((agent) => agent.parentId && ['queued', 'running', 'waiting', 'paused'].includes(agent.state)))
+        throw new RoastError('INVALID_REQUEST', '请等蜂群空闲后指定角色模型');
       for (const value of Object.values(models)) if (value !== 'inherit') validateModel(value);
       if (models.queen && models.queen !== 'inherit') {
         const next = validateModel(models.queen);
-        delete input.ref.reasoningEffort; Object.assign(input.ref, next);
+        delete input.ref.reasoningEffort;
+        Object.assign(input.ref, next);
         p.contextCtl.setWindow(input.providers.get(next).resolveModel?.(next.model)?.contextWindow ?? DEFAULT_CONTEXT_WINDOW);
         loop.committer.commit({ type: 'model/change', at: new Date().toISOString(), ...next });
         swarm.setRootModel(`${next.provider}:${next.model}`);
       }
-      Object.assign(input.config.swarm.models ??= {}, models);
+      Object.assign((input.config.swarm.models ??= {}), models);
       core.systemPrompt.register({ name: 'agent-models', order: 301, text: modelCatalogSection(input.config) });
       listeners.swarm.forEach((listener) => listener());
     },
@@ -248,12 +377,17 @@ function sessionApi(p: ApiParts): Session {
     cost: () => usageCost.value(),
     costBreakdown: () => usageCost.breakdown(),
     switchModel(value, effort) {
-      if (loop.busy || swarm.tree().some((a) => a.parentId && ['queued', 'running', 'waiting', 'paused'].includes(a.state))) throw new RoastError('INVALID_REQUEST', '请等主会话和子 agent 空闲后切换模型');
+      if (loop.busy || swarm.tree().some((a) => a.parentId && ['queued', 'running', 'waiting', 'paused'].includes(a.state)))
+        throw new RoastError('INVALID_REQUEST', '请等主会话和子 agent 空闲后切换模型');
       const next = validateModel(value, effort);
       const adapter = input.providers.get(next);
       delete input.ref.reasoningEffort;
       Object.assign(input.ref, next);
-      p.contextCtl.setWindow(adapter.resolveModel?.(next.model)?.contextWindow ?? input.config.providers[next.provider]?.models?.[next.model]?.contextWindow ?? DEFAULT_CONTEXT_WINDOW);
+      p.contextCtl.setWindow(
+        adapter.resolveModel?.(next.model)?.contextWindow ??
+          input.config.providers[next.provider]?.models?.[next.model]?.contextWindow ??
+          DEFAULT_CONTEXT_WINDOW,
+      );
       loop.committer.commit({ type: 'model/change', at: new Date().toISOString(), ...next });
       loop.committer.flush();
       swarm.setRootModel(`${next.provider}:${next.model}`);
@@ -311,7 +445,10 @@ async function compact(p: ApiParts, focus: string | undefined): Promise<number> 
 
 async function rewind(p: ApiParts, turn: number) {
   const { loop } = p;
+  if (p.swarm.tree().some((agent) => agent.parentId && ['queued', 'running', 'waiting', 'paused'].includes(agent.state)))
+    throw new RoastError('INVALID_REQUEST', '请等蜂群成员结束后再回退');
   if (loop.busy) throw new RoastError('INVALID_REQUEST', '运行中不能回退，请先 ESC 中断');
+  await p.swarm.whenIdle();
   if (!loop.committer.state.turnStarts[turn]) throw new RoastError('INVALID_REQUEST', `当前历史中没有第 ${turn} 轮`);
   const result = await p.checkpoints.rewind(turn);
   loop.committer.commit({
@@ -323,5 +460,11 @@ async function rewind(p: ApiParts, turn: number) {
     deleted: result.deleted,
   });
   loop.committer.flush();
+  p.journal.append({ v: 1, type: 'rewind', toTurn: turn, at: new Date().toISOString() });
+  p.swarm.board.restore(p.journal.state().board);
+  const removed = p.swarm.removeEndedFrom(turn);
+  for (const member of p.members) if (member.spawnTurn !== undefined && member.spawnTurn >= turn) removed.push(member.info.id);
+  p.members = p.members.filter((member) => !removed.includes(member.info.id));
+  for (const listener of p.rewindListeners) listener(removed);
   return result;
 }

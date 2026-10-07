@@ -29,8 +29,12 @@ export interface RewindResult {
 export class CheckpointManager {
   private readonly byTurn = new Map<number, string>();
   private commit: ((body: SessionEventBody) => unknown) | null = null;
+  private chain: Promise<unknown> = Promise.resolve();
 
-  constructor(private readonly shadow: ShadowGit, private readonly mode?: () => string) {}
+  constructor(
+    private readonly shadow: ShadowGit,
+    private readonly mode?: () => string,
+  ) {}
 
   attach(commit: (body: SessionEventBody) => unknown): void {
     this.commit = commit;
@@ -52,17 +56,21 @@ export class CheckpointManager {
     for (const t of [...this.byTurn.keys()]) if (t >= turn) this.byTurn.delete(t);
   }
 
-  hook(): PreExecuteHook {
-    return async (tool, args, ctx) => {
-      const turn = ctx.turn;
-      const everyBash = this.mode?.() === 'yolo' && tool.name === 'bash';
-      if (turn === undefined || (!everyBash && (this.byTurn.has(turn) || !isMutating(tool, args)))) return { action: 'allow' };
-      const hash = await this.shadow.snapshot(`turn ${turn}${ctx.callId ? ` · ${ctx.callId}` : ''}`);
-      if (hash) {
-        if (!this.byTurn.has(turn)) this.byTurn.set(turn, hash);
-        this.commit?.({ type: 'checkpoint', at: new Date().toISOString(), turn, hash });
-      }
-      return { action: 'allow' };
+  hook(baselineOnly = false): PreExecuteHook {
+    return (tool, args, ctx) => {
+      const next = this.chain.then(async () => {
+        const turn = ctx.turn;
+        const everyBash = !baselineOnly && this.mode?.() === 'yolo' && tool.name === 'bash';
+        if (turn === undefined || (!everyBash && (this.byTurn.has(turn) || !isMutating(tool, args)))) return { action: 'allow' as const };
+        const hash = await this.shadow.snapshot(`turn ${turn}${ctx.callId ? ` · ${ctx.callId}` : ''}`);
+        if (hash) {
+          if (!this.byTurn.has(turn)) this.byTurn.set(turn, hash);
+          this.commit?.({ type: 'checkpoint', at: new Date().toISOString(), turn, hash });
+        }
+        return { action: 'allow' as const };
+      });
+      this.chain = next.catch(() => undefined);
+      return next;
     };
   }
 

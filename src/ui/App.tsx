@@ -10,7 +10,8 @@ import { Box, Static, Text, useApp, useInput, useStdin } from 'ink';
 import type { Session } from '../agent/session.js';
 import { createUiStore, type UiStore } from './store/store.js';
 import { createUiController, type UiController } from './controller.js';
-import type { AgentView, DisplayItem, ToolView } from './store/reducer.js';
+import type { DisplayItem } from './store/reducer.js';
+import { latestTool, toolsOf } from './tool-nav.js';
 import { Markdown } from './markdown/Markdown.js';
 import { ToolCard, ToolDetail } from './components/ToolCard.js';
 import { formatCost, gitBranch } from './status-info.js';
@@ -47,13 +48,19 @@ function Item({ item, session, columns }: { item: StaticEntry; session: Session;
         <Banner
           model={`${session.providerName}:${session.model}`}
           cwd={session.log.header.cwd}
-          {...(session.resumedFrom ? { resumed: `已恢复会话 ${session.resumedFrom.runId}（${session.resumedFrom.messageCount} 条消息）` } : {})}
+          {...(session.resumedFrom
+            ? { resumed: `已恢复会话 ${session.resumedFrom.runId}（${session.resumedFrom.messageCount} 条消息）` }
+            : {})}
           warnings={session.startupWarnings}
         />
       );
     }
     case 'mission':
-      return <Text>⬡ 任务 #{item.missionId.slice(1)} · {item.strategy} · {item.goal}</Text>;
+      return (
+        <Text>
+          ⬡ 任务 #{item.missionId.slice(1)} · {item.strategy} · {item.goal}
+        </Text>
+      );
     case 'user':
       return (
         <Box marginTop={1}>
@@ -64,7 +71,12 @@ function Item({ item, session, columns }: { item: StaticEntry; session: Session;
         </Box>
       );
     case 'markdown':
-      return <Markdown text={item.text} preferences={session.config.ui?.markdown} columns={columns} />;
+      return (
+        <Box flexDirection="column">
+          <Markdown text={item.text} preferences={session.config.ui?.markdown} columns={columns} />
+          {item.partial ? <Text dimColor>（已中断，未发送给模型）</Text> : null}
+        </Box>
+      );
     case 'reasoning':
       return (
         <Text dimColor italic>
@@ -75,11 +87,25 @@ function Item({ item, session, columns }: { item: StaticEntry; session: Session;
     case 'tool':
       return <ToolCard tool={item.tool} />;
     case 'tool-group':
-      return <Text wrap="truncate-end" color={theme.tool}>{glyph.ok} {item.tools[0]?.name} ×{item.tools.length} <Text dimColor>{item.tools.map((tool) => terminalText(String((tool.args as { path?: string } | undefined)?.path ?? ''))).filter(Boolean).join(' · ')}</Text></Text>;
+      return (
+        <Text wrap="truncate-end" color={theme.tool}>
+          {glyph.ok} {item.tools[0]?.name} ×{item.tools.length}{' '}
+          <Text dimColor>
+            {item.tools
+              .map((tool) => terminalText(String((tool.args as { path?: string } | undefined)?.path ?? '')))
+              .filter(Boolean)
+              .join(' · ')}
+          </Text>
+        </Text>
+      );
     case 'notice':
       if (item.quiet) return null;
       return (
-        <Text color={item.tone === 'error' ? theme.danger : item.tone === 'warn' ? theme.warn : item.tone === 'success' ? theme.success : theme.info}>
+        <Text
+          color={
+            item.tone === 'error' ? theme.danger : item.tone === 'warn' ? theme.warn : item.tone === 'success' ? theme.success : theme.info
+          }
+        >
           {toneIcon[item.tone]} {terminalText(item.text)}
         </Text>
       );
@@ -126,20 +152,33 @@ const DOUBLE_ESC_MS = 600;
  * 全局按键：Shift+Tab 切换模式 · Esc 中断（空闲时连按两次打开回退列表）· Ctrl+O 工具输出详情 ·
  * Ctrl+G Mission Control · Ctrl+C 中断 / 退出
  */
-function useShellKeys(opts: { controller: UiController; onCtrlC(): void; active: boolean; onToggleDetail(): void; onMissionControl?: () => void; onHelp(): void }) {
+function useShellKeys(opts: {
+  controller: UiController;
+  onCtrlC(): void;
+  active: boolean;
+  onToggleDetail(): void;
+  onDetailEscape?: () => void;
+  onMissionControl?: () => void;
+  onHelp(): void;
+}) {
   const lastEsc = useRef(0);
   const { stdin } = useStdin();
   useEffect(() => {
     if (!opts.active) return;
-    const onData = (data: Buffer | string) => { if (['\u001bOP', '\u001b[11~', '\u001b[57364u'].includes(data.toString())) opts.onHelp(); };
+    const onData = (data: Buffer | string) => {
+      if (['\u001bOP', '\u001b[11~', '\u001b[57364u'].includes(data.toString())) opts.onHelp();
+    };
     stdin.on('data', onData);
-    return () => { stdin.off('data', onData); };
+    return () => {
+      stdin.off('data', onData);
+    };
   }, [stdin, opts.active, opts.onHelp]);
   useInput(
     (ch, key) => {
       const { controller } = opts;
       if (key.tab && key.shift) return controller.cycleMode();
       if (key.escape) {
+        if (opts.onDetailEscape) return opts.onDetailEscape();
         if (controller.isRunning()) return controller.interrupt();
         const now = Date.now();
         if (now - lastEsc.current < DOUBLE_ESC_MS) {
@@ -157,14 +196,25 @@ function useShellKeys(opts: { controller: UiController; onCtrlC(): void; active:
   );
 }
 
-function Shell({ session, store: externalStore, controller: externalController, initialPrompt, printedUpTo, onMissionControl, inputDraft }: AppProps) {
+function Shell({
+  session,
+  store: externalStore,
+  controller: externalController,
+  initialPrompt,
+  printedUpTo,
+  onMissionControl,
+  inputDraft,
+}: AppProps) {
   const { exit } = useApp();
   const { rows, columns } = useViewport(session.config.ui?.gutter);
   const cwd = session.log.header.cwd;
   const localDraft = useRef<{ seed?: number; state?: EditorState }>({});
   const draft = inputDraft ?? localDraft.current;
   const store = useMemo(() => externalStore ?? createUiStore(), [externalStore]);
-  const controller = useMemo(() => externalController ?? createUiController(session, store, { exit }), [externalController, session, store, exit]);
+  const controller = useMemo(
+    () => externalController ?? createUiController(session, store, { exit }),
+    [externalController, session, store, exit],
+  );
   useEffect(() => (externalController ? undefined : () => controller.dispose()), [controller, externalController]);
   const ui = useSyncExternalStore(store.subscribe, store.getState);
   const view = ui.agents['main']!;
@@ -182,8 +232,26 @@ function Shell({ session, store: externalStore, controller: externalController, 
   }, [view.running]);
 
   const card = meta.interactions[0];
-  const [detail, setDetail] = useState(false);
-  useShellKeys({ controller, onCtrlC: () => { if (controller.ctrlC(draft.state ? textOf(draft.state) : '') === 'clear') { draft.state = editorReducer(draft.state ?? createEditor(history), { type: 'set', text: '' }); store.setMeta((m) => ({ inputSeed: { key: m.inputSeed.key + 1, text: '', screen: 'inline' } })); draft.seed = store.getState().meta.inputSeed.key; } }, active: card === undefined && meta.overlay === null, onToggleDetail: () => setDetail((d) => !d), onHelp: () => store.setMeta({ overlay: 'help' }), ...(onMissionControl ? { onMissionControl } : {}) });
+  const [detail, setDetail] = useState(false),
+    [detailCall, setDetailCall] = useState<string>();
+  useShellKeys({
+    controller,
+    onCtrlC: () => {
+      if (controller.ctrlC(draft.state ? textOf(draft.state) : '') === 'clear') {
+        draft.state = editorReducer(draft.state ?? createEditor(history), { type: 'set', text: '' });
+        store.setMeta((m) => ({ inputSeed: { key: m.inputSeed.key + 1, text: '', screen: 'inline' } }));
+        draft.seed = store.getState().meta.inputSeed.key;
+      }
+    },
+    active: card === undefined && meta.overlay === null,
+    onToggleDetail: () => {
+      if (!detail) setDetailCall(latestTool(view)?.callId);
+      setDetail((d) => !d);
+    },
+    ...(detail ? { onDetailEscape: () => setDetail(false) } : {}),
+    onHelp: () => store.setMeta({ overlay: 'help' }),
+    ...(onMissionControl ? { onMissionControl } : {}),
+  });
 
   // roast swarm：启动后自动提交目标（只执行一次）
   const autoSubmitted = useRef(false);
@@ -202,12 +270,21 @@ function Shell({ session, store: externalStore, controller: externalController, 
     [ui],
   );
 
-  const layout = inlineLayout(rows, { tools: view.tools.length, todos: view.todos.length, agents: meta.swarm.length - 1, interaction: Boolean(card), detail });
+  const layout = inlineLayout(rows, {
+    tools: view.tools.length,
+    todos: view.todos.length,
+    agents: meta.swarm.length - 1,
+    interaction: Boolean(card),
+    detail,
+  });
   const toolsShown = Math.min(view.tools.length, Math.max(0, Math.min(rows >= 40 ? 3 : 1, layout.tools)));
   const toolHeight = Math.max(1, Math.floor((layout.tools - (view.tools.length > toolsShown ? 1 : 0)) / Math.max(1, toolsShown)));
   const elapsed = view.turnStartedAt ? now - view.turnStartedAt : 0;
   const deps = useMemo(
-    () => ({ commands: [...COMMANDS, ...skillCommands(session.skills.list()), ...mcpPromptCommands(session)], files: (q: string) => files.match(q) }),
+    () => ({
+      commands: [...COMMANDS, ...skillCommands(session.skills.list()), ...mcpPromptCommands(session)],
+      files: (q: string) => files.match(q),
+    }),
     [files, session],
   );
   // 分支在每个回合开始 / 结束时重新读取（模型可能切换了分支）
@@ -217,69 +294,107 @@ function Shell({ session, store: externalStore, controller: externalController, 
     printedUpTo === undefined ? [{ id: 0, kind: 'banner' }, ...view.items] : view.items.filter((i) => i.id > printedUpTo);
 
   return (
-    <ThemeContext.Provider value={theme}><TerminalContext.Provider value={terminal}><Box flexDirection="column">
-      <Static items={staticItems}>{(item) => <Item key={item.id} item={item} session={session} columns={columns} />}</Static>
-      <Box flexDirection="column" maxHeight={Math.max(1, rows)} overflow="hidden">
-      {meta.overlay && !card ? <Overlay key={meta.overlay} kind={meta.overlay} session={session} store={store} controller={controller} height={Math.max(1, rows - 2)} /> : <>
-      {layout.stream > 0 && (view.running || view.pending || view.reasoning) ? <Box flexDirection="column" maxHeight={layout.stream} overflow="hidden" flexShrink={0}>
-        {view.reasoning ? <Thinking label={`思考中… ${view.reasoning.length} 字`} /> : null}
-        {view.pending ? <Markdown text={clipTail(view.pending, Math.max(1, layout.stream - 3))} preferences={session.config.ui?.markdown} compact columns={columns} /> : null}
-        {view.running && !view.pending && !view.reasoning && view.tools.length === 0 ? <Thinking label="思考中…" /> : null}
-      </Box> : null}
-      {layout.tools > 0 ? <Box flexDirection="column" maxHeight={layout.tools} overflow="hidden" flexShrink={0}>
-        {view.tools.slice(0, toolsShown).map((t) => <ToolCard key={t.callId} tool={t} maxHeight={toolHeight} />)}
-        {view.tools.length > toolsShown ? <Text dimColor wrap="truncate-end">+{view.tools.length - toolsShown} 个工具运行中</Text> : null}
-      </Box> : null}
-      <AgentsPanel agents={meta.swarm} activity={activity} maxHeight={layout.agents} />
-      <TodoPanel todos={view.todos} maxHeight={layout.todos} />
-      {detail && layout.detail > 0 ? <Box maxHeight={layout.detail} overflow="hidden" flexShrink={0}><ToolDetail key={lastTool(view)?.callId} tool={lastTool(view)} maxLines={layout.detail} active={!card} /></Box> : null}
-      {card ? (
-        <InteractionCard key={card.id} request={card} maxHeight={layout.interaction} onInterrupt={() => controller.ctrlC('')} onRespond={(r) => controller.respond(card, r)} />
-      ) : layout.input > 0 ? (
-        <Box height={layout.input} flexDirection="column" overflow="hidden">
-        <QueueLine texts={meta.queued} />
-        <InputBox
-          key={meta.inputSeed.key}
-          active={!detail}
-          maxHeight={Math.max(1, layout.input - (meta.queued.length ? 1 : 0))}
-          onHelp={() => store.setMeta({ overlay: 'help' })}
-          placeholder={view.running ? '插话' : '输入消息'}
-          initialHistory={history}
-          initialText={meta.inputSeed.text}
-          initialState={draft.seed === meta.inputSeed.key ? draft.state : undefined}
-          onStateChange={(state) => { draft.seed = meta.inputSeed.key; draft.state = state; }}
-          deps={deps}
-          onSubmit={(text, raw) => controller.submit(text, raw)}
-        />
+    <ThemeContext.Provider value={theme}>
+      <TerminalContext.Provider value={terminal}>
+        <Box flexDirection="column">
+          <Static items={staticItems}>{(item) => <Item key={item.id} item={item} session={session} columns={columns} />}</Static>
+          <Box flexDirection="column" maxHeight={Math.max(1, rows)} overflow="hidden">
+            {meta.overlay && !card ? (
+              <Overlay
+                key={meta.overlay}
+                kind={meta.overlay}
+                session={session}
+                store={store}
+                controller={controller}
+                height={Math.max(1, rows - 2)}
+              />
+            ) : (
+              <>
+                {layout.stream > 0 && (view.running || view.pending || view.reasoning) ? (
+                  <Box flexDirection="column" maxHeight={layout.stream} overflow="hidden" flexShrink={0}>
+                    {view.reasoning ? <Thinking label={`思考中… ${view.reasoning.length} 字`} /> : null}
+                    {view.pending ? (
+                      <Markdown
+                        text={clipTail(view.pending, Math.max(1, layout.stream - 3))}
+                        preferences={session.config.ui?.markdown}
+                        compact
+                        columns={columns}
+                      />
+                    ) : null}
+                    {view.running && !view.pending && !view.reasoning && view.tools.length === 0 ? <Thinking label="思考中…" /> : null}
+                  </Box>
+                ) : null}
+                {layout.tools > 0 ? (
+                  <Box flexDirection="column" maxHeight={layout.tools} overflow="hidden" flexShrink={0}>
+                    {view.tools.slice(0, toolsShown).map((t) => (
+                      <ToolCard key={t.callId} tool={t} maxHeight={toolHeight} />
+                    ))}
+                    {view.tools.length > toolsShown ? (
+                      <Text dimColor wrap="truncate-end">
+                        +{view.tools.length - toolsShown} 个工具运行中
+                      </Text>
+                    ) : null}
+                  </Box>
+                ) : null}
+                <AgentsPanel agents={meta.swarm} activity={activity} maxHeight={layout.agents} />
+                <TodoPanel todos={view.todos} maxHeight={layout.todos} />
+                {detail && layout.detail > 0 ? (
+                  <Box maxHeight={layout.detail} overflow="hidden" flexShrink={0}>
+                    <ToolDetail tools={toolsOf(view)} callId={detailCall} maxLines={layout.detail} active={!card} />
+                  </Box>
+                ) : null}
+                {card ? (
+                  <InteractionCard
+                    key={card.id}
+                    request={card}
+                    maxHeight={layout.interaction}
+                    onInterrupt={() => controller.ctrlC('')}
+                    onRespond={(r) => controller.respond(card, r)}
+                  />
+                ) : layout.input > 0 ? (
+                  <Box height={layout.input} flexDirection="column" overflow="hidden">
+                    <QueueLine texts={meta.queued} />
+                    <InputBox
+                      key={meta.inputSeed.key}
+                      active={!detail}
+                      maxHeight={Math.max(1, layout.input - (meta.queued.length ? 1 : 0))}
+                      onHelp={() => store.setMeta({ overlay: 'help' })}
+                      placeholder={view.running ? '插话' : '输入消息'}
+                      initialHistory={history}
+                      initialText={meta.inputSeed.text}
+                      initialState={draft.seed === meta.inputSeed.key ? draft.state : undefined}
+                      onStateChange={(state) => {
+                        draft.seed = meta.inputSeed.key;
+                        draft.state = state;
+                      }}
+                      deps={deps}
+                      onSubmit={(text, raw) => controller.submit(text, raw)}
+                    />
+                  </Box>
+                ) : null}
+              </>
+            )}
+            {layout.status > 0 ? (
+              <StatusLine
+                mode={meta.mode}
+                model={`${session.providerName}:${session.model}`}
+                contextPercent={meta.contextPercent}
+                total={view.totalUsage}
+                last={view.lastUsage}
+                running={view.running}
+                elapsedMs={elapsed}
+                step={view.step}
+                branch={branch}
+                cost={cost !== null ? formatCost(cost) : null}
+                toast={meta.toast}
+                agents={
+                  meta.swarm.filter((agent) => agent.parentId && ['queued', 'running', 'waiting', 'paused'].includes(agent.state)).length
+                }
+              />
+            ) : null}
+          </Box>
         </Box>
-      ) : null}
-      </>}
-      {layout.status > 0 ? <StatusLine
-        mode={meta.mode}
-        model={`${session.providerName}:${session.model}`}
-        contextPercent={meta.contextPercent}
-        total={view.totalUsage}
-        last={view.lastUsage}
-        running={view.running}
-        elapsedMs={elapsed}
-        step={view.step}
-        branch={branch}
-        cost={cost !== null ? formatCost(cost) : null}
-        toast={meta.toast}
-        agents={meta.swarm.filter((agent) => agent.parentId && ['queued', 'running', 'waiting', 'paused'].includes(agent.state)).length}
-      /> : null}
-      </Box>
-    </Box></TerminalContext.Provider></ThemeContext.Provider>
+      </TerminalContext.Provider>
+    </ThemeContext.Provider>
   );
-}
-
-/** 最近一个工具：优先运行中的，否则取最后一个已完成的卡片 */
-function lastTool(view: AgentView): ToolView | undefined {
-  if (view.tools[0]) return view.tools[0];
-  for (let i = view.items.length - 1; i >= 0; i--) {
-    const item = view.items[i]!;
-    if (item.kind === 'tool') return item.tool;
-    if (item.kind === 'tool-group') return item.tools.at(-1);
-  }
-  return undefined;
 }

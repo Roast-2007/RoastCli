@@ -9,9 +9,30 @@ import type { InteractionRequest } from '../../core/interaction.js';
 import type { PermissionMode } from '../../tools/permissions/engine.js';
 import type { AgentInfo, Envelope } from '../../swarm/types.js';
 import type { DiffCacheEntry } from '../hive/diffs.js';
+import type { HivePartial } from '../../swarm/hive-journal.js';
 
 /** 与具体 agent 无关的界面状态（控制器写入，inline 与 Mission Control 共用） */
-export type OverlayKind = 'help' | 'rewind' | 'context' | 'sessions' | 'theme' | 'mode' | 'model' | 'hive-models' | 'swarm' | 'strategy' | 'skills' | 'board' | 'cost' | 'todo' | 'mcp' | 'logs' | 'memory' | 'compact' | 'init' | 'agents';
+export type OverlayKind =
+  | 'help'
+  | 'rewind'
+  | 'context'
+  | 'sessions'
+  | 'theme'
+  | 'mode'
+  | 'model'
+  | 'hive-models'
+  | 'swarm'
+  | 'strategy'
+  | 'skills'
+  | 'board'
+  | 'cost'
+  | 'todo'
+  | 'mcp'
+  | 'logs'
+  | 'memory'
+  | 'compact'
+  | 'init'
+  | 'agents';
 export interface UiMeta {
   interactions: InteractionRequest[];
   mode: PermissionMode;
@@ -27,6 +48,8 @@ export interface UiMeta {
   screen: 'inline' | 'hive' | 'providers';
   strategy?: string;
   n?: number;
+  strategyStep?: string;
+  signals?: { text: string; tone: Tone }[];
   overlay: OverlayKind | null;
   theme?: string;
   mouse?: boolean;
@@ -40,7 +63,18 @@ export interface UiStoreState {
 }
 
 export function defaultMeta(): UiMeta {
-  return { interactions: [], mode: 'default', contextPercent: 0, swarm: [], messages: [], inputSeed: { key: 0, text: '' }, queued: [], running: false, screen: 'inline', overlay: null };
+  return {
+    interactions: [],
+    mode: 'default',
+    contextPercent: 0,
+    swarm: [],
+    messages: [],
+    inputSeed: { key: 0, text: '' },
+    queued: [],
+    running: false,
+    screen: 'inline',
+    overlay: null,
+  };
 }
 
 export interface UiStore {
@@ -53,7 +87,8 @@ export interface UiStore {
   setFocus(agentId: string): void;
   /** 立即应用缓冲中的事件 */
   flush(): void;
-  restore(agentId: string, events: readonly SessionEvent[]): void;
+  restore(agentId: string, events: readonly SessionEvent[], partials?: readonly HivePartial[]): void;
+  removeAgents(ids: readonly string[]): void;
 }
 
 export interface UiStoreOptions {
@@ -94,7 +129,13 @@ export function createUiStore(opts: UiStoreOptions = {}): UiStore {
       else events.push({ ...ev });
       groups.set(agentId, events);
     }
-    for (const [agentId, events] of groups) update(agentId, (v) => groupNewTools(events.reduce((view, ev) => applyEvent(view, ev, t), v), v.items.length));
+    for (const [agentId, events] of groups)
+      update(agentId, (v) =>
+        groupNewTools(
+          events.reduce((view, ev) => applyEvent(view, ev, t), v),
+          v.items.length,
+        ),
+      );
     emit();
   };
 
@@ -132,8 +173,20 @@ export function createUiStore(opts: UiStoreOptions = {}): UiStore {
       emit();
     },
     flush,
-    restore(agentId, events) {
-      update(agentId, () => replayView(events));
+    restore(agentId, events, partials = []) {
+      flush();
+      update(agentId, (view) => replayView(events, partials, view.nextId, agentId));
+      emit();
+    },
+    removeAgents(ids) {
+      buffer = buffer.filter((item) => !ids.includes(item.agentId));
+      const agents = { ...state.agents },
+        diffs = { ...state.meta.diffs };
+      for (const id of ids) {
+        delete agents[id];
+        delete diffs[id];
+      }
+      state = { ...state, agents, focus: ids.includes(state.focus) ? 'main' : state.focus, meta: { ...state.meta, diffs } };
       emit();
     },
   };

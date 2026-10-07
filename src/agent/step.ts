@@ -16,7 +16,7 @@ import type { UiEvent } from './ui-events.js';
 
 export type StepOutcome =
   | { kind: 'message'; message: Message; usage: TokenUsage; finishReason: FinishReason }
-  | { kind: 'failed'; error: RoastError; aborted: boolean; usage: TokenUsage };
+  | { kind: 'failed'; error: RoastError; aborted: boolean; usage: TokenUsage; text?: string };
 
 export interface StepEnv {
   adapter: ProviderAdapter;
@@ -74,10 +74,15 @@ export async function* runStep(request: Omit<GenerateOptions, 'signal'>, env: St
       return { kind: 'message', message: asm.message(), usage, finishReason: reason ?? 'stop' };
     }
     const error = asm.finishError ?? new RoastError('UNKNOWN', `流异常终结: ${reason}`);
-    if (reason === 'aborted' || env.signal.aborted) return { kind: 'failed', error, aborted: true, usage };
+    const text = asm
+      .message()
+      .content.filter((block) => block.type === 'text')
+      .map((block) => block.text)
+      .join('');
+    if (reason === 'aborted' || env.signal.aborted) return { kind: 'failed', error, aborted: true, usage, text };
 
     const delayMs = retryDelay(n + 1, error, env.retry, env.random);
-    if (delayMs === null) return { kind: 'failed', error, aborted: false, usage };
+    if (delayMs === null) return { kind: 'failed', error, aborted: false, usage, text };
 
     env.commit({
       type: 'step/retry',

@@ -9,6 +9,7 @@ import { addUsage, emptyUsage, type TokenUsage } from '../../core/types.js';
 import type { TodoItem } from '../../tools/interact/index.js';
 import { splitStreaming } from '../markdown/split.js';
 import type { SessionEvent } from '../../session/events.js';
+import type { HivePartial } from '../../swarm/hive-journal.js';
 
 export interface ToolView {
   callId: string;
@@ -28,7 +29,7 @@ export type Tone = 'info' | 'warn' | 'error' | 'success';
 export type DisplayItem =
   | { id: number; kind: 'mission'; missionId: string; goal: string; strategy: string; n: number; turn: number; startedAt?: number }
   | { id: number; kind: 'user'; text: string }
-  | { id: number; kind: 'markdown'; text: string }
+  | { id: number; kind: 'markdown'; text: string; partial?: boolean }
   | { id: number; kind: 'reasoning'; text: string }
   | { id: number; kind: 'tool'; tool: ToolView }
   | { id: number; kind: 'tool-group'; tools: ToolView[] }
@@ -48,6 +49,7 @@ export interface AgentView {
   step: number;
   todos: TodoItem[];
   nextId: number;
+  streamStartId?: number;
 }
 
 export function emptyAgentView(): AgentView {
@@ -80,19 +82,30 @@ export function groupNewTools(view: AgentView, start: number): AgentView {
   const fresh = view.items.slice(start);
   const output: DisplayItem[] = [];
   let grouped = false;
-  for (let i = 0; i < fresh.length;) {
+  for (let i = 0; i < fresh.length; ) {
     const item = fresh[i]!;
-    const safe = (candidate: DisplayItem) => candidate.kind === 'tool' && candidate.tool.status === 'done' && ['read', 'grep', 'glob', 'ls', 'search_code'].includes(candidate.tool.name) && !candidate.tool.metadata?.['diff'];
-    if (!safe(item) || item.kind !== 'tool') { output.push(item); i++; continue; }
+    const safe = (candidate: DisplayItem) =>
+      candidate.kind === 'tool' &&
+      candidate.tool.status === 'done' &&
+      ['read', 'grep', 'glob', 'ls', 'search_code'].includes(candidate.tool.name) &&
+      !candidate.tool.metadata?.['diff'];
+    if (!safe(item) || item.kind !== 'tool') {
+      output.push(item);
+      i++;
+      continue;
+    }
     const tools: ToolView[] = [item.tool];
     let end = i + 1;
     while (end < fresh.length) {
       const next = fresh[end]!;
       if (!safe(next) || next.kind !== 'tool' || next.tool.name !== item.tool.name) break;
-      tools.push(next.tool); end++;
+      tools.push(next.tool);
+      end++;
     }
-    if (tools.length >= 3) { output.push({ kind: 'tool-group', id: fresh[end - 1]!.id, tools }); grouped = true; }
-    else output.push(...fresh.slice(i, end));
+    if (tools.length >= 3) {
+      output.push({ kind: 'tool-group', id: fresh[end - 1]!.id, tools });
+      grouped = true;
+    } else output.push(...fresh.slice(i, end));
     i = end;
   }
   return grouped ? { ...view, items: [...view.items.slice(0, start), ...output] } : view;
@@ -115,18 +128,40 @@ function appendText(v: AgentView, text: string): AgentView {
 
 export function applyEvent(v: AgentView, ev: UiEvent, now: number): AgentView {
   switch (ev.type) {
-    case 'hive/mission': return pushItems(flushStream(v), { kind: 'mission', missionId: ev.missionId, goal: ev.goal, strategy: ev.strategy, n: ev.n, turn: ev.turn, startedAt: Date.parse(ev.at) || now });
+    case 'hive/mission':
+      return pushItems(flushStream(v), {
+        kind: 'mission',
+        missionId: ev.missionId,
+        goal: ev.goal,
+        strategy: ev.strategy,
+        n: ev.n,
+        turn: ev.turn,
+        startedAt: Date.parse(ev.at) || now,
+      });
     case 'turn-start':
       return { ...v, running: true, turnStartedAt: now, turnUsage: emptyUsage(), step: 0, tools: [] };
     case 'text-delta':
-      return appendText(v, ev.text);
+      return appendText({ ...v, streamStartId: v.streamStartId ?? v.nextId }, ev.text);
     case 'reasoning-delta':
-      return { ...v, reasoning: v.reasoning + ev.text };
+      return { ...v, streamStartId: v.streamStartId ?? v.nextId, reasoning: v.reasoning + ev.text };
     case 'stream-reset':
-      return { ...v, pending: '', reasoning: '' };
+      return {
+        ...v,
+        items: v.streamStartId === undefined ? v.items : v.items.filter((item) => item.id < v.streamStartId!),
+        streamStartId: undefined,
+        pending: '',
+        reasoning: '',
+      };
+    case 'stream-commit':
+      return { ...v, streamStartId: undefined };
+    case 'partial':
+      return pushItems(applyEvent(v, { type: 'stream-reset' }, now), { kind: 'markdown', text: ev.text, partial: true });
     case 'tool-call-start': {
       const flushed = flushStream(v);
-      return { ...flushed, tools: [...flushed.tools, { callId: ev.callId, name: ev.name, args: ev.args, status: 'running', preview: '', durationMs: 0 }] };
+      return {
+        ...flushed,
+        tools: [...flushed.tools, { callId: ev.callId, name: ev.name, args: ev.args, status: 'running', preview: '', durationMs: 0 }],
+      };
     }
     case 'tool-progress':
       return { ...v, tools: v.tools.map((t) => (t.callId === ev.callId ? { ...t, live: tail((t.live ?? '') + ev.text) } : t)) };
@@ -146,20 +181,40 @@ export function applyEvent(v: AgentView, ev: UiEvent, now: number): AgentView {
       return { ...pushItems(v, { kind: 'tool', tool: done }), tools: v.tools.filter((t) => t.callId !== ev.callId), todos };
     }
     case 'usage':
-      return { ...v, turnUsage: addUsage(v.turnUsage, ev.usage), totalUsage: addUsage(v.totalUsage, ev.usage), lastUsage: ev.usage, step: v.step + 1 };
+      return {
+        ...v,
+        turnUsage: addUsage(v.turnUsage, ev.usage),
+        totalUsage: addUsage(v.totalUsage, ev.usage),
+        lastUsage: ev.usage,
+        step: v.step + 1,
+      };
     case 'turn-end': {
       const flushed = flushStream(v);
-      const leftover = flushed.tools.map((t) => ({ kind: 'tool' as const, tool: { ...t, output: t.output ?? t.live, status: 'interrupted' as const } }));
+      const leftover = flushed.tools.map((t) => ({
+        kind: 'tool' as const,
+        tool: { ...t, output: t.output ?? t.live, status: 'interrupted' as const },
+      }));
       const notes: NewItem[] = ev.reason === 'aborted' ? [{ kind: 'notice', text: '已中断', tone: 'warn' }] : [];
-      const summary: NewItem = { kind: 'turn-summary', durationMs: v.turnStartedAt === null ? 0 : now - v.turnStartedAt, usage: v.turnUsage, reason: ev.reason };
+      const summary: NewItem = {
+        kind: 'turn-summary',
+        durationMs: v.turnStartedAt === null ? 0 : now - v.turnStartedAt,
+        usage: v.turnUsage,
+        reason: ev.reason,
+      };
       return { ...pushItems(flushed, ...leftover, ...notes, summary), tools: [], running: false, turnStartedAt: null };
     }
     case 'error':
-      return ev.error.code === 'ABORTED' ? v : pushItems(flushStream(v), { kind: 'notice', text: `[${ev.error.code}] ${ev.error.message}`, tone: 'error' });
+      return ev.error.code === 'ABORTED'
+        ? v
+        : pushItems(flushStream(v), { kind: 'notice', text: `[${ev.error.code}] ${ev.error.message}`, tone: 'error' });
     case 'notice':
       return pushItems(v, { kind: 'notice', text: ev.text, tone: 'info' });
     case 'retry':
-      return pushItems(v, { kind: 'notice', text: `重试 #${ev.attempt}（${ev.code}），${Math.round(ev.delayMs / 100) / 10}s 后再试`, tone: 'warn' });
+      return pushItems(v, {
+        kind: 'notice',
+        text: `重试 #${ev.attempt}（${ev.code}），${Math.round(ev.delayMs / 100) / 10}s 后再试`,
+        tone: 'warn',
+      });
     case 'waiting':
       return pushItems(v, { kind: 'notice', text: `等待：${ev.reason}`, tone: 'info' });
     case 'user-injected':
@@ -175,29 +230,94 @@ function tail(s: string): string {
 }
 
 /** Replay only committed UI content; raw chunks and internal injected attachments stay out. */
-export function replayView(events: readonly SessionEvent[]): AgentView {
-  let view = emptyAgentView();
+export function replayView(
+  events: readonly SessionEvent[],
+  partials: readonly HivePartial[] = [],
+  nextId = 1,
+  agentId = 'main',
+): AgentView {
+  let view = { ...emptyAgentView(), nextId };
   const turns = new Map<number, AgentView>();
+  let currentTurn = 0;
+  let firstUser = true;
+  const pendingPartials = [...partials];
+  const addPartials = (turn: number) => {
+    for (let i = 0; i < pendingPartials.length; ) {
+      const partial = pendingPartials[i]!;
+      if ((partial.agentTurn ?? partial.turn) !== turn) {
+        i++;
+        continue;
+      }
+      view = pushItems(flushStream(view), { kind: 'markdown', text: partial.text, partial: true });
+      pendingPartials.splice(i, 1);
+    }
+  };
   for (const event of events) {
     const at = 'at' in event ? Date.parse(event.at) || 0 : 0;
     switch (event.type) {
-      case 'turn/start': turns.set(event.turn, view); view = applyEvent(view, { type: 'turn-start', turn: event.turn }, at); break;
-      case 'user/message': view = pushItems(flushStream(view), { kind: 'user', text: event.message.content.filter((b) => b.type === 'text').map((b) => b.text).join('\n') }); break;
-      case 'hive/mission': view = applyEvent(view, event, at); break;
+      case 'turn/start':
+        currentTurn = event.turn;
+        turns.set(event.turn, view);
+        view = applyEvent(view, { type: 'turn-start', turn: event.turn }, at);
+        break;
+      case 'user/message': {
+        const text = event.message.content
+          .filter((b) => b.type === 'text')
+          .map((b) => b.text)
+          .join('\n');
+        const internal = firstUser && agentId !== 'main' && text.startsWith(`[agent:${agentId}]`);
+        firstUser = false;
+        if (!internal) view = pushItems(flushStream(view), { kind: 'user', text });
+        break;
+      }
+      case 'hive/mission':
+        view = applyEvent(view, event, at);
+        break;
       case 'assistant/message':
         for (const block of event.message.content) {
           if (block.type === 'text') view = applyEvent(view, { type: 'text-delta', text: block.text }, at);
           if (block.type === 'reasoning') view = applyEvent(view, { type: 'reasoning-delta', text: block.text }, at);
         }
+        view = applyEvent(view, { type: 'stream-commit' }, at);
         break;
-      case 'tool/call': view = applyEvent(view, { type: 'tool-call-start', callId: event.callId, name: event.name, args: event.args }, at); break;
+      case 'tool/call':
+        view = applyEvent(view, { type: 'tool-call-start', callId: event.callId, name: event.name, args: event.args }, at);
+        break;
       case 'tool/result': {
-        const output = event.content.filter((b) => b.type === 'text').map((b) => b.text).join('\n');
-        view = applyEvent(view, { type: 'tool-call-end', callId: event.callId, name: event.name, isError: event.isError, preview: output.slice(0, 800), output: output.slice(0, 8000), durationMs: event.durationMs, metadata: event.metadata }, at);
+        const output = event.content
+          .filter((b) => b.type === 'text')
+          .map((b) => b.text)
+          .join('\n');
+        view = applyEvent(
+          view,
+          {
+            type: 'tool-call-end',
+            callId: event.callId,
+            name: event.name,
+            isError: event.isError,
+            preview: output.slice(0, 800),
+            output: output.slice(0, 8000),
+            durationMs: event.durationMs,
+            metadata: event.metadata,
+          },
+          at,
+        );
         break;
       }
-      case 'usage': view = applyEvent(view, { type: 'usage', usage: event.usage }, at); break;
-      case 'turn/end': view = applyEvent(view, { type: 'turn-end', reason: event.reason, usage: view.turnUsage }, at); break;
+      case 'usage':
+        view = applyEvent(view, { type: 'usage', usage: event.usage }, at);
+        break;
+      case 'error':
+        if (event.where === 'agent-runtime') {
+          addPartials(currentTurn);
+          if (event.code !== 'ABORTED')
+            view = pushItems(flushStream(view), { kind: 'notice', tone: 'error', text: `[${event.code}] ${event.message}` });
+        }
+        break;
+      case 'turn/end':
+        addPartials(event.turn);
+        view = applyEvent(view, { type: 'turn-end', reason: event.reason, usage: view.turnUsage }, at);
+        break;
       case 'rewind': {
         const before = turns.get(event.toTurn);
         if (before) view = { ...before, nextId: view.nextId, totalUsage: view.totalUsage, lastUsage: view.lastUsage };
@@ -205,11 +325,14 @@ export function replayView(events: readonly SessionEvent[]): AgentView {
         break;
       }
       case 'history/import':
-        view = emptyAgentView();
-        for (const message of event.messages) for (const block of message.content) if (block.type === 'text') view = pushItems(view, { kind: message.role === 'user' ? 'user' : 'markdown', text: block.text });
+        view = { ...emptyAgentView(), nextId: view.nextId };
+        for (const message of event.messages)
+          for (const block of message.content)
+            if (block.type === 'text') view = pushItems(view, { kind: message.role === 'user' ? 'user' : 'markdown', text: block.text });
         break;
     }
   }
+  for (const partial of pendingPartials) view = pushItems(flushStream(view), { kind: 'markdown', text: partial.text, partial: true });
   view = flushStream(view);
   if (view.tools.length) view = applyEvent(view, { type: 'turn-end', reason: 'aborted', usage: view.turnUsage }, 0);
   return { ...view, running: false, turnStartedAt: null };

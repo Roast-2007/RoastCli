@@ -45,12 +45,17 @@ import type { Supervisor } from '../swarm/supervisor.js';
 import { SWARM_SECTION } from '../swarm/roles.js';
 import type { InteractionBroker } from '../core/interaction.js';
 import type { PermissionEngine, PermissionMode } from '../tools/permissions/engine.js';
+import type { RestoredMember } from '../session/hive-restore.js';
+import type { HiveState } from '../swarm/hive-journal.js';
 
 export interface Session {
   loop: AgentRuntime;
   log: RunLogWriter;
   config: RoastConfig;
   initialEvents: readonly SessionEvent[];
+  restoredHive: HiveState & { members: RestoredMember[] };
+  displayEvents(): readonly SessionEvent[];
+  onRewind(listener: (removed: string[]) => void): () => void;
   providerName: string;
   model: string;
   reasoningEffort?: ReasoningEffort | null;
@@ -125,8 +130,15 @@ export function logsRootOf(config: RoastConfig, cwd: string): string {
 function chooseModel(config: RoastConfig, explicit: string | undefined, resumeLogPath: string | undefined): ModelRef {
   if (explicit) return parseModelRef(explicit);
   if (resumeLogPath) {
-    const changed = loadRunLog(resumeLogPath).events.filter((event) => event.type === 'model/change').at(-1);
-    if (changed?.type === 'model/change' && config.providers[changed.provider]) return { provider: changed.provider, model: changed.model, ...(changed.reasoningEffort !== undefined ? { reasoningEffort: changed.reasoningEffort } : {}) };
+    const changed = loadRunLog(resumeLogPath)
+      .events.filter((event) => event.type === 'model/change')
+      .at(-1);
+    if (changed?.type === 'model/change' && config.providers[changed.provider])
+      return {
+        provider: changed.provider,
+        model: changed.model,
+        ...(changed.reasoningEffort !== undefined ? { reasoningEffort: changed.reasoningEffort } : {}),
+      };
     const h = readHeader(resumeLogPath);
     const provider = typeof h?.['provider'] === 'string' ? h['provider'] : undefined;
     const model = typeof h?.['model'] === 'string' ? h['model'] : undefined;
@@ -178,7 +190,18 @@ export async function createSession(opts: CreateSessionOptions = {}): Promise<Se
   const tools = createDefaultToolRegistry();
   const mcp = await setupMcp(cwd, tools, opts.mcpTransport);
   try {
-    return await assembleSession({ cwd, config, ref, providers, opened, tools, mcp, opts, buildSystemPrompt, resume: (resumeLogPath) => createSession({ ...opts, cwd, config, providers, modelRef: undefined, resumeLogPath }) });
+    return await assembleSession({
+      cwd,
+      config,
+      ref,
+      providers,
+      opened,
+      tools,
+      mcp,
+      opts,
+      buildSystemPrompt,
+      resume: (resumeLogPath) => createSession({ ...opts, cwd, config, providers, modelRef: undefined, resumeLogPath }),
+    });
   } catch (err) {
     // 装配失败：不留下 MCP 子进程与未关闭的日志
     await mcp.manager.disconnectAll();

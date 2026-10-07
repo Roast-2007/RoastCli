@@ -43,17 +43,14 @@ describe('AgentLoop', () => {
   it('无工具调用：单步完成 turn', async () => {
     const { adapter, loop } = await setup([textScript('你好')]);
     const events = await collect(loop.run('hi'));
-    expect(events.map((e) => e.type)).toEqual(['turn-start', 'text-delta', 'usage', 'turn-end']);
+    expect(events.map((e) => e.type)).toEqual(['turn-start', 'text-delta', 'usage', 'stream-commit', 'turn-end']);
     expect(events.at(-1)).toMatchObject({ reason: 'completed', usage: { input: 10, output: 5 } });
     expect(adapter.requests).toHaveLength(1);
     expect(adapter.requests[0]!.messages.at(-1)).toEqual({ role: 'user', content: [{ type: 'text', text: 'hi' }] });
   });
 
   it('多步：工具调用 → 结果回喂 → 再请求', async () => {
-    const { dir, adapter, log, loop } = await setup([
-      toolCallScript('c1', 'read', { path: 'a.txt' }),
-      textScript('读完了'),
-    ]);
+    const { dir, adapter, log, loop } = await setup([toolCallScript('c1', 'read', { path: 'a.txt' }), textScript('读完了')]);
     writeFileSync(path.join(dir, 'a.txt'), 'hello world\n', 'utf8');
 
     const events = await collect(loop.run('读一下 a.txt'));
@@ -61,10 +58,12 @@ describe('AgentLoop', () => {
     expect(types).toEqual([
       'turn-start',
       'usage',
+      'stream-commit',
       'tool-call-start',
       'tool-call-end',
       'text-delta',
       'usage',
+      'stream-commit',
       'turn-end',
     ]);
     expect(events.at(-1)).toMatchObject({ reason: 'completed', usage: { input: 30, output: 13 } });
@@ -89,9 +88,11 @@ describe('AgentLoop', () => {
   });
 
   it('模型流错误：error 事件 + turn-end error', async () => {
-    const { loop } = await setup([[{ type: 'finish', reason: 'error', error: Object.assign(new Error('boom'), { name: 'RoastError', code: 'SERVER' }) as never }]]);
+    const { loop } = await setup([
+      [{ type: 'finish', reason: 'error', error: Object.assign(new Error('boom'), { name: 'RoastError', code: 'SERVER' }) as never }],
+    ]);
     const events = await collect(loop.run('hi'));
-    expect(events.map((e) => e.type)).toEqual(['turn-start', 'usage', 'error', 'turn-end']);
+    expect(events.map((e) => e.type)).toEqual(['turn-start', 'usage', 'stream-reset', 'error', 'turn-end']);
     expect(events.at(-1)).toMatchObject({ reason: 'error' });
   });
 
@@ -108,7 +109,7 @@ describe('AgentLoop', () => {
       modelRef: { provider: 'mock', model: 'mock-1' },
       tools: createDefaultToolRegistry(),
       systemPrompt: new SystemPromptAssembler(),
-        log,
+      log,
       cwd: dir,
       services: new MapToolServices(),
       maxSteps: 2,

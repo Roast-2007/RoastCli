@@ -29,8 +29,19 @@ import { buildView } from '../context/view.js';
 import { renderBrief, type MissionInput } from '../swarm/strategies.js';
 
 export type RuntimeInput = string | Message | MissionInput;
-function isMission(input: RuntimeInput): input is MissionInput { return typeof input === 'object' && 'kind' in input && input.kind === 'mission'; }
-function inputText(input: RuntimeInput): string { return typeof input === 'string' ? input : isMission(input) ? input.goal : input.content.filter((b) => b.type === 'text').map((b) => b.text).join('\n'); }
+function isMission(input: RuntimeInput): input is MissionInput {
+  return typeof input === 'object' && 'kind' in input && input.kind === 'mission';
+}
+function inputText(input: RuntimeInput): string {
+  return typeof input === 'string'
+    ? input
+    : isMission(input)
+      ? input.goal
+      : input.content
+          .filter((b) => b.type === 'text')
+          .map((b) => b.text)
+          .join('\n');
+}
 
 export interface AgentRuntimeDeps {
   agentId?: string;
@@ -55,6 +66,7 @@ export interface AgentRuntimeDeps {
   initialHistory?: HistoryState;
   /** 外层（CLI/UI）的中断信号 */
   signal?: AbortSignal;
+  onPartial?(turn: number, text: string, at: string): void;
 }
 
 export class AgentRuntime {
@@ -74,11 +86,20 @@ export class AgentRuntime {
   private pauseGate: Promise<void> | null = null;
   private resumeGate: (() => void) | null = null;
 
-  get paused(): boolean { return this.pauseGate !== null; }
+  get paused(): boolean {
+    return this.pauseGate !== null;
+  }
   /** Pause at the next request boundary; never leave a tool call without its result. */
   setPaused(paused: boolean): void {
-    if (paused && !this.pauseGate) this.pauseGate = new Promise((resolve) => { this.resumeGate = resolve; });
-    if (!paused) { this.resumeGate?.(); this.pauseGate = null; this.resumeGate = null; }
+    if (paused && !this.pauseGate)
+      this.pauseGate = new Promise((resolve) => {
+        this.resumeGate = resolve;
+      });
+    if (!paused) {
+      this.resumeGate?.();
+      this.pauseGate = null;
+      this.resumeGate = null;
+    }
   }
 
   constructor(private readonly deps: AgentRuntimeDeps) {
@@ -162,13 +183,31 @@ export class AgentRuntime {
       }
       if (mission) {
         const missionId = `m${++this.missionSeq}`;
-        const brief = renderBrief({ missionId, goal: mission.goal, strategy: mission.strategy.name, n: mission.n, readOnly: mission.strategy.readOnly, playbook: mission.strategy.playbook });
+        const brief = renderBrief({
+          missionId,
+          goal: mission.goal,
+          strategy: mission.strategy.name,
+          n: mission.n,
+          readOnly: mission.strategy.readOnly,
+          playbook: mission.strategy.playbook,
+        });
         const extra = text === rawText ? '' : text.startsWith(rawText) ? text.slice(rawText.length) : `\n\n[Input context]\n${text}`;
-        const event = commit({ type: 'hive/mission', turn, at: this.now(), missionId, goal: mission.goal, strategy: mission.strategy.name, n: mission.n, brief: brief + extra, ...(mission.strategy.readOnly ? { readOnly: true } : {}) });
+        const event = commit({
+          type: 'hive/mission',
+          turn,
+          at: this.now(),
+          missionId,
+          goal: mission.goal,
+          strategy: mission.strategy.name,
+          n: mission.n,
+          brief: brief + extra,
+          ...(mission.strategy.readOnly ? { readOnly: true } : {}),
+        });
         yield event as Extract<UiEvent, { type: 'hive/mission' }>;
       } else {
         const message = userMessage(text);
-        if (typeof firstText !== 'string' && 'content' in firstText) message.content.push(...firstText.content.filter((b) => b.type === 'image'));
+        if (typeof firstText !== 'string' && 'content' in firstText)
+          message.content.push(...firstText.content.filter((b) => b.type === 'image'));
         commit({ type: 'user/message', turn, at: this.now(), message, source: 'user' });
       }
 
@@ -202,12 +241,17 @@ export class AgentRuntime {
           const reduced = await this.deps.boundary?.onOverflow?.(this.boundaryCtx(turn, step, signal));
           if (reduced) {
             overflowRetried = true;
+            yield { type: 'stream-reset' };
             yield { type: 'notice', text: '上下文超出窗口，已紧急压缩并重试' };
             step--; // 以同一 step 编号重试
             continue;
           }
         }
         if (outcome.kind === 'failed') {
+          if (outcome.text?.trim()) {
+            this.deps.onPartial?.(turn, outcome.text, this.now());
+            yield { type: 'partial', text: outcome.text };
+          } else yield { type: 'stream-reset' };
           yield* end(outcome.aborted ? 'aborted' : 'error', outcome.error);
           return;
         }
@@ -220,6 +264,7 @@ export class AgentRuntime {
           usage: outcome.usage,
           finishReason: outcome.finishReason,
         });
+        yield { type: 'stream-commit' };
 
         const calls = toolCallsOf(outcome.message);
         if (calls.length === 0) {
@@ -259,7 +304,11 @@ export class AgentRuntime {
   }
 
   /** inputGuard（含 UserPromptSubmit 钩子）+ RAG；被拦截返回 { blocked: 理由 } */
-  private async prepareInput(text: string, signal: AbortSignal, hive?: { strategy: string; n: number }): Promise<string | { blocked: string }> {
+  private async prepareInput(
+    text: string,
+    signal: AbortSignal,
+    hive?: { strategy: string; n: number },
+  ): Promise<string | { blocked: string }> {
     let out = text;
     const guard = this.deps.extensions?.inputGuard;
     if (guard) {
@@ -347,7 +396,8 @@ export class AgentRuntime {
     const cacheKey = hashOf([this.deps.cwd, this.deps.modelRef.provider, model, systemHash, toolsHash]);
     const prefix = messages.map((message) => hashOf(message));
     let cacheBoundary = 0;
-    if (cacheKey === this.lastCacheKey) while (cacheBoundary < prefix.length && prefix[cacheBoundary] === this.cachePrefix[cacheBoundary]) cacheBoundary++;
+    if (cacheKey === this.lastCacheKey)
+      while (cacheBoundary < prefix.length && prefix[cacheBoundary] === this.cachePrefix[cacheBoundary]) cacheBoundary++;
     const request: Omit<GenerateOptions, 'signal'> = {
       model,
       system,

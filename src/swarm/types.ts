@@ -52,6 +52,8 @@ export interface AgentInfo {
   children: string[];
   /** 使用独立 git worktree 时的根目录（合并后清除） */
   worktree?: string;
+  restored?: boolean;
+  spawnTurn?: number;
 }
 
 /** 只有这些消息会唤醒处于等待中的 agent；info 等到下一次自然边界再送达 */
