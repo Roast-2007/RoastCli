@@ -56,6 +56,7 @@ export interface AgentRuntimeDeps {
   extensions?: ExtensionPoints;
   boundary?: BoundaryHooks;
   maxSteps?: number;
+  budgetReminder?: 'main' | 'agent';
   temperature?: number;
   /** true 时落完整请求体与流式 chunk */
   debugLog?: boolean;
@@ -104,7 +105,7 @@ export class AgentRuntime {
 
   constructor(private readonly deps: AgentRuntimeDeps) {
     this.id = deps.agentId ?? deps.log.agentId;
-    this.maxSteps = deps.maxSteps ?? 50;
+    this.maxSteps = deps.maxSteps ?? 100;
     this.clock = deps.clock ?? realClock;
     this.committer = new Committer(deps.log, deps.initialHistory);
     this.turn = deps.initialHistory?.turn ?? 0;
@@ -358,6 +359,21 @@ export class AgentRuntime {
       if (a.blocks.length === 0) continue;
       this.committer.commit({ type: 'attachment/injected', turn, step, at: this.now(), source: a.source, blocks: a.blocks });
     }
+    this.injectBudget(turn, step);
+  }
+
+  /** 内部附件只进入模型历史；日志标记防止同一步的溢出重试重复提醒。 */
+  private injectBudget(turn: number, step: number): void {
+    if (!this.deps.budgetReminder || this.committer.state.budgetMarks?.includes(`${turn}:${step}`)) return;
+    const remaining = this.maxSteps - step + 1;
+    const wrapUp = this.maxSteps >= 20 ? 5 : 2;
+    if (remaining !== wrapUp && remaining !== 1) return;
+    const agent = this.deps.budgetReminder === 'agent';
+    const text =
+      remaining === 1
+        ? `[最后一步] 这是本回合最后一个步骤：${agent ? '现在只调用 report。' : '请直接给出结论。'}`
+        : `[步数提醒] 本回合还剩 ${remaining} 个模型步骤（上限 ${this.maxSteps}）。请停止扩展范围，保存成果并运行必要验证，然后${agent ? '调用 report 提交结论（未完成用 status "partial" 说明已完成与剩余部分）。' : '给出当前结论与剩余工作。'}`;
+    this.committer.commit({ type: 'attachment/injected', turn, step, at: this.now(), source: 'budget', blocks: [{ type: 'text', text }] });
   }
 
   /** 模型无工具调用时：有排队插话则继续；否则询问钩子（可等待，不耗 token） */

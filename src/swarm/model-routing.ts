@@ -1,5 +1,6 @@
 import { parseModelRef, type RoastConfig } from '../core/config.js';
 import type { AgentRole } from './types.js';
+import { resolvePricing } from '../providers/pricing/index.js';
 
 const ROLES = new Set<AgentRole>(['queen', 'lead', 'worker', 'scout', 'critic', 'judge']);
 export function parseRoleModels(values: string[]): Partial<Record<AgentRole, string>> {
@@ -17,10 +18,10 @@ export function parseRoleModels(values: string[]): Partial<Record<AgentRole, str
 
 export function modelCatalogSection(config: RoastConfig): string {
   const models = Object.entries(config.providers).flatMap(([provider, profile]) =>
-    Object.entries(profile.models ?? {}).map(
-      ([model, meta]) =>
-        `- ${provider}:${model}${meta.name ? ` (${meta.name})` : ''}${meta.contextWindow ? ` · window ${meta.contextWindow}` : ''}${meta.reasoning ? ' · reasoning' : ''}${meta.pricing ? ` · input $${meta.pricing.input}/M · output $${meta.pricing.output}/M` : ''}`,
-    ),
+    Object.entries(profile.models ?? {}).map(([model, meta]) => {
+      const resolved = resolvePricing(config, { provider, model });
+      return `- ${provider}:${model}${meta.name ? ` (${meta.name})` : ''}${meta.contextWindow ? ` · window ${meta.contextWindow}` : ''}${meta.reasoning ? ' · reasoning' : ''}${resolved ? ` · input $${resolved.pricing.input}/M · output $${resolved.pricing.output}/M${resolved.source === 'reference' ? ' (reference: official price, not endpoint price)' : ''}` : ''}`;
+    }),
   );
   if (!models.some((line) => line.startsWith(`- ${config.default}`))) models.push(`- ${config.default} (default)`);
   const routes = Object.entries(config.swarm.models ?? {})

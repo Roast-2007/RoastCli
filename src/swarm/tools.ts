@@ -10,6 +10,7 @@ import { defineTool, textResult, toolErrorResult, type PreExecuteHook, type Tool
 import type { Supervisor, WaitResult } from './supervisor.js';
 import { parseAddress, READ_ONLY_ROLES, type AgentRole, type Report } from './types.js';
 import { ISOLATION_MODES } from './isolation.js';
+import { formatProgress } from './progress.js';
 
 export const SWARM_KEY = 'swarm';
 
@@ -25,9 +26,12 @@ function access(ctx: ToolContext): SwarmAccess | null {
 const NO_SWARM = '当前会话未启用蜂群';
 const SPAWNABLE = ['lead', 'worker', 'scout', 'critic', 'judge'] as const;
 export const configureSwarmTool = defineTool({
-  name: 'configure_swarm', description: 'Queen 启动蜂群前为未由用户显式指定的角色选择已配置模型。仅影响本次蜂群；不会保存配置。',
+  name: 'configure_swarm',
+  description: 'Queen 启动蜂群前为未由用户显式指定的角色选择已配置模型。仅影响本次蜂群；不会保存配置。',
   parameters: z.object({ models: z.record(z.enum(SPAWNABLE), z.string().min(1)) }),
-  isReadOnly: false, isConcurrencySafe: false, permission: { kind: 'interact' },
+  isReadOnly: false,
+  isConcurrencySafe: false,
+  permission: { kind: 'interact' },
   async execute(args, ctx) {
     const s = access(ctx);
     if (!s) return toolErrorResult('configure_swarm', NO_SWARM);
@@ -35,7 +39,7 @@ export const configureSwarmTool = defineTool({
   },
 });
 
-function formatReports(r: WaitResult): string {
+function formatReports(r: WaitResult, age: (at: number) => number): string {
   const lines = r.reports.map((x) => `[${x.agentId}] ${x.status}：${x.summary}${x.refs.length ? `\n  引用：${x.refs.join(', ')}` : ''}`);
   const head =
     r.reason === 'done'
@@ -43,9 +47,13 @@ function formatReports(r: WaitResult): string {
       : r.reason === 'message'
         ? '收到需要处理的消息，提前返回（见下一条 inbox）'
         : r.reason === 'timeout'
-          ? '等待超时'
+          ? '等待超时（子 agent 仍在运行，不代表失败）。可以再次 await_agents 继续等待，或 send_message 询问进展。'
           : '等待被中断';
-  const pending = r.pending.length ? `\n仍在进行：${r.pending.join(', ')}` : '';
+  const pending = r.progress?.length
+    ? `\n${r.progress.map((a) => formatProgress(a, age)).join('\n')}`
+    : r.pending.length
+      ? `\n仍在进行：${r.pending.join(', ')}`
+      : '';
   return `${head}${pending}\n${lines.join('\n') || '（暂无报告）'}`;
 }
 
@@ -86,7 +94,8 @@ export const spawnAgentTool = defineTool({
 
 export const sendMessageTool = defineTool({
   name: 'send_message',
-  description: '给其他 agent 发消息。to：parent / children / siblings / <agent id> / role:<角色> / broadcast（仅主会话）。正文要短，大内容先写黑板再给键名。',
+  description:
+    '给其他 agent 发消息。to：parent / children / siblings / <agent id> / role:<角色> / broadcast（仅主会话）。正文要短，大内容先写黑板再给键名。',
   parameters: z.object({
     to: z.string(),
     kind: z.enum(['question', 'answer', 'info', 'alert', 'steer', 'task']),
@@ -130,7 +139,10 @@ export const awaitAgentsTool = defineTool({
     if (!s) return toolErrorResult('await_agents', NO_SWARM);
     const r = await s.supervisor.wait(s.agentId, args.ids ?? [], args.mode, { timeoutMs: args.timeout_s * 1000, signal: ctx.signal });
     if (r.reason === 'aborted') throw new DOMException('等待被中断', 'AbortError');
-    return textResult(formatReports(r), { reason: r.reason, reports: r.reports, pending: r.pending });
+    return textResult(
+      formatReports(r, (at) => s.supervisor.activityAge(at)),
+      { reason: r.reason, reports: r.reports, pending: r.pending, progress: r.progress },
+    );
   },
 });
 
@@ -185,8 +197,13 @@ export const boardWriteTool = defineTool({
   async execute(args, ctx): Promise<ToolResult> {
     const s = access(ctx);
     if (!s) return toolErrorResult('board_write', NO_SWARM);
-    const r = s.supervisor.board.write(args.key, args.value, { author: s.agentId, ...(args.expect_version !== undefined ? { expect: args.expect_version } : {}) });
-    return r.ok ? textResult(`已写入 ${args.key} v${r.version}`) : toolErrorResult('board_write', `版本冲突：当前为 v${r.current}，请先 board_read 再合并后写入`);
+    const r = s.supervisor.board.write(args.key, args.value, {
+      author: s.agentId,
+      ...(args.expect_version !== undefined ? { expect: args.expect_version } : {}),
+    });
+    return r.ok
+      ? textResult(`已写入 ${args.key} v${r.version}`)
+      : toolErrorResult('board_write', `版本冲突：当前为 v${r.current}，请先 board_read 再合并后写入`);
   },
 });
 
@@ -201,7 +218,9 @@ export const boardReadTool = defineTool({
     const s = access(ctx);
     if (!s) return toolErrorResult('board_read', NO_SWARM);
     const e = s.supervisor.board.read(args.key);
-    return e ? textResult(`${e.key} v${e.version}（作者 ${e.author}）\n${e.value}`) : toolErrorResult('board_read', `黑板上没有 ${args.key}`);
+    return e
+      ? textResult(`${e.key} v${e.version}（作者 ${e.author}）\n${e.value}`)
+      : toolErrorResult('board_read', `黑板上没有 ${args.key}`);
   },
 });
 
@@ -245,22 +264,42 @@ export const agentsStatusTool = defineTool({
   async execute(_args, ctx): Promise<ToolResult> {
     const s = access(ctx);
     if (!s) return toolErrorResult('agents_status', NO_SWARM);
-    const lines = s.supervisor.tree().map((a) => `${'  '.repeat(a.depth)}${a.id} [${a.role}] ${a.state}${a.waitingFor ? `（${a.waitingFor}）` : ''} · ${a.model}${a.reasoningEffort ? ` / ${a.reasoningEffort}` : ''}：${a.brief.slice(0, 60)}${a.report ? ` → ${a.report.status}` : ''}`);
-    return textResult(lines.join('\n'));
+    const lines = s.supervisor
+      .tree()
+      .map(
+        (a) =>
+          `${'  '.repeat(a.depth)}${a.id} [${a.role}] ${a.state}${a.waitingFor ? `（${a.waitingFor}）` : ''} · ${a.model}${a.reasoningEffort ? ` / ${a.reasoningEffort}` : ''}：${a.brief.slice(0, 60)}${a.report ? ` → ${a.report.status}` : ''}`,
+      );
+    return textResult(
+      lines.map((line, i) => `${line}\n${formatProgress(s.supervisor.tree()[i]!, (at) => s.supervisor.activityAge(at))}`).join('\n'),
+      { agents: s.supervisor.tree() },
+    );
   },
 });
 
 export const taskTool = defineTool({
   name: 'task',
   description: '派一个一次性子 agent 完成独立任务并等待其结果（适合并行调研或隔离的小改动）。',
-  parameters: z.object({ prompt: z.string().min(1), role: z.enum(['worker', 'scout']).default('worker'), task_id: z.string().min(1).optional(), model: z.string().optional(), reasoning_effort: ReasoningEffortSchema.nullable().optional() }),
+  parameters: z.object({
+    prompt: z.string().min(1),
+    role: z.enum(['worker', 'scout']).default('worker'),
+    task_id: z.string().min(1).optional(),
+    model: z.string().optional(),
+    reasoning_effort: ReasoningEffortSchema.nullable().optional(),
+  }),
   isReadOnly: false,
   isConcurrencySafe: true,
   permission: { kind: 'interact' },
   async execute(args, ctx): Promise<ToolResult> {
     const s = access(ctx);
     if (!s) return toolErrorResult('task', NO_SWARM);
-    const spawned = s.supervisor.spawn(s.agentId, { role: args.role, task: args.prompt, taskId: args.task_id, model: args.model, reasoningEffort: args.reasoning_effort });
+    const spawned = s.supervisor.spawn(s.agentId, {
+      role: args.role,
+      task: args.prompt,
+      taskId: args.task_id,
+      model: args.model,
+      reasoningEffort: args.reasoning_effort,
+    });
     if (!spawned.ok) return toolErrorResult('task', spawned.reason);
     const r = await s.supervisor.wait(s.agentId, [spawned.id], 'all', { signal: ctx.signal });
     if (r.reason === 'aborted') {
@@ -268,7 +307,9 @@ export const taskTool = defineTool({
       throw new DOMException('等待被中断', 'AbortError');
     }
     const rep = r.reports[0];
-    return rep ? textResult(`[${rep.agentId}] ${rep.status}：${rep.summary}`, { report: rep }) : toolErrorResult('task', '子 agent 未返回结果');
+    return rep
+      ? textResult(`[${rep.agentId}] ${rep.status}：${rep.summary}`, { report: rep })
+      : toolErrorResult('task', '子 agent 未返回结果');
   },
 });
 
@@ -291,6 +332,9 @@ export const SWARM_TOOLS = [
 export function roleGuardHook(role: AgentRole): PreExecuteHook {
   return (tool, args) =>
     READ_ONLY_ROLES.has(role) && tool.name !== 'bash' && isMutating(tool, args)
-      ? { action: 'deny', reason: `你的角色（${role}）是只读的，不能执行会修改工作区的操作（运行测试、类型检查、lint 等验证命令除外）；请把建议写进报告` }
+      ? {
+          action: 'deny',
+          reason: `你的角色（${role}）是只读的，不能执行会修改工作区的操作（运行测试、类型检查、lint 等验证命令除外）；请把建议写进报告`,
+        }
       : { action: 'allow' };
 }

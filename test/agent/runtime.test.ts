@@ -152,6 +152,37 @@ describe('AgentRuntime：插话', () => {
 });
 
 describe('AgentRuntime：边界钩子', () => {
+  it('预算附件只注入一次，工具配对和重放保持一致', async () => {
+    const tools = new ToolRegistry();
+    tools.register(
+      defineTool({
+        name: 'noop',
+        description: 'noop',
+        parameters: z.object({}),
+        isReadOnly: true,
+        isConcurrencySafe: true,
+        execute: async () => textResult('ok'),
+      }),
+    );
+    const { rt, log } = await setup(
+      Array.from({ length: 7 }, (_, i) => toolCallScript(`b${i}`, 'noop', {})),
+      { maxSteps: 7, budgetReminder: 'agent' },
+      tools,
+    );
+    const events = await collect(rt.run('work'));
+    expect(events.at(-1)).toMatchObject({ reason: 'max-steps' });
+    const recorded = loadRunLog(log.path).events;
+    expect(
+      recorded
+        .filter((e) => e.type === 'attachment/injected' && e.source === 'budget')
+        .map((e) => (e.type === 'attachment/injected' ? e.step : 0)),
+    ).toEqual([6, 7]);
+    expect(replayMismatches(log.path)).toEqual([]);
+    expect(recorded.filter((e) => e.type === 'tool/call')).toHaveLength(7);
+    expect(recorded.filter((e) => e.type === 'tool/result')).toHaveLength(7);
+    expect(events.some((e) => JSON.stringify(e).includes('[步数提醒]'))).toBe(false);
+    await log.close();
+  });
   it('beforeRequest 注入的附件落日志并进入请求，位于末尾 user 消息', async () => {
     const { rt, provider, log } = await setup([textScript('ok')], {
       boundary: { beforeRequest: () => [{ kind: 'inject', source: 'todo', blocks: [{ type: 'text', text: '<todo>1</todo>' }] }] },
@@ -196,7 +227,11 @@ describe('AgentRuntime：重试', () => {
   it('429 + retry-after：按服务端建议等待后重试成功，落 step/retry', async () => {
     const clock = new FakeClock();
     const rateLimited = [
-      { type: 'finish' as const, reason: 'error' as const, error: new RoastError('RATE_LIMIT', '429', { retryable: true, retryAfterMs: 3000 }) },
+      {
+        type: 'finish' as const,
+        reason: 'error' as const,
+        error: new RoastError('RATE_LIMIT', '429', { retryable: true, retryAfterMs: 3000 }),
+      },
     ];
     const { rt, log } = await setup([rateLimited, textScript('ok')], { clock });
     const events = await collect(rt.run('hi'));
@@ -228,7 +263,9 @@ describe('AgentRuntime：重试', () => {
 
   it('重试次数用尽后以 error 结束', async () => {
     const fail = errorScript('SERVER', '500', true);
-    const { rt, provider } = await setup([fail, fail, fail], { retry: { maxRetries: 2, baseDelayMs: 1, maxDelayMs: 1, jitter: 0, maxRetryAfterMs: 1 } });
+    const { rt, provider } = await setup([fail, fail, fail], {
+      retry: { maxRetries: 2, baseDelayMs: 1, maxDelayMs: 1, jitter: 0, maxRetryAfterMs: 1 },
+    });
     const events = await collect(rt.run('hi'));
     expect(provider.requests).toHaveLength(3);
     expect(events.at(-1)).toMatchObject({ type: 'turn-end', reason: 'error' });
@@ -240,11 +277,15 @@ describe('AgentRuntime：M1 评审修复', () => {
     const gate = gateTool();
     const tools = new ToolRegistry();
     tools.register(gate.tool);
-    const { rt, provider } = await setup([toolCallScript('c1', 'gate', {}), textScript('ok')], {
-      extensions: {
-        inputGuard: { check: async (t) => (t.includes('EVIL') ? { action: 'block', reason: 'bad' } : { action: 'pass' }) },
+    const { rt, provider } = await setup(
+      [toolCallScript('c1', 'gate', {}), textScript('ok')],
+      {
+        extensions: {
+          inputGuard: { check: async (t) => (t.includes('EVIL') ? { action: 'block', reason: 'bad' } : { action: 'pass' }) },
+        },
       },
-    }, tools);
+      tools,
+    );
     const run = collect(rt.run('开始'));
     await gate.startedP;
     rt.enqueue('EVIL 指令');

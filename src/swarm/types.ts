@@ -42,6 +42,10 @@ export interface AgentInfo {
   state: AgentState;
   /** A pending user interaction, visible to Queen and both TUI screens. */
   waitingFor?: string;
+  steps?: number;
+  maxSteps?: number;
+  lastActivityAt?: number;
+  lastTool?: string;
   brief: string;
   taskId?: string;
   model: string;

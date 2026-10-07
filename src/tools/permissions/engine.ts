@@ -5,15 +5,16 @@
  * 1. deny 规则 → deny
  * 2. plan 模式：非只读（且非交互类/白名单）→ deny
  * 3. 高危（bash 高危命令、改 .git 或 shadow 仓库）→ 强制 ask（yolo 与 allow 规则都不能跳过）
- * 4. yolo → allow
- * 5. allow 规则（会话授权 + 配置）→ allow；bash 复合命令要求每段都命中 allow 或为只读命令
- * 6. ask 规则 → ask
- * 7. 默认：工作区内读取 / 只读 bash / 交互类 → allow；acceptEdits 下工作区内编辑 → allow；其余 ask
+ * 4. 只读角色无法确认的执行 → 强制 ask
+ * 5. yolo → allow
+ * 6. allow 规则（会话授权 + 配置）→ allow；bash 复合命令要求每段都命中 allow 或为只读命令
+ * 7. ask 规则 → ask
+ * 8. 默认：工作区内读取 / 只读 bash / 交互类 → allow；acceptEdits 下工作区内编辑 → allow；其余 ask
  */
 import path from 'node:path';
 import { isPathInside } from '../../core/paths.js';
 import { dangerReason, isReadOnlyCommand, isReadOnlyRoleCommand, parseCommand } from './bash-parse.js';
-import { commandMatches, matchesRule, parseRule, suggestRule, type PermissionRequest, type Rule } from './rules.js';
+import { commandMatches, matchesRule, parseRule, suggestRules, type PermissionRequest, type Rule } from './rules.js';
 
 export type { PermissionRequest } from './rules.js';
 export type PermissionMode = 'default' | 'acceptEdits' | 'plan' | 'yolo';
@@ -30,6 +31,7 @@ export interface Evaluation {
   /** 高危强制询问：UI 不提供"始终允许" */
   forced?: boolean;
   suggestedRule?: string;
+  suggestedRules?: string[];
 }
 
 export interface PermissionSettings {
@@ -100,7 +102,13 @@ export class PermissionEngine {
   }
 
   evaluate(req: PermissionRequest): Evaluation {
-    const suggestedRule = suggestRule(req);
+    const verdict = this.decide(req);
+    return verdict.behavior === 'ask' && req.kind === 'execute' && req.executionRoot
+      ? { ...verdict, reason: `${verdict.reason}；在 worktree ${req.executionRoot} 中执行命令` }
+      : verdict;
+  }
+
+  private decide(req: PermissionRequest): Evaluation {
     if (this.deny.some((r) => this.matches(r, req))) return { behavior: 'deny', reason: '命中 deny 规则' };
     if (this.mode_ === 'plan' && !this.isReadOnly(req) && !PLAN_ALLOWED.has(req.tool) && req.kind !== 'interact') {
       return { behavior: 'deny', reason: 'plan 模式下只允许只读操作；请先用 exit_plan_mode 提交计划' };
@@ -108,19 +116,31 @@ export class PermissionEngine {
     const danger = this.dangerOf(req);
     if (danger) return { behavior: 'ask', reason: `高危操作：${danger}`, forced: true };
     if (req.readOnlyRole && req.kind === 'execute' && (req.tool !== 'bash' || !req.target || !isReadOnlyRoleCommand(req.target))) {
-      return { behavior: 'ask', forced: true, reason: `只读角色 ${req.readOnlyRole}：无法确认这条命令是否只读取或验证，需要用户批准本次执行` };
-    }
-    if (req.executionRoot && req.kind === 'execute') {
-      return { behavior: 'ask', forced: true, reason: `此 agent 的工作区是 ${req.executionRoot}；shell / 外部执行工具能越过目录边界，需要明确批准本次命令` };
+      return {
+        behavior: 'ask',
+        forced: true,
+        reason: `只读角色 ${req.readOnlyRole}：无法确认这条命令是否只读取或验证，需要用户批准本次执行`,
+      };
     }
     if (this.mode_ === 'yolo') return { behavior: 'allow', reason: 'yolo 模式' };
     if (this.allowedByRules(req)) return { behavior: 'allow', reason: '命中 allow 规则' };
-    if (this.ask.some((r) => this.matches(r, req))) return { behavior: 'ask', reason: '命中 ask 规则', suggestedRule };
-    return this.defaultDecision(req, suggestedRule);
+    const suggestedRules = suggestRules(req, (segment) => this.allowedByRules({ ...req, target: segment }));
+    const verdict = this.ask.some((r) => this.matches(r, req))
+      ? { behavior: 'ask' as const, reason: '命中 ask 规则' }
+      : this.defaultDecision(req);
+    if (verdict.behavior !== 'ask') return verdict;
+    return {
+      ...verdict,
+      suggestedRules,
+      ...(suggestedRules.length ? { suggestedRule: suggestedRules.join(', ') } : {}),
+    };
   }
 
   private matches(rule: Rule, req: PermissionRequest): boolean {
-    return matchesRule(rule, req);
+    return (
+      matchesRule(rule, req) ||
+      (req.tool === 'bash' && !!req.target && parseCommand(req.target).segments.some((target) => matchesRule(rule, { ...req, target })))
+    );
   }
 
   private dangerOf(req: PermissionRequest): string | null {
@@ -138,16 +158,17 @@ export class PermissionEngine {
   private allowedByRules(req: PermissionRequest): boolean {
     const rules = [...this.allow, ...this.sessionAllow];
     if (req.tool !== 'bash' || !req.target) return rules.some((r) => this.matches(r, req));
+    // A bare `bash` rule is the user's explicit "allow every command", subshells included.
     if (rules.some((r) => r.tool === 'bash' && r.pattern === undefined)) return true;
     const parsed = parseCommand(req.target);
     if (parsed.hasSubshell) return false;
     const bashPatterns = rules.filter((r) => r.tool === 'bash' && r.pattern !== undefined).map((r) => r.pattern!);
     const segmentAllowed = (seg: string) =>
-      bashPatterns.some((p) => commandMatches(p, seg)) || (!parsed.writesFiles && isReadOnlyCommand(seg));
+      bashPatterns.some((p) => commandMatches(p, seg)) || (!parseCommand(seg).writesFiles && isReadOnlyCommand(seg));
     return parsed.segments.length > 0 && parsed.segments.every(segmentAllowed) && bashPatterns.length > 0;
   }
 
-  private defaultDecision(req: PermissionRequest, suggestedRule: string): Evaluation {
+  private defaultDecision(req: PermissionRequest): Evaluation {
     const inside = req.target !== undefined && isInside(req.cwd, req.target);
     switch (req.kind) {
       case 'interact':
@@ -156,15 +177,15 @@ export class PermissionEngine {
         if (req.targetKind === 'label') return { behavior: 'allow', reason: '只读资源' };
         return inside || req.target === undefined || this.readRoots.some((r) => isPathInside(r, req.target!))
           ? { behavior: 'allow', reason: '工作区内读取' }
-          : { behavior: 'ask', reason: '读取工作区外的路径', suggestedRule };
+          : { behavior: 'ask', reason: '读取工作区外的路径' };
       case 'edit':
         if (this.mode_ === 'acceptEdits' && inside) return { behavior: 'allow', reason: 'acceptEdits 模式' };
-        return { behavior: 'ask', reason: inside ? '修改文件' : '修改工作区外的文件', suggestedRule };
+        return { behavior: 'ask', reason: inside ? '修改文件' : '修改工作区外的文件' };
       case 'execute':
         if (this.isReadOnly(req)) return { behavior: 'allow', reason: '只读命令' };
-        return { behavior: 'ask', reason: '执行命令', suggestedRule };
+        return { behavior: 'ask', reason: '执行命令' };
       case 'network':
-        return { behavior: 'ask', reason: '访问网络', suggestedRule };
+        return { behavior: 'ask', reason: '访问网络' };
     }
   }
 }

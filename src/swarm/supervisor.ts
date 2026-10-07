@@ -24,6 +24,9 @@ import { ProgressWatchdog } from './watchdog.js';
 import type { SessionEvent } from '../session/events.js';
 import type { DiffTarget } from './diff.js';
 import type { HiveJournal } from './hive-journal.js';
+import { ActiveClock } from './active-clock.js';
+import { autoReportSummary } from './auto-report.js';
+import { TODOS_KEY, type TodoItem } from '../tools/interact/index.js';
 
 export interface CreateRuntimeInput {
   id: string;
@@ -48,6 +51,7 @@ export interface SupervisorDeps {
   roleModels?: Partial<Record<AgentRole, string>>;
   maxAgents?: number;
   maxDepth?: number;
+  maxSteps?: number;
   onAgentEvent?(agentId: string, ev: UiEvent): void;
   onSessionEvent?(ref: ModelRef, event: SessionEvent): void;
   onChange?(): void;
@@ -76,6 +80,7 @@ interface Rec {
   /** 运行（含收尾）结束 */
   finished?: Promise<void>;
   runtime?: AgentRuntime;
+  services?: ToolServices;
 }
 
 export type SpawnResult = { ok: true; id: string } | { ok: false; reason: string };
@@ -83,6 +88,7 @@ export interface WaitResult {
   reason: 'done' | 'message' | 'timeout' | 'aborted';
   reports: Report[];
   pending: string[];
+  progress?: AgentInfo[];
 }
 
 const LIVE: ReadonlySet<AgentInfo['state']> = new Set(['queued', 'running', 'waiting', 'paused']);
@@ -103,6 +109,7 @@ export class Supervisor {
   readonly board: Blackboard;
   private readonly recs = new Map<string, Rec>();
   private readonly now: () => number;
+  private readonly activeClock: ActiveClock;
   private seq = 0;
   private msgSeq = 0;
   private readOnlyMission = false;
@@ -145,6 +152,7 @@ export class Supervisor {
 
   constructor(private readonly deps: SupervisorDeps) {
     this.now = deps.now ?? Date.now;
+    this.activeClock = new ActiveClock(this.now);
     this.bus = new MessageBus(
       { resolve: (from, to) => this.resolve(from, to), deliver: (id, e) => this.deliver(id, e, false) },
       { now: this.now },
@@ -168,6 +176,16 @@ export class Supervisor {
       this.deps.journal?.message(this.currentTurn, e, recipients);
       if (e.kind === 'question') this.openQuestions.set(e.from, new Set([...(this.openQuestions.get(e.from) ?? []), e.id]));
     });
+  }
+
+  setUserInteraction(waiting: boolean): void {
+    this.activeClock.setPaused(waiting);
+  }
+  activeElapsed(since: number): number {
+    return this.activeClock.elapsed(since);
+  }
+  activityAge(at: number): number {
+    return Math.max(0, this.now() - at);
   }
 
   /** 所有子 agent 运行结束 */
@@ -333,6 +351,8 @@ export class Supervisor {
         model: `${modelRef.provider}:${modelRef.model}`,
         ...(modelRef.reasoningEffort !== undefined ? { reasoningEffort: modelRef.reasoningEffort } : {}),
         startedAt: this.now(),
+        steps: 0,
+        maxSteps: this.deps.maxSteps ?? 150,
         children: [],
         spawnTurn: parent.info.parentId ? parent.info.spawnTurn : this.currentTurn,
       },
@@ -345,7 +365,15 @@ export class Supervisor {
     const run = this.run(
       rec,
       modelRef,
-      roleCard({ id, role: opts.role, parentId, task: opts.task, taskId: opts.taskId, refs: opts.refs ?? [] }),
+      roleCard({
+        id,
+        role: opts.role,
+        parentId,
+        task: opts.task,
+        taskId: opts.taskId,
+        refs: opts.refs ?? [],
+        maxSteps: this.deps.maxSteps,
+      }),
     );
     rec.finished = run;
     this.runs.add(run);
@@ -402,11 +430,12 @@ export class Supervisor {
       },
     );
     try {
+      rec.services = this.deps.createServices(id);
       const runtime = this.deps.createRuntime({
         id,
         role: rec.info.role,
         log,
-        services: this.deps.createServices(id),
+        services: rec.services,
         boundary: this.hooksFor(id),
         modelRef,
         cwd: rec.cwd,
@@ -422,8 +451,9 @@ export class Supervisor {
   private async run(rec: Rec, modelRef: ModelRef, prompt: string): Promise<void> {
     const id = rec.info.id;
     let log: RunLogWriter | undefined;
-    let timer: ReturnType<typeof setTimeout> | undefined;
+    let cancelTimer: (() => void) | undefined;
     let lastText = '';
+    let errorMessage: string | undefined;
     let lastReason = 'completed';
     let offWatchdog: (() => void) | undefined;
     const limit = this.deps.maxAgentMs ?? 60 * 60_000;
@@ -434,6 +464,14 @@ export class Supervisor {
       rec.runtime = runtime;
       const watchdog = new ProgressWatchdog(() => this.watchdogSteps);
       offWatchdog = runtime.committer?.onCommit((event) => {
+        rec.info = { ...rec.info, lastActivityAt: this.now() };
+        if (event.type === 'step/start') rec.info = { ...rec.info, steps: event.step };
+        if (event.type === 'tool/call') rec.info = { ...rec.info, lastTool: event.name };
+        if (event.type === 'assistant/message') {
+          const text = event.message.content.flatMap((b) => (b.type === 'text' ? [b.text] : [])).join('\n');
+          if (text.trim()) lastText = text;
+        }
+        if (event.type === 'turn/end' && event.error) errorMessage = event.error;
         this.deps.onSessionEvent?.(modelRef, event);
         const alert = watchdog.observe(event);
         if (!alert || !rec.info.parentId || rec.controller.signal.aborted || rec.info.report) return;
@@ -449,27 +487,51 @@ export class Supervisor {
         );
       });
       runtime.setPaused(rec.info.state === 'paused');
-      timer = setTimeout(() => this.cancelSubtree(id, `运行超过 ${Math.round(limit / 60_000)} 分钟`), limit);
+      cancelTimer = this.activeClock.timeout(rec.info.startedAt, limit, () =>
+        this.cancelSubtree(id, `运行超过 ${Math.round(limit / 60_000)} 分钟`),
+      );
+      let streaming = '';
       for await (const ev of runtime.run(prompt + note, rec.controller.signal)) {
         this.deps.onAgentEvent?.(id, ev);
-        if (ev.type === 'text-delta') lastText += ev.text;
-        else if (ev.type === 'tool-call-start' || ev.type === 'turn-start') lastText = '';
-        else if (ev.type === 'turn-end') lastReason = ev.reason;
+        if (ev.type === 'text-delta') streaming += ev.text;
+        else if (ev.type === 'stream-reset') streaming = '';
+        else if (ev.type === 'stream-commit') {
+          if (streaming.trim()) lastText = streaming;
+          streaming = '';
+        } else if (ev.type === 'turn-end') lastReason = ev.reason;
       }
     } catch (err) {
       lastReason = 'error';
-      lastText = err instanceof Error ? err.message : String(err);
+      errorMessage = err instanceof Error ? err.message : String(err);
     } finally {
       offWatchdog?.();
-      clearTimeout(timer);
+      cancelTimer?.();
       await log?.close().catch((err: unknown) => {
         lastReason = 'error';
-        lastText = err instanceof Error ? err.message : String(err);
+        errorMessage = err instanceof Error ? err.message : String(err);
       });
       const cancelled = rec.controller.signal.aborted || lastReason === 'aborted';
       if (!rec.info.report) {
-        const status: Report['status'] = cancelled ? 'cancelled' : lastReason === 'completed' ? 'done' : 'failed';
-        this.report(id, { agentId: id, status, summary: lastText.trim() || '（没有输出）', refs: [] });
+        const status: Report['status'] = cancelled
+          ? 'cancelled'
+          : lastReason === 'max-steps'
+            ? 'partial'
+            : lastReason === 'error'
+              ? 'failed'
+              : 'done';
+        const files = rec.worktree
+          ? await this.deps.worktrees?.changedFiles(rec.worktree).catch(() => ['（无法读取改动列表）'])
+          : undefined;
+        const summary = autoReportSummary({
+          reason: cancelled ? 'aborted' : lastReason,
+          maxSteps: this.deps.maxSteps ?? 150,
+          error: errorMessage,
+          text: lastText,
+          todos: rec.services?.get<TodoItem[]>(TODOS_KEY) ?? [],
+          files,
+          worktree: !!rec.worktree,
+        });
+        this.report(id, { agentId: id, status, summary, refs: [] });
       }
       const state: AgentInfo['state'] =
         cancelled || rec.info.report?.status === 'cancelled'
@@ -585,11 +647,12 @@ export class Supervisor {
   async wait(parentId: string, ids: string[], mode: 'any' | 'all', opts: { timeoutMs?: number; signal: AbortSignal }): Promise<WaitResult> {
     const parent = this.recs.get(parentId);
     const targets = (ids.length ? ids : (parent?.info.children ?? [])).filter((t) => this.recs.has(t));
-    const deadline = opts.timeoutMs ? this.now() + opts.timeoutMs : Number.POSITIVE_INFINITY;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const timeout = Number.isFinite(deadline)
-      ? new Promise<void>((r) => (timer = setTimeout(r, Math.max(0, deadline - this.now()))))
-      : new Promise<void>(() => {});
+    const since = this.now(),
+      limit = opts.timeoutMs ?? Number.POSITIVE_INFINITY;
+    let cancelTimer: (() => void) | undefined;
+    const timeout = new Promise<void>((resolve) => {
+      cancelTimer = this.activeClock.timeout(since, limit, resolve);
+    });
     try {
       for (;;) {
         const reports = targets.map((t) => this.recs.get(t)!.info.report).filter((r): r is Report => r !== undefined);
@@ -600,7 +663,8 @@ export class Supervisor {
         if ((mode === 'all' && pending.length === 0) || (mode === 'any' && reports.length > 0) || targets.length === 0)
           return { reason: 'done', reports, pending };
         if (parent?.mailbox.hasWaking()) return { reason: 'message', reports, pending };
-        if (this.now() >= deadline) return { reason: 'timeout', reports, pending };
+        if (this.activeElapsed(since) >= limit)
+          return { reason: 'timeout', reports, pending, progress: pending.map((id) => this.recs.get(id)!.info) };
         await Promise.race([
           ...pending.map((t) => this.recs.get(t)!.reported),
           parent?.mailbox.waitForWake(opts.signal) ?? timeout,
@@ -608,7 +672,7 @@ export class Supervisor {
         ]);
       }
     } finally {
-      if (timer) clearTimeout(timer);
+      cancelTimer?.();
     }
   }
 

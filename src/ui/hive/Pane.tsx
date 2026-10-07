@@ -21,7 +21,7 @@ export function paneLines(lines: Line[], width: number, height: number, singleLi
   const metrics = paneMetrics(width, height);
   return lines.flatMap((line) =>
     (singleLine
-      ? [truncateDisplay(terminalText(line.text).replace(/\s+/g, ' '), metrics.width)]
+      ? [truncateDisplay(terminalText(line.text).replace(/[\r\n\t]/g, ' '), metrics.width)]
       : wrapDisplay(terminalText(line.text), metrics.width)
     ).map((text) => ({ ...line, text })),
   );
@@ -104,7 +104,14 @@ export function Pane({
             <OutputLine key={index} row={line} />
           ) : (
             <Text key={index} color={color(line.tone)} dimColor={line.tone === 'muted'} wrap="truncate-end">
-              {terminalText(line.text) || ' '}
+              {line.mutedSuffix ? (
+                <>
+                  {terminalText(line.text.slice(0, -line.mutedSuffix.length))}
+                  <Text dimColor>{line.mutedSuffix}</Text>
+                </>
+              ) : (
+                terminalText(line.text) || ' '
+              )}
             </Text>
           ),
         )}

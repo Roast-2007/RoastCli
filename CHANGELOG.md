@@ -2,6 +2,28 @@
 
 安装包和校验文件见 [GitHub Releases](https://github.com/Roast-2007/RoastCli/releases)。
 
+## 0.5.2 - 2026-10-08
+
+新增
+
+- Deck 计划页完整换行显示任务标题；Enter 或双击打开计划详情，查看标题、验收标准、依赖、成员与报告摘要。
+- Queen 与选中成员的待办直接显示在计划页，不再需要 `/todo`。
+- 内置模型价目（`src/providers/pricing/catalog.json`，含来源链接），`roast pricing` 查看价格来源，`roast pricing update` 随时下载最新价目；`~/.roast/pricing.json` 可自定义。获取模型列表时自动读取 OpenRouter 格式的价格。`/cost` 标注价格来源，代理端点的同名模型标为参考价。
+- 新增 `swarm.maxSteps`（默认 150），子 agent 步数与主会话独立；接近上限时提醒收尾并 report。
+
+修复
+
+- worktree 中的成员执行命令遵循权限模式与授权规则，YOLO 下不再逐条询问；只读命令和 `cd` 不询问，worker 读取主工作区不询问。
+- “始终允许”按命令段生成规则，识别引号和环境变量前缀，复合命令授权后不再反复询问。
+- 子 agent 达到步数上限时报告为 partial，附最后说明、未完成待办和 worktree 改动文件，不再显示“failed（没有输出）”。
+- 等待用户审批或回答期间暂停 `maxMinutes` 与 `await_agents` 计时；超时结果显示每个成员的步数、最近活动和等待原因。
+- worktree 复制的 `node_modules` 修正 pnpm 布局路径，pnpm 不再要求重装依赖。
+- 启动动画直接按差分绘制，大窗口也能保持流畅；结束时在同一次同步刷新中清屏并进入工作面，不再残留最后一帧的色块。
+
+变更
+
+- 主会话每个 turn 的默认步数上限从 50 提高到 100。
+
 ## 0.5.1 - 2026-10-08
 
 新增

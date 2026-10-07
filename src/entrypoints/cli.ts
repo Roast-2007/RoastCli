@@ -35,6 +35,7 @@ import { parseRoleModels } from '../swarm/model-routing.js';
 import type { AgentRole } from '../swarm/types.js';
 import { terminalText } from '../core/terminal-text.js';
 import { runUpdate } from '../cli/update.js';
+import { runPricing } from '../cli/pricing.js';
 
 /**
  * 把 `roast -p ...` / `roast` 归一化为 `roast chat -p ...` / `roast chat`，
@@ -44,7 +45,22 @@ function normalizeArgv(argv: string[]): string[] {
   const args = argv.slice(2);
   const first = args[0];
   if (first === undefined) return [...argv.slice(0, 2), 'chat'];
-  if (first === 'chat' || first === 'logs' || first === 'help' || first === 'trust' || first === 'swarm' || first === 'hive' || first === 'mcp' || first === 'doctor' || first === 'init' || first === 'config' || first === 'worktrees' || first === 'update') return argv;
+  if (
+    first === 'chat' ||
+    first === 'logs' ||
+    first === 'help' ||
+    first === 'trust' ||
+    first === 'swarm' ||
+    first === 'hive' ||
+    first === 'mcp' ||
+    first === 'doctor' ||
+    first === 'init' ||
+    first === 'config' ||
+    first === 'worktrees' ||
+    first === 'update' ||
+    first === 'pricing'
+  )
+    return argv;
   if (first.startsWith('-')) {
     // --help / -h / --version 交给 program 级处理，其余选项归 chat
     if (first === '--help' || first === '-h' || first === '--version' || first === '-V') return argv;
@@ -118,7 +134,9 @@ function resolveResumeLog(opts: ChatOptions): string | undefined {
   }
   if (opts.resume === true) {
     const target = canonicalPath(cwd);
-    const runs = listRuns(logsRoot, 200).filter((r) => r.cwd && canonicalPath(r.cwd) === target).slice(0, 20);
+    const runs = listRuns(logsRoot, 200)
+      .filter((r) => r.cwd && canonicalPath(r.cwd) === target)
+      .slice(0, 20);
     if (runs.length === 0) fail('当前目录没有历史会话');
     for (const r of runs) {
       process.stdout.write(`${r.runId}  ${r.createdAt.replace('T', ' ').slice(0, 19)}  ${r.provider}:${r.model}\n`);
@@ -135,7 +153,12 @@ function resolveResumeLog(opts: ChatOptions): string | undefined {
 }
 
 /** createSession 的错误出口：配置缺失提示 example 并 exit 2，其余 exit 1 */
-async function openSession(opts: { modelRef?: string; resumeLogPath?: string; permissionMode?: PermissionMode; roleModels?: Partial<Record<AgentRole, string>> }): Promise<Session> {
+async function openSession(opts: {
+  modelRef?: string;
+  resumeLogPath?: string;
+  permissionMode?: PermissionMode;
+  roleModels?: Partial<Record<AgentRole, string>>;
+}): Promise<Session> {
   try {
     return await createSession({
       ...(opts.modelRef ? { modelRef: opts.modelRef } : {}),
@@ -155,15 +178,15 @@ async function openSession(opts: { modelRef?: string; resumeLogPath?: string; pe
   }
 }
 
-
 async function runChat(opts: ChatOptions): Promise<void> {
   const permissionMode = parsePermissionMode(opts.permissionMode);
   const interactive = opts.prompt === undefined && !!process.stdin.isTTY && !!process.stdout.isTTY;
-  if (opts.prompt === undefined && !interactive) throw new RoastError('INVALID_REQUEST', '非 TTY 环境请提供 -p "目标"（蜂群使用 roast swarm --print "目标"）');
+  if (opts.prompt === undefined && !interactive)
+    throw new RoastError('INVALID_REQUEST', '非 TTY 环境请提供 -p "目标"（蜂群使用 roast swarm --print "目标"）');
   if (interactive) {
     const { runTrustPrompt, runProviderWizard } = await import('../ui/screens.js');
-    if (!await ensureFolderTrust(process.cwd(), true, runTrustPrompt)) return;
-    if (!configSources().some((source) => source.exists) && !await runProviderWizard(process.cwd())) return;
+    if (!(await ensureFolderTrust(process.cwd(), true, runTrustPrompt))) return;
+    if (!configSources().some((source) => source.exists) && !(await runProviderWizard(process.cwd()))) return;
   }
   const initialPrompt = typeof opts.initialPrompt === 'function' ? opts.initialPrompt() : opts.initialPrompt;
   const resumeLogPath = resolveResumeLog(opts);
@@ -192,7 +215,10 @@ async function runChat(opts: ChatOptions): Promise<void> {
   }
   // 全屏对话 ⇄ Mission Control（Ctrl+G）；退出时中断进行中的 turn 并等它收尾再关日志
   const { runInteractive } = await import('../ui/screens.js');
-  await runInteractive(session, { ...(initialPrompt ? { initialPrompt } : {}), ...(opts.hive ? { home: 'hive' } : opts.chat || opts.solo ? { home: 'chat' } : {}) });
+  await runInteractive(session, {
+    ...(initialPrompt ? { initialPrompt } : {}),
+    ...(opts.hive ? { home: 'hive' } : opts.chat || opts.solo ? { home: 'chat' } : {}),
+  });
 }
 
 function runLogsList(): void {
@@ -298,20 +324,27 @@ async function main(): Promise<void> {
     .option('-p, --print', '管道模式：不进入 TUI')
     .option('--output-format <format>', 'text（默认）/ stream-json')
     .option('-m, --model <provider:model>', '覆盖默认模型')
-    .option('--role-model <role=provider:model>', '指定 Queen / Lead / Worker / Scout / Critic / Judge 的模型，可重复', (value: string, previous: string[]) => [...previous, value], [])
+    .option(
+      '--role-model <role=provider:model>',
+      '指定 Queen / Lead / Worker / Scout / Critic / Judge 的模型，可重复',
+      (value: string, previous: string[]) => [...previous, value],
+      [],
+    )
     .option('--permission-mode <mode>', '权限模式：default / acceptEdits / plan / yolo')
     .action(async (goal: string[], opts: SwarmOptions) => {
       const config = loadConfig();
       const n = opts.n === undefined ? config?.swarm.n : parseN(opts.n);
       if (opts.listTemplates || opts.listStrategies) return void process.stdout.write(describeStrategies(swarmTemplates(), n) + '\n');
       const headless = opts.print === true || opts.outputFormat !== undefined;
-      if (goal.length === 0 && (headless || !process.stdin.isTTY || !process.stdout.isTTY)) throw new RoastError('INVALID_REQUEST', '非 TTY 环境请提供蜂群目标');
-      const prompt = () => missionInput(swarmTemplates(), goal.join(' '), opts.strategy ?? opts.template ?? config?.swarm.strategy ?? DEFAULT_STRATEGY, n);
+      if (goal.length === 0 && (headless || !process.stdin.isTTY || !process.stdout.isTTY))
+        throw new RoastError('INVALID_REQUEST', '非 TTY 环境请提供蜂群目标');
+      const prompt = () =>
+        missionInput(swarmTemplates(), goal.join(' '), opts.strategy ?? opts.template ?? config?.swarm.strategy ?? DEFAULT_STRATEGY, n);
       const roleModels = parseRoleModels(opts.roleModel ?? []);
       await runChat({
         hive: true,
         roleModels,
-        ...(goal.length ? headless ? { prompt: prompt() } : { initialPrompt: prompt } : {}),
+        ...(goal.length ? (headless ? { prompt: prompt() } : { initialPrompt: prompt }) : {}),
         ...(opts.model ? { model: opts.model } : {}),
         ...(opts.permissionMode ? { permissionMode: opts.permissionMode } : {}),
         ...(opts.outputFormat ? { outputFormat: opts.outputFormat } : {}),
@@ -322,7 +355,18 @@ async function main(): Promise<void> {
     .command('update')
     .description('从官方 GitHub Release 更新全局安装（主动执行才安装）')
     .option('--check', '只检查最新版本，不安装')
-    .action(async (opts: { check?: boolean }) => { process.exitCode = await runUpdate(opts); });
+    .action(async (opts: { check?: boolean }) => {
+      process.exitCode = await runUpdate(opts);
+    });
+
+  program
+    .command('pricing')
+    .description('查看模型价格、更新价目或查看文件位置')
+    .argument('[action]', 'list（默认）/ update / path', 'list')
+    .option('--all', '列出整份生效价目')
+    .action(async (action: string, opts: { all?: boolean }) => {
+      process.stdout.write((await runPricing(action, opts)) + '\n');
+    });
 
   program
     .command('trust')
@@ -335,7 +379,8 @@ async function main(): Promise<void> {
     .command('config')
     .description('终端内供应商配置向导（保存 API Key、模型与推理强度）')
     .action(async () => {
-      if (!process.stdin.isTTY || !process.stdout.isTTY) throw new RoastError('INVALID_REQUEST', 'roast config 需要交互终端；脚本配置请使用 roast init 或编辑配置文件');
+      if (!process.stdin.isTTY || !process.stdout.isTTY)
+        throw new RoastError('INVALID_REQUEST', 'roast config 需要交互终端；脚本配置请使用 roast init 或编辑配置文件');
       const { runProviderWizard } = await import('../ui/screens.js');
       await runProviderWizard(process.cwd());
     });
@@ -343,15 +388,21 @@ async function main(): Promise<void> {
   program
     .command('init')
     .description('生成最小可用配置（默认 ~/.roast/config.json）')
-    .option('--provider <name>', 'deepseek（默认）/ anthropic / openai / qwen / zhipu / kimi / kimi-code / doubao / hunyuan / siliconflow / gemini / openrouter')
+    .option(
+      '--provider <name>',
+      'deepseek（默认）/ anthropic / openai / qwen / zhipu / kimi / kimi-code / doubao / hunyuan / siliconflow / gemini / openrouter',
+    )
     .option('--model <model>', '覆盖默认模型名')
     .option('--api-key-stdin', '从标准输入读取 API Key，并保存到用户凭据文件')
     .option('--reasoning-effort <effort>', '推理强度：none / minimal / low / medium / high / xhigh / max（需模型支持）')
     .option('--project', '写入项目级 .roast/config.json')
     .option('--force', '覆盖已存在的配置文件')
     .action((opts: InitOptions) => {
-      if (opts.apiKeyStdin && process.stdin.isTTY) throw new RoastError('INVALID_REQUEST', '请通过管道传入 API Key，或使用 roast config 交互输入');
-      process.stdout.write(initConfig(process.cwd(), { ...opts, ...(opts.apiKeyStdin ? { apiKey: readFileSync(0, 'utf8') } : {}) }).text + '\n');
+      if (opts.apiKeyStdin && process.stdin.isTTY)
+        throw new RoastError('INVALID_REQUEST', '请通过管道传入 API Key，或使用 roast config 交互输入');
+      process.stdout.write(
+        initConfig(process.cwd(), { ...opts, ...(opts.apiKeyStdin ? { apiKey: readFileSync(0, 'utf8') } : {}) }).text + '\n',
+      );
     });
 
   program
@@ -393,14 +444,29 @@ async function main(): Promise<void> {
     });
 
   const worktrees = program.command('worktrees').description('查看和清理当前仓库的蜂群工作区');
-  worktrees.command('list').description('列出保留的工作区').action(async () => {
-    const entries = await listWorktrees(process.cwd());
-    process.stdout.write(entries.length ? entries.map((w) => `${w.runId} / ${w.agentId} · ${w.active ? '使用中或缺少基线记录' : '已结束'} · ${terminalText(w.root)}`).join('\n') + '\n' : '当前仓库没有保留的蜂群工作区。\n');
-  });
-  worktrees.command('prune').description('清理已结束且无改动的工作区；保留未合并改动').action(async () => {
-    const result = await pruneWorktrees(process.cwd());
-    process.stdout.write(`已清理 ${result.removed.length} 个工作区；跳过 ${result.active.length} 个使用中或缺少记录的工作区。\n` + savedWorktreesText(result.kept));
-  });
+  worktrees
+    .command('list')
+    .description('列出保留的工作区')
+    .action(async () => {
+      const entries = await listWorktrees(process.cwd());
+      process.stdout.write(
+        entries.length
+          ? entries
+              .map((w) => `${w.runId} / ${w.agentId} · ${w.active ? '使用中或缺少基线记录' : '已结束'} · ${terminalText(w.root)}`)
+              .join('\n') + '\n'
+          : '当前仓库没有保留的蜂群工作区。\n',
+      );
+    });
+  worktrees
+    .command('prune')
+    .description('清理已结束且无改动的工作区；保留未合并改动')
+    .action(async () => {
+      const result = await pruneWorktrees(process.cwd());
+      process.stdout.write(
+        `已清理 ${result.removed.length} 个工作区；跳过 ${result.active.length} 个使用中或缺少记录的工作区。\n` +
+          savedWorktreesText(result.kept),
+      );
+    });
 
   const logs = program.command('logs').description('运行日志浏览');
   logs

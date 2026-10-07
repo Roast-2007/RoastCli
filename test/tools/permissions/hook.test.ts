@@ -46,7 +46,7 @@ describe('permissionHook', () => {
     expect((await executeTool(runTool, { command: 'npm publish' }, ctx, hooks)).isError).toBe(true);
     expect(requests).toHaveLength(2);
   });
-  it('worktree execution needs approval even with yolo and allow; a one-time approval is never remembered', async () => {
+  it('worktree 执行遵循 yolo，不额外询问', async () => {
     const { engine, hooks, broker, grants } = setup('yolo');
     engine.grant('bash', 'session');
     const ctx = makeCtx('/worktree');
@@ -59,9 +59,26 @@ describe('permissionHook', () => {
       }
     });
     expect(textOf(await executeTool(runTool, { command: 'pnpm test' }, ctx, hooks))).toBe('ran pnpm test');
-    expect((await executeTool(runTool, { command: 'pnpm test' }, ctx, hooks)).isError).toBe(true);
-    expect(requests).toEqual([true, true]);
+    expect((await executeTool(runTool, { command: 'pnpm test' }, ctx, hooks)).isError).toBeUndefined();
+    expect(requests).toEqual([]);
     expect(grants).toEqual([]);
+  });
+
+  it('复合命令逐条授权，同一命令再次执行不询问', async () => {
+    const { hooks, broker, grants } = setup();
+    let asks = 0;
+    broker.onRequest((req) => {
+      asks++;
+      if (req.kind === 'permission') expect(req.suggestedRules).toEqual(['bash(npm test:*)', 'bash(sed:*)']);
+      broker.respond(req.id, { kind: 'permission', decision: 'allow', remember: 'project' });
+    });
+    const ctx = makeCtx('/worktree');
+    ctx.services.set(EXECUTION_ROOT_KEY, ctx.cwd);
+    const args = { command: 'cd "a b" && npm test && sed -n 1p a' };
+    await executeTool(runTool, args, ctx, hooks);
+    await executeTool(runTool, args, ctx, hooks);
+    expect(asks).toBe(1);
+    expect(grants).toEqual(['bash(npm test:*)', 'bash(sed:*)']);
   });
 
   it('allow：直接执行', async () => {
@@ -117,7 +134,9 @@ describe('InteractionBroker', () => {
     const snapshots: number[] = [];
     broker.onChange(() => snapshots.push(broker.pending().length));
     const controller = new AbortController();
-    expect(await broker.request({ kind: 'question', agentId: 's1', question: 'headless' }, controller.signal)).toEqual({ kind: 'unavailable' });
+    expect(await broker.request({ kind: 'question', agentId: 's1', question: 'headless' }, controller.signal)).toEqual({
+      kind: 'unavailable',
+    });
     expect(broker.interactive).toBe(false);
     broker.onRequest(() => {});
     const request = broker.request({ kind: 'question', agentId: 's1', question: 'interactive' }, controller.signal);
@@ -129,7 +148,10 @@ describe('InteractionBroker', () => {
     const broker = new InteractionBroker();
     const seen: string[] = [];
     broker.onRequest((r) => seen.push(r.kind));
-    const p = broker.request({ kind: 'question', agentId: 'main', question: '用哪个方案？', options: ['A', 'B'] }, new AbortController().signal);
+    const p = broker.request(
+      { kind: 'question', agentId: 'main', question: '用哪个方案？', options: ['A', 'B'] },
+      new AbortController().signal,
+    );
     expect(broker.pending()).toHaveLength(1);
     broker.respond(broker.pending()[0]!.id, { kind: 'question', answer: 'B' });
     expect(await p).toEqual({ kind: 'question', answer: 'B' });

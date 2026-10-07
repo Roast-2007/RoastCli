@@ -1,9 +1,12 @@
 import { constants, existsSync } from 'node:fs';
-import { cp, copyFile, lstat, readlink, realpath, stat, symlink } from 'node:fs/promises';
+import { cp, copyFile, lstat, readFile, readlink, realpath, stat, symlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { canonicalPath, isPathInside, isUncPath } from '../core/paths.js';
 
-interface Mapping { source: string; target: string }
+interface Mapping {
+  source: string;
+  target: string;
+}
 
 /** 逐级展开本地链接后再 realpath，避免某个中间 junction 指向 UNC 时提前访问网络。 */
 async function localPath(file: string): Promise<string> {
@@ -37,7 +40,8 @@ export async function copyDependencies(source: string, target: string, repoRoot:
     const mappings = [{ source: canonicalPath(from), target: to }, ...parents];
     const links: { target: string; destination: string }[] = [];
     await cp(from, to, {
-      recursive: true, mode: constants.COPYFILE_FICLONE,
+      recursive: true,
+      mode: constants.COPYFILE_FICLONE,
       filter: async (file, destination) => {
         if (!(await lstat(file)).isSymbolicLink()) return true;
         links.push({ target: await localPath(file), destination });
@@ -47,8 +51,14 @@ export async function copyDependencies(source: string, target: string, repoRoot:
     for (const link of links) {
       const key = canonicalPath(link.target);
       const mapping = mappings.find((m) => isPathInside(m.source, key));
-      const inRepo = isPathInside(repoMapping.source, key) ? path.join(repoMapping.target, path.relative(repoMapping.source, key)) : undefined;
-      const mapped = mapping ? path.join(mapping.target, path.relative(mapping.source, key)) : inRepo && existsSync(inRepo) ? inRepo : undefined;
+      const inRepo = isPathInside(repoMapping.source, key)
+        ? path.join(repoMapping.target, path.relative(repoMapping.source, key))
+        : undefined;
+      const mapped = mapping
+        ? path.join(mapping.target, path.relative(mapping.source, key))
+        : inRepo && existsSync(inRepo)
+          ? inRepo
+          : undefined;
       if (!(await stat(link.target)).isDirectory()) {
         await copyFile(link.target, link.destination, constants.COPYFILE_FICLONE);
       } else if (mapped) {
@@ -60,4 +70,25 @@ export async function copyDependencies(source: string, target: string, repoRoot:
     }
   }
   await copyTree(root, target, []);
+  await rewriteVirtualStore(root, target);
+}
+
+/** 只改副本中的 JSON 布局记录；未知格式 / 外部 store 保持原字节。 */
+async function rewriteVirtualStore(source: string, target: string): Promise<void> {
+  const file = path.join(target, '.modules.yaml');
+  if (!existsSync(file) || (await lstat(file)).isSymbolicLink()) return;
+  const raw = await readFile(file, 'utf8');
+  let data: Record<string, unknown>;
+  try {
+    data = JSON.parse(raw) as Record<string, unknown>;
+  } catch {
+    return;
+  }
+  if (!data || typeof data !== 'object') return;
+  const store = data['virtualStoreDir'];
+  if (typeof store !== 'string' || !path.isAbsolute(store) || !isPathInside(source, store)) return;
+  data['virtualStoreDir'] = path.join(target, path.relative(canonicalPath(source), canonicalPath(store)));
+  const indent = /\n([ \t]+)"/.exec(raw)?.[1] ?? '  ';
+  const newline = raw.includes('\r\n') ? '\r\n' : '\n';
+  await writeFile(file, JSON.stringify(data, null, indent).replace(/\n/g, newline) + (raw.endsWith('\n') ? newline : ''), 'utf8');
 }

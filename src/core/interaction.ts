@@ -20,6 +20,7 @@ export type InteractionRequestBody =
       fullDetail?: string;
       reason: string;
       suggestedRule?: string;
+      suggestedRules?: string[];
       /** 每次必须明确授权：不提供"始终允许" */
       forced?: boolean;
     }

@@ -54,6 +54,31 @@ async function drain(rt: AgentRuntime, text: string) {
 }
 
 describe('会话权限装配', () => {
+  it('逐条授权事件在恢复后全部生效', async () => {
+    const ws = tempWorkspace();
+    const first = await start(ws.dir, [textScript('done')]);
+    first.perms.engine.grant('bash(npm test:*)', 'session');
+    first.perms.engine.grant('bash(pnpm.cmd vitest:*)', 'session');
+    first.rt.committer.commit({ type: 'permission/grant', at: new Date().toISOString(), rule: 'bash(npm test:*)', scope: 'session' });
+    first.rt.committer.commit({
+      type: 'permission/grant',
+      at: new Date().toISOString(),
+      rule: 'bash(pnpm.cmd vitest:*)',
+      scope: 'session',
+    });
+    await drain(first.rt, '测试');
+    await first.opened.log.close();
+    const restored = await start(ws.dir, [], first.opened.log.path);
+    expect(
+      restored.perms.engine.evaluate({
+        tool: 'bash',
+        kind: 'execute',
+        cwd: ws.dir,
+        target: 'cd "a b" && CI=true npm test && MODE="a b" pnpm.cmd vitest run',
+      }).behavior,
+    ).toBe('allow');
+    await restored.opened.log.close();
+  });
   it('用户"本会话始终允许"后落 permission/grant；切换模式落 mode/change；resume 后均恢复', async () => {
     const ws = tempWorkspace('roast-ps-');
     const s1 = await start(ws.dir, [toolCallScript('c1', 'bash', { command: 'echo hi > out.txt' }), textScript('done')]);

@@ -19,6 +19,7 @@ export interface KeyContext {
   detail?: boolean;
   zoom?: boolean;
   output?: boolean;
+  plan?: boolean;
   card?: InteractionRequest;
   tabs?: number;
 }
@@ -33,6 +34,7 @@ export function keyHints(context: KeyContext): KeyHint[] {
       ...(remember ? [item('2', '本会话', 'approve:1'), item('3', '本项目', 'approve:2')] : []),
       item('4', '拒绝', `approve:${remember ? 3 : 1}`),
       item('↑↓ Enter', '选择', 'approval-next'),
+      ...(remember ? [item('授权规则：', card.suggestedRules?.join(', ') ?? card.suggestedRule!, 'approval-next')] : []),
     ];
   }
   if (detail)
@@ -44,7 +46,7 @@ export function keyHints(context: KeyContext): KeyHint[] {
     ];
   if (context.zoom)
     return [
-      item('双击工具', '详情', 'tool-open'),
+      ...(context.plan ? [item('双击成员', '看输出', 'output')] : [item('双击工具', '详情', 'tool-open')]),
       item('↑↓', '滚动', 'scroll'),
       item('PgUp/PgDn', '翻页', 'page'),
       item('g/G', '顶/底', 'top'),
@@ -83,6 +85,7 @@ export function keyHints(context: KeyContext): KeyHint[] {
   if (focus === 'mission')
     return [
       ...(context.output ? [item('双击/Enter', '全屏输出', 'zoom-open')] : []),
+      ...(context.plan ? [item('Enter/双击', '展开计划', 'plan-open')] : []),
       item(`1-${context.tabs ?? 6}`, '切页', 'tab-next'),
       item('↑↓', '滚动', 'scroll'),
       item('PgUp/PgDn', '翻页', 'page'),

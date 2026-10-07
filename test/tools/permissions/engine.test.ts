@@ -53,6 +53,52 @@ describe('PermissionEngine 决策表', () => {
   const engine = (opts: Partial<ConstructorParameters<typeof PermissionEngine>[0]> = {}) =>
     new PermissionEngine({ allow: [], ask: [], deny: [], mode: 'default', ...opts });
 
+  it('deny 逐段检查，环境变量和 cd 不能绕过拒绝规则', () => {
+    expect(engine({ mode: 'yolo', deny: ['bash(npm install:*)'] }).evaluate(bash('cd "a b" && CI=true npm install')).behavior).toBe('deny');
+    expect(engine({ ask: ['bash(git status:*)'] }).evaluate(bash('cd "a b" && git status')).behavior).toBe('ask');
+  });
+
+  it('带重定向的复合命令仍跳过只读 cd 段，写入段需要授权', () => {
+    const e = engine(),
+      req = bash('cd "a b" && printf hi > out');
+    expect(e.evaluate(req)).toMatchObject({ behavior: 'ask', suggestedRules: ['bash(printf hi:*)'] });
+    e.grant('bash(printf hi:*)', 'session');
+    expect(e.evaluate(req).behavior).toBe('allow');
+    expect(engine().evaluate(bash('cd x > out')).behavior).toBe('ask');
+  });
+
+  it('worktree 使用同样决策链，保留高危和只读角色限制', () => {
+    const req = { ...bash('npm install'), executionRoot: '/worktree' };
+    expect(engine({ mode: 'yolo' }).evaluate(req).behavior).toBe('allow');
+    expect(engine({ mode: 'yolo' }).evaluate({ ...req, target: 'git reset --hard' }).forced).toBe(true);
+    expect(engine({ mode: 'yolo' }).evaluate({ ...req, readOnlyRole: 'scout' }).forced).toBe(true);
+    expect(engine().evaluate({ ...req, target: 'git status' }).behavior).toBe('allow');
+    expect(engine().evaluate(req)).toMatchObject({ behavior: 'ask', suggestedRules: ['bash(npm install:*)'] });
+    expect(engine().evaluate(req).forced).toBeUndefined();
+    expect(engine().evaluate(req).reason).toContain('在 worktree /worktree 中执行命令');
+  });
+
+  it('引号路径、环境变量和逐段建议可重复匹配', () => {
+    const e = engine();
+    const req = bash(
+      'cd "D:\\Personal Files\\RoastCli" && git status --short && git branch --show-current && sed -n 280,300p src/ui/FullScreen.tsx',
+    );
+    expect(e.evaluate(req).suggestedRules).toEqual(['bash(sed:*)']);
+    e.grant('bash(sed:*)', 'session');
+    expect(e.evaluate(req).behavior).toBe('allow');
+    expect(e.evaluate(bash('CI=true pnpm.cmd vitest run test/x')).suggestedRules).toEqual(['bash(pnpm.cmd vitest:*)']);
+    e.grant('bash(pnpm.cmd vitest:*)', 'session');
+    expect(e.evaluate(bash('CI="a b" OTHER=\'x\' pnpm.cmd vitest run test/y')).behavior).toBe('allow');
+    expect(e.evaluate(bash('cd "a b" && npm test')).suggestedRules).toEqual(['bash(npm test:*)']);
+    expect(e.evaluate(bash('echo $(npm test)')).suggestedRules).toEqual([]);
+  });
+
+  it('主工作区只扩展读取权限', () => {
+    const e = engine({ readRoots: [path.resolve('/main')] });
+    expect(e.evaluate({ ...read(path.resolve('/main/a.ts')), cwd: path.resolve('/worktree') }).behavior).toBe('allow');
+    expect(e.evaluate({ ...edit(path.resolve('/main/a.ts')), cwd: path.resolve('/worktree') }).behavior).toBe('ask');
+  });
+
   it.each<[string, PermissionRequest, string]>([
     ['工作区内读取', read(at('src/a.ts')), 'allow'],
     ['工作区外读取', read(path.resolve('/etc/hosts')), 'ask'],

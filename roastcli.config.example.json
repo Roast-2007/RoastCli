@@ -37,7 +37,7 @@
     }
   },
   "default": "deepseek:deepseek-chat",
-  "maxSteps": 50,
+  "maxSteps": 100,
   "logsDir": "logs",
   "context": { "summaryModel": "auto", "summaryMaxTokens": 2048 },
   "webSearch": { "driver": "duckduckgo", "timeoutMs": 30000 },
@@ -45,6 +45,7 @@
   "swarm": {
     "strategy": "auto",
     "n": 3,
+    "maxSteps": 150,
     "models": { "worker": "deepseek:deepseek-chat", "scout": "inherit" },
     "efforts": { "worker": null }
   }

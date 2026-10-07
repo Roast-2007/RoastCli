@@ -38,7 +38,7 @@
 
 ### Turn 循环
 
-`AgentRuntime`（`agent/runtime.ts`）的 `run(input)` 接受普通文本或 `MissionInput`，把输入放入队列并驱动循环。每个 turn 由若干 step 组成，最多 `maxSteps` 个（默认 50）。每个 step：
+`AgentRuntime`（`agent/runtime.ts`）的 `run(input)` 接受普通文本或 `MissionInput`，把输入放入队列并驱动循环。每个 turn 由若干 step 组成，主会话最多 `maxSteps` 个（默认 100），子 agent 使用独立的 `swarm.maxSteps`（默认 150）。每个 step：
 
 1. **边界处理。** 从第二个 step 起投递排队的用户消息；`beforeRequest` 钩子执行上下文维护（折叠、压缩），并注入附件，比如蜂群的收件箱。
 2. 最后一条消息来自 assistant 时说明没有新内容，turn 结束。
@@ -47,6 +47,8 @@
 5. **提交结果。** 写入 `assistant/message`。有工具调用时进入工具阶段（`tool-phase.ts`、`tool-calls.ts`），否则进入 `decideEndOfTurn`，在蜂群中可能转为等待。
 
 收到 `CONTEXT_WINDOW_EXCEEDED` 时，运行时调用 `onOverflow` 强制压缩，并用同一个 step 编号重试一次。
+
+预算提醒在 boundary 经 `attachment/injected`（source 为 budget）进入历史：上限至少 20 时剩五步提醒，否则剩两步提醒，最后一步再要求结束或 report。剩余预算包含当前步骤，每种提醒每 turn 一次，history reducer 记录 turn / step 标记，溢出重试、恢复和回退按日志重建。内部附件不进入 UI 或 logs show 的显示投影。子 agent 的英文角色卡包含预算；提醒不改 system 或工具 schema 前缀。
 
 ### 工具执行
 
@@ -111,7 +113,7 @@
 
 `turn` 为 supervisor 观察 `turn/start` 后的 Queen 当前轮次。按顺序折叠记录，snapshot 替换当前积累状态，rewind 删除目标轮次及之后的记录；board 取每个 key 最新 entry，保留 version / author / at；messages 返回最近 50 条。snapshot 的 board 和 messages 保留带原 turn 的历史记录，才能在新 run 再次回退到旧版本。`Blackboard.restore` 整体替换而不触发 watch 或写监听，Queen 工具与计划页读取同一份重建结果。
 
-`session/hive-restore.ts` 从来源 run 的主日志及 `agents/*.jsonl` 配对 spawn_agent 调用与成功结果，得到 parentId、role、brief、taskId 和 spawnTurn，孙辈继承父的 Queen spawnTurn。header 给出模型与开始时间，最后成功 report 或 turn/end 推导 done / failed / cancelled；无结束记录视为 cancelled。缺少 spawn 时按 id 前缀推角色并归属 Queen，损坏子日志跳过。父链计算 depth 和 children，不恢复 worktree。分叉链沿原目录读取，不能改读新目录的空 agents。
+`session/hive-restore.ts` 从来源 run 的主日志及 `agents/*.jsonl` 配对 spawn_agent 调用与成功结果，得到 parentId、role、brief、taskId 和 spawnTurn，孙辈继承父的 Queen spawnTurn。header 给出模型与开始时间，最后成功 report 或 turn/end 推导 done / failed / cancelled；自动报告从 Hive 黑板 `/reports/<id>` 恢复，partial 对应 done 成员状态，缺 Hive 记录时 max-steps 仍推导为 partial；无结束记录视为 cancelled。缺少 spawn 时按 id 前缀推角色并归属 Queen，损坏子日志跳过。父链计算 depth 和 children，不恢复 worktree。分叉链沿原目录读取，不能改读新目录的空 agents。
 
 恢复成员只进入 UI 合并树与历史 view，live 同名数据优先，不放入 supervisor recs，不占 maxAgents，也不可路由、暂停、取消或合并。id 序号同时读取来源日志与恢复成员，回退不降低水位。费用仍按原模型与事件计价，来源主日志和子日志只观察一次，回退不退款。
 
@@ -131,15 +133,14 @@
 
 ### 决策顺序
 
-deny → plan 模式（只放行只读和交互类工具）→ 强制询问 → yolo → allow → ask → 默认策略。
+deny → plan 模式（只放行只读和交互类工具）→ 高危强制询问 → 只读角色强制询问 → yolo → allow → ask → 默认策略。
 
 以下请求属于强制询问，yolo 模式和 allow 规则都不能跳过：
 
 - 匹配高危模式的 bash 命令，以及目标在 `.git/` 或 `.roast/shadow.git` 内的编辑类请求（bash 命令不做这项路径检查）；
-- 只读角色发起的执行请求，除非是能确认只读的 bash 命令；
-- 带 `executionRoot` 的执行请求，即在 worktree 中运行的 shell 或外部工具。
+- 只读角色发起的执行请求，除非是能确认只读或验证的 bash 命令。
 
-复合命令的每一段都必须匹配 allow 规则或是只读命令，并且不能包含子 shell。强制询问的卡片只提供"允许一次"和"拒绝"。
+复合命令的每一段都必须匹配 allow 规则或是只读命令，并且不能包含子 shell；deny / ask 对完整命令及各段匹配。引号感知分词保留原文和值，匹配与只读判断去掉连续的环境变量赋值，危险检查使用完整原文。单独 cd 只改变目录，后续每段独立判断。建议规则跳过已放行段，取命令与合法的未加引号子命令去重；permissionHook 逐条 grant、落日志与持久化，InteractionCard / KeyBar 显示同一组规则。强制询问的卡片只提供"允许一次"和"拒绝"。worktree 普通 ask 显示执行根目录且可保存授权；readRoots 包含主 cwd 和本 run 的 worktree 根，只影响读取请求。
 
 默认策略：交互类工具放行；工作区内读取放行，工作区外询问；修改文件询问（acceptEdits 模式下工作区内放行）；只读命令放行，其他命令询问。
 
@@ -241,6 +242,14 @@ interface ContextState {
 - `models.ts` 负责模型发现，`endpoints.ts` 拼接地址（Anthropic 地址不以 `/v1` 结尾时自动补上）。超时 10 秒，内存缓存 5 分钟，最多 20 页。
 - `presets.ts` 是配置向导的预设列表。
 
+### 模型价目
+
+`providers/pricing/` 用 zod 校验 version 1、USD / 1M tokens 格式的 catalog，JSON import 将内置数据打入 bundle。`resolvePricing` 优先模型配置、用户 pricing.json、较新的下载 / 内置 catalog 的 host 与模型匹配，最后是精确模型参考价（可剥离 vendor/ 前缀）。模型通配不区分大小写，未配置 baseURL 不匹配 host；用户无 hosts 条目可覆盖任意端点。缺价返回 undefined，费用账本保持未知总价。
+
+用户文件仅从 roastHome 读取，按进程缓存；无效文件忽略并供 doctor 诊断，测试可注入 PricingData / PricingLookup。发现模型仅解析 OpenRouter 明确的 per-token pricing，转换到 per-million，配置 spread 优先级保护已有价格。UsageCost、摘要选择、Queen 路由和模型面板共用解析器，账本按原 provider / model / agent / turn 分别记录来源，/cost 与 Deck 用量页标注配置、用户、catalog 日期或参考价。
+
+`roast pricing` 提供 list / --all / path；update 是用户主动触发的 GET，10 秒、redirect error、1 MiB 上限，校验成功后 wx 临时文件加 rename 原子替换下载价目，失败不覆盖旧文件、不输出远端错误正文。启动不自动联网取价，包 files 白名单不扩大。
+
 ### 并发调度
 
 `scheduler.ts` 按供应商共享并发名额，主会话和所有子 agent 都从这里排队（FIFO）。上限是 `maxConcurrency`，默认为 16 和 `maxAgents + 1` 中较小的一个。实际并发采用 AIMD：最多从 4 开始；遇到 429 减半，并按 `retry-after`（没有时 1 秒）冷却，整个供应商共享冷却；连续成功 10 次后加 1。等待名额的过程可以中断，执行工具和等待子 agent 时不占用名额。
@@ -266,9 +275,10 @@ interface ContextState {
 | `Deck.tsx`、`layout.ts` | 编排、键盘路由，三栏 / 两栏 / 单栏和矮屏高度分配 |
 | `ColonyPane.tsx`、`MissionPane.tsx`、`SignalsPane.tsx`、`Pane.tsx` | 蜂群树、任务页、信号和按显示宽度滚动的通用面板 |
 | `plan.ts`、`phase.ts` | 纯函数解析计划、关联 taskId、推导任务状态与结果 |
+| `plan-view.ts`、`PlanZoom.tsx`、`ZoomPane.tsx` | 计划 / 待办预换行、独立详情导航、共享整宽渲染 |
 | `focus.ts` | 四焦点循环和成员指示解析 |
 | `diffs.ts`、`usage.ts`、`lines.ts` | 改动缓存、任务费用聚合和输出行投影 |
-| `Ignition.tsx`、`honeycomb.ts`、`wordmark.ts`、`ignition-frame.ts` | 900ms 全窗口蜂巢、几何缓存、精确字标与样式 span |
+| `Ignition.tsx`、`honeycomb.ts`、`wordmark.ts`、`ignition-frame.ts`、`ignition-paint.ts` | 900ms 全窗口蜂巢、几何缓存、精确字标、逐格帧与直写差分绘制 |
 | `hitmap.ts`、`deck-mouse.ts`、`AgentMenu.tsx`、`tabs.ts` | 共享布局命中、指针路由、成员菜单和页签几何 |
 | `Guides.tsx`、`DeckHelp.tsx`、`components/KeyBar.tsx` | 空状态、专属帮助和 Deck / Chat 共用的可点击键位提示 |
 | `status.ts`、`interrupt.ts`、`QueueLine.tsx` | 统一状态栏、Ctrl+C 状态机与排队条 |
@@ -276,11 +286,13 @@ interface ContextState {
 
 焦点默认 input，输入框中的 Tab 只补全，无候选时保持焦点；Shift+Tab 只在输入框切权限模式。F6 / Shift+F6 正向 / 反向循环 input → colony → mission → signals，缺少信号栏时跳过；Ink Key 不保留功能键名称，因此 `function-keys.ts` 监听原始序列。面板内 Tab / Shift+Tab 切焦点，非面板快捷键的可打印字符回到输入框并插入草稿。聚焦边框用 accent，标题加方向标记。两个草稿独立保存完整 editor state，带 screen 的 inputSeed 只更新对应工作面，排队消息中断后恢复到输入框。
 
-`hitmap.ts` 的 deckRegions 与绘制共用 deckLayout、paneMetrics 和页签显示宽度，反向查找让具体目标优先；蜂群与计划按单行截断，滚动后的坐标只覆盖可见行，留白没有命中。点击成员、计划、页签、信号、策略与权限胶囊经既有 controller 操作；滚轮按指针下的面板路由，不改变成员或草稿。SelectPanel、InteractionCard 与 Chat 的可点击组件用真实 DOM 的绝对位置和可见高度，双击限定同一目标 400ms。
+`hitmap.ts` 的 deckRegions 与绘制共用 deckLayout、paneMetrics 和页签显示宽度，反向查找让具体目标优先；蜂群按单行截断，计划用内宽预换行后的同一份 Line 计算绘制、滚动上限与命中。每个任务的头行和标题共享 plan-row target，滚动后的坐标只覆盖可见行，留白没有命中。点击成员、计划、页签、信号、策略与权限胶囊经既有 controller 操作；滚轮按指针下的面板路由，不改变成员或草稿。SelectPanel、InteractionCard 与 Chat 的可点击组件用真实 DOM 的绝对位置和可见高度，双击限定同一目标 400ms。
 
 `ui.hints` 控制 full 引导、compact KeyBar 或 off。KeyBar 只取能完整放入的一组优先级前缀，高度不足 14 行时隐藏；Deck 命中图和 Chat DOM 坐标都对应实际显示项。点击提交复用 InputBox 的 Enter 处理，保留命令补全、历史搜索、换行和折叠粘贴展开；点击审批复用 InteractionCard 的选项及单次响应守卫，强制审批不提供持久授权。Chat 阅读位置和排队数量留在输入区，不随 hints 关闭而丢失。Deck 专属帮助经 Overlay 的 deck 标记分流。
 
-Queen 用 `board_write` 写 `/mission/plan` JSON，`plan.ts` 对缺字段、重复 id 和错误 JSON 容错，失败时用成员生成行；`spawn_agent` / `task` 的 `task_id` 映射到 `AgentInfo.taskId`。任务行的状态来自成员 state / report，不要求反复更新黑板。计划从 Hive 日志恢复，最近任务由主日志中的 goal、strategy、turn/end 投影；恢复时有效计划优先，否则选 Queen 输出页。
+Queen 用 `board_write` 写 `/mission/plan` JSON，`plan.ts` 接受 tasks 或顶层数组，只要求 id 与标题（数字 id 转字符串，标题别名回退）；可选字段补空，坏任务或重复 id 单独跳过，全无效才回退到成员行；`spawn_agent` / `task` 的 `task_id` 映射到 `AgentInfo.taskId`。状态来自成员 state / report，计划从 Hive 日志恢复。标题正文完整换行，小窗格最多三行并提示展开；计划下方追加 Queen 与选中成员的 todos，todo_write 结果 metadata 经 UI reducer 重放恢复，有待办即不显示空引导。
+
+计划页 Enter 或双击任务 / 待办行进入整宽详情，纯函数生成完整标题、验收、依赖、成员和报告前三行以及所有待办。PlanZoom 保存页签 / narrow / 成员 / offset 与独立滚动位置，双击入口按 taskId 定位头行；详情中的 plan-member 双击切输出，其他行双击或 Esc 恢复原导航。共享 ZoomPane 保留输入、队列、审批和状态栏，键盘、滚轮、草稿转焦点与输出 zoom 一致，矮屏不进入。
 
 Deck 输出页使用 paneMetrics 内宽生成 compact OutputRow，绘制、滚动上限与 hitmap 共用同一份 rows；Pane 对 rows 不二次换行。输出窗格双击或任务区 Enter 打开本地 zoom，替换 body 为整宽非 compact 输出，使用 Chat 留白和间距。zoom 的 start 与底部跟随独立于原窗格 offset，关闭详情或缩放窗口不丢阅读状态，退出保留页签 / 成员 / offset。compact 矮屏没有全屏入口。
 
@@ -315,8 +327,10 @@ Deck 输出页使用 paneMetrics 内宽生成 compact OutputRow，绘制、滚�
 
 - `theme.tsx` 定义语义色（accent、muted、success、warn、danger、diffAdd、diffDel 等）和四套主题。默认主题是 aurora，主色为 `#22d3ee → #3ddbd9 → #a78bfa` 渐变；ember 为 `#ff4e1a → #ff7a18 → #ffb347`。真彩色不可用时降级到 256 色或 16 色；`NO_COLOR`、`FORCE_COLOR=0` 或 `TERM=dumb` 时使用 mono。
 - `components/useSpinner.ts` 让所有旋转动画共用一个 80 毫秒的计时器，没有订阅者时停止。`motion.ts` 处理面板的颜色过渡。`hive/Ignition.tsx` 取代 Startup，ASCII 蜂巢铺满视口，从中央王台向外点火，字标逐列显示，持续 900 毫秒后直接进入工作面；可跳过并传递可打印字符。reduced motion、TERM=dumb 或有初始任务时跳过，尺寸不足时降级为单行或 ROAST。
+- 启动动画不经过 React / Ink 绘制：组件渲染 null，Ink 在动画期间不写任何输出；layout effect 按 16ms 节拍（Windows 计时器一个 tick，约 60fps）计算整帧，`ignition-paint.ts` 只把变化的格子写成光标定位 + SGR，每帧一次写入并包在同步输出（DEC 2026）中，stdout 有积压时跳过该帧。颜色按 `getColorDepth` 降级到 256 / 16 色，与 chalk 的换算一致；NO_COLOR 等只保留粗体与暗色。逐 span 生成 React 元素再经 Ink 布局，大窗口单帧就会超过帧预算，所以动画改为直写。
+- 交接：动画卸载时 layout effect 的清理先于 Ink 渲染下一棵树执行，此时写入 `同步开始 + 清屏 + 光标归位`，Ink 随后的首帧是从光标处整屏写出，并以自己的同步结束收尾，所以清屏与工作面首帧在同一次同步更新内完成，最后一帧的任何格子都不会残留（Ink 只做行级差分，Windows 控制台已知会留下旧帧）。120ms 后补一个同步结束兜底；Ctrl+C 退出时不清屏。尺寸变化后 300ms 内整帧重绘，覆盖 resize 重绘写出的清屏。
 - `honeycomb.ts` 是纯平顶六边形生成器：蜂房宽 L+2s、高 2s+1，原点为 x=c(L+s)+dx、y=2sq+(奇数列?s:0)+dy，共享边字符一致；四周多生成一圈再裁剪。按 XL / L / M / S 档生成，王台剔除交叠蜂房，选取正上方最近的完整蜂王格。几何按 columns、rows、tier 缓存，限制 8 项。
-- `wordmark.ts` 的 Big 字标由 R/O/A/S/T 五块逐行拼接，每块间一空格，六行各 48 列。`ignition-frame.ts` 按归一化距离计算点火时间，热度用 @/#/*/+/:/.，约 18% 固定 hash 余烬不闪烁；每行同样式连续字符合成 span，避免逐字符 React 元素。缩放只换几何，不重置 900ms 时钟；mono 仅用粗体与暗色。
+- `wordmark.ts` 的 Big 字标由 R/O/A/S/T 五块逐行拼接，每块间一空格，六行各 48 列。`ignition-frame.ts` 按归一化距离计算点火时间：光环从王台外沿立即出发，440ms 内扫过全窗，每格内部用 @/#/*/+/:/. 燃烧 180ms，轮廓随后经暗 accent 冷却回静止边框，约 18% 固定 hash 余烬只在冷却前半段出现；约 780ms 后全部稳定，最后一帧只有字标、副标题、信息行和蜂王格（最后绘制，共享边也点亮）带颜色。帧以逐格字符和样式表示，宽字符后一格为空串。标题版本取自 package.json。缩放只换几何，不重置 900ms 时钟；mono 仅用粗体与暗色。
 - `terminal.tsx` 提供 ASCII、减少动画、gutter、mouse 和 hints 偏好；TERM=dumb 自动启用 ASCII 和减少动画。
 
 ### 命令
@@ -381,7 +395,9 @@ Deck 输出页使用 paneMetrics 内宽生成 compact OutputRow，绘制、滚�
 - **无进展检测**：连续 12 个已完成的 step 没有进展时提醒父 agent。进展指得到一个新的成功结果（按工具名、参数和内容的 hash 判断），或调用了产出类工具；出错的结果不算。模型重试、未完成的工具和等待用户授权不计入步数。
 - **只读角色**：scout、critic、judge 的直接文件修改由 `roleGuardHook` 拒绝；它们的执行请求带上 `readOnlyRole`，除了能确认只读的 bash 命令，都由权限引擎强制询问。
 - **只读任务**：supervisor 观察 turn/start、hive/mission 和 turn/end，在 readOnly 任务运行期间拒绝 worker / lead，返回“本任务为只读调研”；Queen 的写操作照常由权限引擎判断，turn 结束时清除任务标记。
-- **上限**：`maxAgents` 是一次会话派生的 agent 总数（包括已结束的），`maxDepth` 是层级，`maxMinutes` 是单个子 agent 的运行时长，超时后取消它的子树。不限制 token。
+- **上限**：`maxAgents` 是一次会话派生的 agent 总数（包括已结束的），`maxDepth` 是层级，`swarm.maxSteps` 是子 agent 每 turn 的步骤上限（150），`maxMinutes` 是单个子 agent 的有效运行时长，超时后取消它的子树。不限制 token。
+- **用户等待**：broker.onChange 把任意未处理交互通知 supervisor。ActiveClock 用可注入 now 记录暂停区间，elapsed(since) 扣除交叠的用户等待时间；成员时限与 await_agents 都在暂停时撤销定时器、恢复时按剩余预算重设。
+- **报告与进展**：未调用 report 的 max-steps / error / 正常结束分别生成 partial / failed / done，取消为 cancelled；保留最后一段非空 assistant 文本，不因工具开始清除，并附未完成待办、最多 30 个改动路径与续做建议。报告写黑板与父 inbox，partial 成员状态保持 done。事件观察点维护 steps / lastActivityAt / lastTool，await 超时说明成员仍在运行并返回 pending 进展，agents_status 同样展示。
 - **取消**：父 agent 的 AbortController 上挂监听，递归调用 `cancelSubtree`。取消时为未完成的工具调用补上合成结果，释放租约，保留 worktree 供检查，并向父 agent 发送状态为 cancelled 的报告。
 
 ### 隔离
@@ -389,9 +405,9 @@ Deck 输出页使用 paneMetrics 内宽生成 compact OutputRow，绘制、滚�
 - **租约**（`lease.ts`）：会修改文件、且有明确目标路径的工具在 preExecute 时申请租约，冲突时返回持有者，提示 agent 发消息协商。主 agent 不受限制。租约在 agent 结束时释放。
 - **隔离模式**：`spawn_agent` 的 `isolation` 可以是 `auto`（默认，worker 和 lead 在 git 仓库中使用 worktree，只读角色和非 git 项目共享工作区）、`worktree` 或 `shared`。`swarm.worktrees: false` 全局关闭 worktree。
 - **基线**：父 agent 工作区的当前状态，包括未提交和未跟踪的改动，遵守 `.gitignore`，排除 `node_modules` 和 `.roast`。用临时索引执行 `read-tree HEAD` → `add -A` → `write-tree` → `commit-tree -p HEAD`，不触碰用户的索引、分支和 HEAD。所有文件按原始字节处理。
-- **位置**：`<ROAST_HOME>/worktrees/<runId>/<agentId>`，detached HEAD，不建分支，不运行用户的 git 钩子。基线、runId、agentId 和占用进程的 PID 记录在 `<runId>/.metadata/<agentId>.json`。顶层 `node_modules` 复制一份（支持时用写时复制），pnpm 内部链接映射到副本，不共享可写的硬链接。
+- **位置**：`<ROAST_HOME>/worktrees/<runId>/<agentId>`，detached HEAD，不建分支，不运行用户的 git 钩子。基线、runId、agentId 和占用进程的 PID 记录在 `<runId>/.metadata/<agentId>.json`。顶层 `node_modules` 复制一份（支持时用写时复制），pnpm 内部链接映射到副本，不共享可写的硬链接。副本 .modules.yaml 若为 JSON 且 virtualStoreDir 是源 node_modules 内的绝对路径，改写为对应副本绝对路径，保持字段、缩进与换行；非 JSON 或外部路径不动，源文件不改。
 - **工作目录**：父 agent 的 cwd 在仓库中的相对位置，映射到 worktree 中的对应目录。守卫钩子拒绝编辑 worktree 之外的路径（包括通过符号链接逃逸），在原仓库路径被拒绝时提示对应的副本路径。
-- **执行边界**：worktree 隔离的是 git 改动，不是操作系统沙箱。shell 和外部工具可能访问其他目录，所以执行请求带上 `executionRoot`，由权限引擎强制询问。
+- **执行边界**：worktree 隔离的是 git 改动，不是操作系统沙箱，shell 和外部工具可能访问其他目录。executionRoot 继续由宿主传递以显示执行位置，命令与普通请求走同一权限链，yolo / allow / 会话与项目授权均生效，高危、只读角色、deny 和 plan 边界不变。
 - **合并**：先给子 worktree 打一次树快照，用 `git diff-tree <基线> <子树>` 生成二进制补丁（固定路径前缀、禁用 textconv，不受用户 diff 设置影响），在父工作区执行 `git apply --check`，通过后才真正应用。有冲突时返回冲突文件列表，不会部分应用。合并按 edit 类工具处理，会打检查点，可以 rewind。
 - **嵌套**：Lead 在自己的 worktree 中派生的 Worker，以 Lead 的 worktree 为基线，也合并回 Lead 的 worktree。
 - 内部 git 调用都带 `core.autocrlf=false` 和 `commit.gpgsign=false`。

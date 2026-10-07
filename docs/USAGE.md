@@ -6,7 +6,7 @@
 
 `roast` 默认打开 Hive Deck，输入目标即可发起任务。Queen 负责理解、规划、派发、整合与验证，子 agent 通过消息和黑板协作；等待子 agent 时不发模型请求，不消耗 token。简单或耦合紧密的工作可以由 Queen 自己完成。
 
-`Ctrl+G` 在 Deck 和 [Chat](#chat) 之间切换，两边分别保留输入草稿。`ui.home: "chat"` 把 Chat 设为首页；`--chat`（别名 `--solo`）或 `--hive` 只覆盖本次启动。首次配置和文件夹信任流程不变。Ignition 铺满窗口的 ASCII 蜂巢动画最多 900 毫秒，任意键跳过，可打印字符会进入输入框；reduced motion 或 `TERM=dumb` 直接进入首页。带目标启动 Hive 时跳过动画。
+`Ctrl+G` 在 Deck 和 [Chat](#chat) 之间切换，两边分别保留输入草稿。`ui.home: "chat"` 把 Chat 设为首页；`--chat`（别名 `--solo`）或 `--hive` 只覆盖本次启动。首次配置和文件夹信任流程不变。Ignition 铺满窗口的 ASCII 蜂巢动画最多 900 毫秒，任意键跳过，可打印字符会进入输入框；reduced motion 或 `TERM=dumb` 直接进入首页。带目标启动 Hive 时跳过动画。动画直接按差分写入终端，结束时在同一次同步刷新中清屏并画出工作面，不会留下上一帧的色块；支持同步输出的终端（Windows Terminal、iTerm2、WezTerm、Kitty 等）切换时不会闪烁。
 
 ```sh
 roast hive                                          # 打开 Deck
@@ -69,7 +69,7 @@ prompt: |
 
 | 宽屏任务页 | 内容 |
 |---|---|
-| `1` 计划 | Queen 在黑板 `/mission/plan` 写的任务计划；没有有效计划时按子 agent 生成行 |
+| `1` 计划 | Queen 的任务计划，以及 Queen 和选中成员的待办；没有有效计划时按子 agent 生成任务 |
 | `2` 输出 | 选中成员的 Markdown 与流式输出，默认 Queen；工具显示摘要和增删统计 |
 | `3` 改动 | 成员 worktree 相对基线的 diffstat / diff；Queen 显示当前工作区的 git diff |
 | `4` 消息 | 消息时间线 |
@@ -78,7 +78,9 @@ prompt: |
 
 中屏插入信号页后，消息、黑板、用量依次为 `5`、`6`、`7`。改动页打开时才读取 git，切页可中断，结果缓存到成员下一次状态变化，不修改索引、HEAD 或文件。大型 diff 会截断。
 
-计划格式为 `{"tasks":[{"id":"t1","title":"实现限流","role":"worker","acceptance":"测试通过","dependsOn":[]}]}`。Queen 派发时传 `task_id`，Deck 按成员的 `taskId` 关联任务并推导状态，不需要 Queen 反复改写计划。每行显示任务、成员、状态；读取过该成员的改动后还显示缓存中的 `+增 −删`。黑板和计划板随 Hive 日志保存。
+计划格式为 `{"tasks":[{"id":"t1","title":"实现限流","role":"worker","acceptance":"测试通过","dependsOn":[]}]}`，也接受顶层数组。只有 id 和非空标题必需，数字 id 会转为字符串，标题可用 task、name、description 代替；无效或重复任务单独跳过。Queen 派发时传 `task_id`，Deck 按成员的 `taskId` 关联任务并推导状态，不需要 Queen 反复改写计划。头行显示 id、成员、状态和已缓存的 `+增 −删`；标题按内宽换行，小窗格最多三行，超出显示“Enter 展开”。
+
+任务区聚焦时按 Enter，或双击计划 / 待办行，展开整宽计划详情。详情完整显示标题、验收、依赖、关联成员和报告前三行，随后显示 Queen 与所有成员的完整待办；双击任务进入时将该任务头行置顶。按 Esc 返回原页签、成员与滚动位置，双击成员行切到其输出，双击其他行返回计划。详情保留输入框、排队行、审批和状态栏，使用与全屏输出相同的滚动按键与滚轮；窄屏可用，高度 <8 行不能进入。计划页下方显示 Queen 和选中成员的待办、完成数量；进行中项目优先显示 activeForm，完成项目弱化。没有计划也能查看待办，`/todo` 继续可用。黑板、计划和工具结果中的待办随会话恢复。
 
 输出页保留 Markdown 的标题、强调、列表和代码着色。小窗格省略 diff 正文，运行中的工具最多显示两行尾部。双击输出窗格任意位置，或在任务区输出页按 Enter，进入整宽全屏输出，显示与 Chat 相同的段落间距、留白和 diff 预览。全屏保留输入框、排队行、审批与状态栏；窄屏同样可用，高度 <8 行时不能进入。
 
@@ -90,7 +92,7 @@ prompt: |
 
 | 按键 | 作用 |
 |---|---|
-| `Enter` | 输入框发送；蜂群栏选中成员并打开输出；任务区输出页进入全屏 |
+| `Enter` | 输入框发送；蜂群栏打开成员输出；任务区计划页展开详情，输出页进入全屏 |
 | `Tab` | 输入框仅补全；面板中切到下一栏 |
 | `Shift+Tab` | 输入框切换权限模式；面板中切到上一栏 |
 | `F6` / `Shift+F6` | 正向 / 反向切焦点 |
@@ -106,6 +108,7 @@ prompt: |
 | `d` | 查看选中成员改动 |
 | `Ctrl+O` | 查看选中成员最近工具的详情，再按一次或 Esc 关闭 |
 | 双击输出窗格 | 全屏阅读；全屏中双击非工具行返回，双击工具行查看该工具 |
+| 双击计划 / 待办行 | 展开计划详情并定位；详情中双击成员看输出，双击其他行返回 |
 | `←→`、`[` / `]`（工具详情） | 切换上一个 / 下一个工具 |
 | `↑↓` / `j k`、`PgUp/PgDn` / `b f`、`g/G` / `Home/End`（全屏） | 逐行、翻页、到顶 / 到底；Esc 返回 |
 | `Ctrl+G` | 切到 Chat |
@@ -118,7 +121,7 @@ prompt: |
 
 ### Deck 鼠标与引导
 
-单击面板聚焦；单击成员或计划行选中对应成员，双击打开输出。右键成员或计划行打开“查看输出 / 查看改动 / 发送指示 / 暂停或继续 / 取消”菜单，取消需要再次确认。点击页签切换任务页，输出和改动页右侧显示当前成员；点击信号打开对应审批、消息发送者或黑板键。点击策略标记打开策略选择，点击状态栏权限胶囊切换权限模式。
+单击面板聚焦；单击成员或计划行选中对应成员。双击成员打开输出，双击计划或待办行展开计划详情；任务区计划页也可按 Enter 展开。右键成员或计划行打开“查看输出 / 查看改动 / 发送指示 / 暂停或继续 / 取消”菜单，取消需要再次确认。点击页签切换任务页，输出和改动页右侧显示当前成员；点击信号打开对应审批、消息发送者或黑板键。点击策略标记打开策略选择，点击状态栏权限胶囊切换权限模式。
 
 浮层列表支持单击选择、双击确认和滚轮滚动；审批卡点击可见选项即可回答。强制审批仍只能允许一次或拒绝，不能保存授权规则。Chat 的成员栏也可点击进入 Deck。
 
@@ -163,8 +166,8 @@ prompt: |
 在 git 仓库中，worker 和 lead 默认各自在独立的 worktree 里改代码，完成后由上级审阅合并。合并前会先检查冲突，有冲突时一个文件也不会写入。只读角色和非 git 项目共用工作目录，通过文件租约避免两个 agent 同时改同一个文件。设置 `swarm.worktrees: false` 可以关闭 worktree。
 
 - worktree 位于 `~/.roast/worktrees/<runId>/<agentId>`，基于父 agent 工作区的当前状态创建，包括未提交的改动。整个过程不会动你的分支、索引和 HEAD。
-- 顶层的 `node_modules` 会复制一份到 worktree（文件系统支持时使用写时复制），这会增加启动时间和磁盘占用。
-- worktree 只隔离文件修改，不是沙箱，shell 等外部命令仍然能访问其他目录。所以在 worktree 中执行命令每次都需要你批准，yolo 模式和 allow 规则也不例外。非交互模式下这类命令会被拒绝，可以等合并后由主会话验证。
+- 顶层的 `node_modules` 会复制一份到 worktree（文件系统支持时使用写时复制），这会增加启动时间和磁盘占用。副本中可识别的 pnpm JSON 布局路径会同步到 worktree，避免因原仓库的绝对路径而要求重装。
+- worktree 中的命令与普通命令遵循同样的权限模式和规则，yolo 下直接执行；高危命令和只读角色限制仍然生效。普通审批可保存会话或项目授权，并显示 worktree 路径。worktree 只隔离文件改动，不是沙箱，shell 等外部命令仍能访问其他目录。成员读取主工作区文件无需额外审批。
 - 会话结束时，没有改动的 worktree 会被删除，有未合并改动的会保留，并在 stderr 列出路径。`roast worktrees list` 查看保留的 worktree，`roast worktrees prune` 删除已结束且没有改动的。正在使用、有未合并改动或缺少基线记录的不会被删除。
 
 ### 只读角色
@@ -177,8 +180,12 @@ scout、critic 和 judge 不能直接修改文件。它们执行的命令中，�
 
 - `swarm.maxAgents`：一次会话最多派生的 agent 数（包括已结束的），默认 12。
 - `swarm.maxDepth`：最大层级，默认 3。
-- `swarm.maxMinutes`：单个子 agent 的最长运行时间，默认 60 分钟，超时后取消它和它的子 agent。
+- `maxSteps`：主会话 / Queen / Chat 每 turn 的模型步骤上限，默认 100。
+- `swarm.maxSteps`：子 agent 每 turn 的模型步骤上限，默认 150，与主会话独立。
+- `swarm.maxMinutes`：单个子 agent 的最长有效运行时间，默认 60 分钟，超时后取消它和它的子 agent。任意成员或 Queen 等待用户审批 / 回答时，所有成员的时限与 `await_agents` 超时计时暂停。
 - 不限制 token 用量。
+
+接近步骤上限时模型会收到收尾提醒，最后一步要求子 agent 调用 report，主会话给出当前结论。子 agent 未 report 就耗尽步骤时，自动生成 partial 报告，包含停止原因、最后说明、未完成待办和 worktree 改动文件，保留成果供审阅或续做。`await_agents` 超时表示仍在运行，会返回步骤、最近活动、工具和等待原因；可以继续等待或发消息询问。
 
 供应商的 `maxConcurrency` 是主会话和蜂群共享的并发上限，默认是 16 和 `maxAgents + 1` 中较小的一个。实际并发从最多 4 个开始，遇到 429 减半并遵守 `retry-after`，连续成功 10 次后加 1。等待中的 agent 不占用并发名额。
 
@@ -281,6 +288,7 @@ echo "$API_KEY" | roast init --provider deepseek --api-key-stdin   # 或者从�
 | `roast config` | 配置向导 |
 | `roast init` | 不经向导生成配置，见[不用向导](#不用向导) |
 | `roast doctor` | 检查 Node.js 版本、配置、密钥、信任状态、shell、git、ripgrep、项目说明、skills、hooks 和 MCP |
+| `roast pricing [list] [--all]` / `update` / `path` | 查看模型价格或整份价目、主动更新官方价目、查看价目路径 |
 | `roast trust` | 信任当前目录 |
 | `roast mcp add` / `list` / `remove` | 管理 MCP 服务器，见 [MCP](#mcp) |
 | `roast logs list` | 列出最近 20 次运行 |
@@ -401,7 +409,7 @@ agent 运行时输入的消息会排队，在下一个 step 送达，不用先�
 | `plan` | 只允许只读操作。模型用 `exit_plan_mode` 提交计划，你批准后才能修改 |
 | `yolo` | 除了高危命令，全部自动允许 |
 
-文件 edit / multi_edit / write 审批卡片会在读权限允许且文件状态有效时预览 diff，最多 12 行，超出部分用 `Ctrl+O` 查看完整详情。新文件可以直接预览；越界、UNC、未读取或过大的现有文件不自动预览。merge_worktree 审批显示 diffstat；bash 显示完整命令和高危、worktree 或只读角色触发强制询问的原因。预览和 `Ctrl+O` 不会批准操作。
+文件 edit / multi_edit / write 审批卡片会在读权限允许且文件状态有效时预览 diff，最多 12 行，超出部分用 `Ctrl+O` 查看完整详情。新文件可以直接预览；越界、UNC、未读取或过大的现有文件不自动预览。merge_worktree 审批显示 diffstat；bash 显示完整命令、worktree 执行路径和高危或只读角色触发强制询问的原因。预览和 `Ctrl+O` 不会批准操作。
 
 审批时，`1` 或 `y` 允许一次，`2` 本会话内始终允许，`3` 本项目始终允许，`4`、`n` 或 `Esc` 拒绝；也可以用 `↑↓` 选择后按 `Enter`。高危操作只能选允许一次或拒绝。本会话的授权写在会话日志里，恢复会话后仍然有效。本项目的授权保存在 `~/.roast/projects/<hash>/settings.json`，不会进入仓库。
 
@@ -422,8 +430,10 @@ agent 运行时输入的消息会排队，在下一个 step 送达，不用先�
 - `bash(git status:*)` 匹配以 `git status` 开头的命令（按整词匹配），`bash(pnpm test)` 只匹配这条命令，`*` 是通配符。只写 `bash` 表示所有 bash 命令。
 - 路径规则使用 glob，相对路径相对于当前目录。
 - `domain:example.com` 匹配该域名及其子域名。
-- 包含 `&&`、`|`、`;` 的复合命令会拆开判断，每一段都必须被允许，并且不能含子 shell。
-- 判断顺序是 deny → plan 模式 → 强制询问 → yolo → allow → ask → 默认。高危命令和直接修改 `.git/` 内文件的编辑属于强制询问，在 yolo 模式下或匹配了 allow 规则也会询问。
+- 包含 `&&`、`|`、`;` 的复合命令会拆开判断，allow 要求每一段已获授权或只读，并且不能含子 shell；deny 也逐段检查。
+- 单独的 `cd` / `cd <路径>` 视为只读，后续命令段仍独立判断。匹配前忽略连续环境变量赋值，例如 `CI=true pnpm.cmd vitest run` 按 `pnpm.cmd vitest run` 匹配，引号内的空格不会拆开路径。
+- 审批按未放行的命令段生成去重规则，如 `bash(pnpm.cmd vitest:*)`、`bash(sed:*)`；保存授权时逐条写入会话日志或项目设置，恢复后全部有效。含子 shell 时不建议可记住的规则。
+- 判断顺序是 deny → plan 模式 → 高危强制询问 → 只读角色强制询问 → yolo → allow → ask → 默认。高危命令和直接修改 `.git/` 内文件的编辑属于强制询问，在 yolo 模式下或匹配了 allow 规则也会询问。
 - 仓库配置中的 allow 规则需要信任后才生效。`permissions.defaultMode` 只在用户配置中生效。
 
 ### 检查点与回退
@@ -463,7 +473,14 @@ agent 运行时输入的消息会排队，在下一个 step 送达，不用先�
 
 ### 费用
 
-在模型配置中填写定价（美元 / 百万 tokens），状态栏和 `/cost` 就会显示费用：
+价格单位是美元 / 百万 tokens，按以下顺序解析：
+
+1. 模型配置中的 `providers.<id>.models.<模型>.pricing`。
+2. 用户价目 `~/.roast/pricing.json`，只读用户目录，不读取项目价目。
+3. 下载价目 `~/.roast/pricing-catalog.json` 与随包内置价目中日期较新的那份，按端点 hostname 和模型匹配。
+4. 同一价目中的模型精确匹配参考价；`vendor/model` 也尝试去掉 vendor 前缀。
+
+获取模型列表时会解析 OpenRouter 格式的每 token 价格，转换后存入模型 metadata；向导选中的模型会随配置保存，当前会话也立即使用。已有配置价格优先，无效或可变价格不猜测。也可在模型配置中填写价格：
 
 ```json
 "models": {
@@ -471,7 +488,22 @@ agent 运行时输入的消息会排队，在下一个 step 送达，不用先�
 }
 ```
 
-上面是示例数值，请按供应商当前的价格填写。`/cost` 按 turn、agent、供应商和模型列出主会话、子 agent 和摘要的费用，每次请求按当时使用的模型计价。恢复会话后累计费用不变，回退不会扣减。只要有一个用过的模型缺少定价，总价就显示为未知，不会给出一个偏低的数字。
+上面是示例数值，请按供应商当前的价格填写。用户价目与内置价目使用相同格式，例如 `~/.roast/pricing.json`：
+
+```json
+{
+  "version": 1, "updatedAt": "2026-10-08", "currency": "USD", "unit": "1M tokens",
+  "entries": [{ "provider": "example", "hosts": ["api.example.com"], "models": ["model", "model-v*"],
+    "pricing": { "input": 1, "output": 2, "cacheRead": 0.1 }, "source": "https://example.com/pricing"
+  }]
+}
+```
+
+模型匹配不区分大小写并支持 `*`。用户条目省略 hosts 时可匹配任意端点；内置 / 下载价目只有 hostname 匹配才视为该端点价格。参考价只允许精确模型匹配，是官方标价，用于第三方代理估算，**非该端点实际价格**。baseURL 未填写时不会匹配官方 host。缺少 cacheRead / cacheWrite 时按 input 回退。
+
+`roast pricing` 列出已配置模型的价格与来源，`--all` 查看生效价目，`path` 查看文件位置。`roast pricing update` 主动从官方 GitHub 仓库下载、校验并原子替换下载价目；失败保留旧文件，启动时不会自动联网取价。用户文件在进程内缓存，编辑后重启生效。`roast doctor` 报告生效日期、条目数与无效文件原因。
+
+状态栏和 `/cost` 按供应商返回的实际 usage 计价，普通输入、cache read、cache write 分开累计。`/cost` 按 turn、agent、供应商和模型列出主会话、子 agent 和摘要费用，并标注“配置 / 用户价目 / 内置价目日期 / 参考价”。恢复重新读取相同价格源时累计费用一致，回退不会扣减已消费用量。只要有一个用过的模型缺少定价，总价显示未知。
 
 ## 工具
 
@@ -649,12 +681,13 @@ roast mcp remove github
 | `providers.<id>.streamIdleTimeoutMs` | 流式响应的空闲超时 |
 | `providers.<id>.models.<模型>` | `contextWindow`、`maxTokens`、`pricing`、`reasoning`、`reasoningEffort`、`reasoningEfforts`、`reasoningReplay`；Anthropic 另有 `thinkingBudget`，OpenAI 兼容另有 `maxTokensField` |
 | `default` | 默认模型，格式为 `provider:model` |
-| `maxSteps` | 每个 turn 最多的 step 数，默认 50 |
+| `maxSteps` | 主会话每个 turn 最多的 step 数，默认 100 |
 | `temperature` | 0–2 |
 | `logsDir` | 运行日志目录，默认 `logs`，**相对于当前目录**。记得加进项目的 `.gitignore`，或改成绝对路径 |
 | `debugLog` | 记录完整的请求体，也可以用环境变量 `ROAST_DEBUG_LOG=1` 开启 |
 | `context` | `compactAt`（默认 0.8）、`elideAt`（0.7）、`minSavings`（4000）、`keepTurns`（3）、`agingTurns`（8）、`agingMinTokens`（2000）、`previewLines`（20）、`cacheTtlMs`（300000）、`summaryModel`、`summaryMaxTokens`（2048） |
-| `swarm` | `models`、`efforts`、`maxAgents`、`maxDepth`、`maxMinutes`、`worktrees`、`strategy`、`n` |
+| `swarm` | `models`、`efforts`、`maxAgents`、`maxDepth`、`maxMinutes`、`maxSteps`、`worktrees`、`strategy`、`n` |
+| `swarm.maxSteps` | 子 agent 每 turn 的步骤上限，正整数，默认 150 |
 | `swarm.strategy` | 默认策略，默认 `"auto"` |
 | `swarm.n` | 默认并行数，默认 3，范围 2–8 |
 | `ui` | `theme`、`motion`、`ascii`、`shellTimeoutMs`、`markdown`、`home`、`notify`、`title`、`gutter`、`mouse`、`hints` |
@@ -693,6 +726,8 @@ roast mcp remove github
 | 路径 | 内容 |
 |---|---|
 | `config.json` | 用户配置 |
+| `pricing.json` | 自定义用户价目，优先于内置 / 下载价目 |
+| `pricing-catalog.json` | `roast pricing update` 下载的官方价目 |
 | `credentials.json` | API Key（明文） |
 | `trusted.json` | 已信任的文件夹 |
 | `ROAST.md` | 用户级项目说明 |

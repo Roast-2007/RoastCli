@@ -23,6 +23,7 @@ export interface HistoryState {
   readonly turn: number;
   readonly lastSeq: number;
   readonly missionSeq?: number;
+  readonly budgetMarks?: readonly string[];
   /** 每个 turn 开始前的消息快照（不可变引用，开销很小），rewind 用 */
   readonly turnStarts: Readonly<Record<number, readonly Message[]>>;
   /** 上下文变换（折叠 / 压缩），视图投影见 context/view.ts */
@@ -128,7 +129,12 @@ function applyMessages(state: HistoryState, ev: SessionEvent): HistoryState {
       return { ...state, messages, toolKey: key, lastSeq };
     }
     case 'attachment/injected':
-      return { ...state, messages: appendToTrailingUser(state.messages, ev.blocks), lastSeq };
+      return {
+        ...state,
+        messages: appendToTrailingUser(state.messages, ev.blocks),
+        lastSeq,
+        ...(ev.source === 'budget' ? { budgetMarks: [...(state.budgetMarks ?? []), `${ev.turn}:${ev.step}`] } : {}),
+      };
     case 'history/import':
       return {
         ...state,

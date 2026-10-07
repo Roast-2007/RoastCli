@@ -288,6 +288,7 @@ describe('富文本输出与任意工具的真实终端交互', () => {
       });
       f.store.flush();
       await tick();
+      await f.instance.waitUntilRenderFlush();
       expect(f.tty.frame()).toContain('完成');
       expect(f.tty.frame()).toContain('最终结果');
     } finally {

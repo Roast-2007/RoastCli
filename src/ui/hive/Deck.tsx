@@ -41,7 +41,9 @@ import { Ignition } from './Ignition.js';
 import { QueueLine } from './QueueLine.js';
 import { useDiffReviews } from './diffs.js';
 import { createOutputRows, outputPadding } from '../output-rows.js';
-import { OutputLine } from '../components/OutputLine.js';
+import { ZoomPane } from './ZoomPane.js';
+import { usePlanZoom } from './PlanZoom.js';
+import { planDetailLines } from './plan-view.js';
 import { latestTool, toolsOf } from '../tool-nav.js';
 import { useScroll } from '../scroll.js';
 import type { ToolDetailActions } from '../components/ToolDetail.js';
@@ -137,16 +139,6 @@ function Workspace({ session, store, controller, onExit, inputDraft, initialProm
     phase = missionPhase(main, agents);
   useDiffReviews(session, store, ui, current?.id ?? 'main', !splash && tab === 2 && !card && !ui.meta.overlay);
   const openHelp = () => store.setMeta({ overlay: 'help' });
-  const hintItems = keyHints({
-    screen: 'hive',
-    focus,
-    running: main.running,
-    card,
-    detail,
-    zoom,
-    output: tab === 1,
-    tabs: !layout.signals && !layout.narrow ? 7 : 6,
-  });
   useMouseReporting();
   useDeckFunctionKeys(
     !splash && !card && !ui.meta.overlay && !detail && !menu,
@@ -201,6 +193,34 @@ function Workspace({ session, store, controller, onExit, inputDraft, initialProm
   const zoomCount = Math.max(0, layout.body - 1),
     zoomScroll = useScroll(zoomRows.length, zoomCount);
   const zoomStart = zoomFollow ? zoomScroll.max : zoomScroll.start;
+  const planLines = planDetailLines(session.swarm.board.read('/mission/plan')?.value, ui, Math.max(1, columns - 2 * padding), ascii);
+  const planZoom = usePlanZoom(planLines, zoomCount, { tab, narrow, selected, offset }, (nav) => {
+    setTab(nav.tab);
+    setNarrow(nav.narrow);
+    setSelected(nav.selected);
+    setOffset(nav.offset);
+  });
+  const expanded = zoom || planZoom.active;
+  const hintItems = keyHints({
+    screen: 'hive',
+    focus,
+    running: main.running,
+    card,
+    detail,
+    zoom: expanded,
+    plan: tab === 0,
+    output: tab === 1,
+    tabs: !layout.signals && !layout.narrow ? 7 : 6,
+  });
+  const closeZoom = () => {
+    if (planZoom.active) planZoom.close();
+    else setZoom(false);
+  };
+  const enterPlan = (target?: Parameters<typeof planZoom.enter>[0]) => {
+    if (layout.compact || !layout.body) return;
+    planZoom.enter(target);
+    changeFocus('mission');
+  };
   const enterZoom = () => {
     if (!layout.compact && layout.body && tab === 1) {
       zoomScroll.move(zoomScroll.max);
@@ -210,11 +230,12 @@ function Workspace({ session, store, controller, onExit, inputDraft, initialProm
     }
   };
   const scrollZoom = (delta: number) => {
+    if (planZoom.active) return planZoom.move(delta);
     const next = Math.max(0, Math.min(zoomScroll.max, (zoomFollow ? zoomScroll.max : zoomScroll.position()) + delta));
     zoomScroll.move(next);
     setZoomFollow(next === zoomScroll.max);
   };
-  const raw = missionLines(session, ui, tab, current?.id ?? 'main', ascii);
+  const raw = missionLines(session, ui, tab, current?.id ?? 'main', ascii, paneMetrics(layout.mission, layout.body).width);
   const maxOffset =
     tab === 1
       ? Math.max(0, outputRows.length - paneMetrics(layout.mission, layout.body).count)
@@ -235,7 +256,7 @@ function Workspace({ session, store, controller, onExit, inputDraft, initialProm
   const signalMax = paneMaxOffset(signalLines(session, ui), layout.signals, layout.body);
   const colonyMax = paneMaxOffset(colonyLines(agents, ui.agents, selected, ascii), layout.colony || columns, layout.body, true);
   const move = (delta: number) => {
-    if (zoom) return scrollZoom(-delta);
+    if (expanded) return scrollZoom(-delta);
     if (focusRef.current === 'signals') {
       setSignalOffset((n) => Math.max(0, Math.min(signalMax, n + delta)));
       return;
@@ -318,14 +339,14 @@ function Workspace({ session, store, controller, onExit, inputDraft, initialProm
         }
         return;
       }
-      if (zoom) {
-        if (key.escape) return setZoom(false);
+      if (expanded) {
+        if (key.escape) return closeZoom();
         if (key.upArrow || input === 'k') return scrollZoom(-1);
         if (key.downArrow || input === 'j') return scrollZoom(1);
         if (key.pageUp || input === 'b') return scrollZoom(-Math.max(1, zoomCount - 1));
         if (key.pageDown || input === 'f') return scrollZoom(Math.max(1, zoomCount - 1));
-        if (key.home || input === 'g') return scrollZoom(-zoomRows.length);
-        if (key.end || input === 'G') return scrollZoom(zoomRows.length);
+        if (key.home || input === 'g') return scrollZoom(-(planZoom.active ? planLines.length : zoomRows.length));
+        if (key.end || input === 'G') return scrollZoom(planZoom.active ? planLines.length : zoomRows.length);
         if (input && !key.ctrl && !key.meta && /^[^\x00-\x1f\x7f]+$/.test(input)) {
           const state = editorReducer(draft.state ?? createEditor(history), { type: 'insert', text: input });
           draft.state = state;
@@ -336,6 +357,7 @@ function Workspace({ session, store, controller, onExit, inputDraft, initialProm
         return;
       }
       if (key.return && focusRef.current === 'mission' && tab === 1) return enterZoom();
+      if (key.return && focusRef.current === 'mission' && tab === 0) return enterPlan();
       if (input === '?') return openHelp();
       if (focusRef.current === 'colony' && input === ' ') return setMenu(current?.id ?? 'main');
       if (key.return && focusRef.current === 'signals') {
@@ -416,7 +438,17 @@ function Workspace({ session, store, controller, onExit, inputDraft, initialProm
     missionLines: raw,
     outputRows,
     outputAgentId: current?.id,
-    ...(zoom ? { zoom: { rows: zoomRows, start: zoomStart, padding, agentId: current?.id ?? 'main' } } : {}),
+    ...(expanded
+      ? {
+          zoom: {
+            rows: planZoom.active ? planLines : zoomRows,
+            start: planZoom.active ? planZoom.start : zoomStart,
+            padding,
+            agentId: current?.id ?? 'main',
+            plan: planZoom.active,
+          },
+        }
+      : {}),
     signalLines: signalLines(session, ui),
     signalPinned: pinnedSignals(ui),
     memberLabel: current ? `${current.id === 'main' ? 'queen' : current.id} ${current.role}` : undefined,
@@ -453,10 +485,11 @@ function Workspace({ session, store, controller, onExit, inputDraft, initialProm
     if (action === 'tool-previous') toolActions.current?.previous();
     if (action === 'tool-next') toolActions.current?.next();
     if (action === 'zoom-close') {
-      setZoom(false);
+      closeZoom();
       changeFocus('mission');
     }
     if (action === 'zoom-open') enterZoom();
+    if (action === 'plan-open') enterPlan();
     if (action === 'tool-scroll') toolScroll.current?.();
     if (action === 'select-next') select(1);
     if (action === 'output' || action === 'diff') {
@@ -480,7 +513,8 @@ function Workspace({ session, store, controller, onExit, inputDraft, initialProm
       pickTab(order[(order.indexOf(tab) + 1) % order.length]!);
     }
     if (action === 'scroll' || action === 'page') move(action === 'scroll' ? 1 : Math.max(1, layout.body - 4));
-    if (action === 'top') move(zoom ? zoomRows.length : focusRef.current === 'signals' ? signalMax : maxOffset);
+    if (action === 'top')
+      move(expanded ? (planZoom.active ? planLines.length : zoomRows.length) : focusRef.current === 'signals' ? signalMax : maxOffset);
     if (action === 'signal') {
       const target = regions.find((region) => region.target.kind === 'signal')?.target;
       if (target?.kind === 'signal') openSignal(target);
@@ -495,6 +529,15 @@ function Workspace({ session, store, controller, onExit, inputDraft, initialProm
         detail ? regions.filter((region) => region.target.kind === 'hint') : regions,
         {
           zoom,
+          plan: enterPlan,
+          planDetail: (target) => {
+            if (target.kind === 'plan-member') {
+              planZoom.exitToOutput();
+              setSelected(target.agentId);
+              pickTab(1);
+            } else planZoom.close();
+            changeFocus('mission');
+          },
           output: (target) => {
             if (!zoom) enterZoom();
             else if (target.callId) openDetail(target.callId);
@@ -505,13 +548,17 @@ function Workspace({ session, store, controller, onExit, inputDraft, initialProm
           },
           focus: changeFocus,
           select: (id) => {
+            if (tab === 0 && !expanded) {
+              const next = missionLines(session, ui, tab, id, ascii, paneMetrics(layout.mission, layout.body).width);
+              setOffset(Math.max(0, offset + next.length - raw.length));
+            }
             setSelected(id);
             cancel.current = null;
           },
           tab: pickTab,
           menu: setMenu,
           scroll: (pane, delta) => {
-            if (zoom) {
+            if (expanded) {
               scrollZoom(delta);
               return;
             }
@@ -615,19 +662,20 @@ function Workspace({ session, store, controller, onExit, inputDraft, initialProm
                   active
                 />
               </Box>
-            ) : zoom ? (
-              <Box height={layout.body} width={columns} flexDirection="column" overflow="hidden">
-                <Text bold color={theme.accent} wrap="truncate-end">
-                  {terminalText(
-                    `${current?.id === 'main' ? 'queen' : current?.id} ${current?.role} · 输出 · ${selectedView?.running ? '运行中' : current?.parentId ? current.state : phase}`,
-                  )}
-                </Text>
-                <Box height={zoomCount} paddingX={padding} flexDirection="column" overflow="hidden">
-                  {zoomRows.slice(zoomStart, zoomStart + zoomCount).map((row, index) => (
-                    <OutputLine key={index} row={row} />
-                  ))}
-                </Box>
-              </Box>
+            ) : expanded ? (
+              <ZoomPane
+                title={
+                  planZoom.active
+                    ? '计划详情 · Enter / 双击展开 · Esc 返回'
+                    : `${current?.id === 'main' ? 'queen' : current?.id} ${current?.role} · 输出 · ${selectedView?.running ? '运行中' : current?.parentId ? current.state : phase}`
+                }
+                rows={planZoom.active ? planLines : zoomRows}
+                start={planZoom.active ? planZoom.start : zoomStart}
+                count={zoomCount}
+                height={layout.body}
+                width={columns}
+                padding={padding}
+              />
             ) : layout.compact ? (
               <Text wrap="truncate-end">
                 HIVE {runningChildren}/{session.config.swarm.maxAgents} · {phase}

@@ -9,30 +9,18 @@ import type { UiStoreState } from '../store/store.js';
 import { useTerminal } from '../terminal.js';
 import { Pane } from './Pane.js';
 import { agentLines, messageLine, type Line } from './lines.js';
-import { planRows } from './plan.js';
+import { planPageLines } from './plan-view.js';
 import { latestMission, missionChildren, missionResult } from './phase.js';
-import { STATE_ICON } from './ColonyPane.js';
 import { pinnedSignals, signalLines } from './SignalsPane.js';
 import { missionUsage } from './usage.js';
 import { useMemo } from 'react';
 import { createOutputRows, type OutputRow } from '../output-rows.js';
 import { terminalText } from '../../core/terminal-text.js';
 export { TABS } from './tabs.js';
-export function missionLines(session: Session, ui: UiStoreState, tab: number, selected: string, ascii: boolean): Line[] {
+export function missionLines(session: Session, ui: UiStoreState, tab: number, selected: string, ascii: boolean, width = 80): Line[] {
   const main = ui.agents.main!,
     mission = latestMission(main);
-  if (tab === 0)
-    return planRows(session.swarm.board.read('/mission/plan')?.value, missionChildren(main, ui.meta.swarm)).map((row) => {
-      const stats = row.agents.map((agent) => ui.meta.diffs?.[agent.id]?.result).filter((result) => result !== undefined);
-      const summary = stats.length
-        ? ` +${stats.reduce((n, result) => n + result.added, 0)} −${stats.reduce((n, result) => n + result.removed, 0)}`
-        : '';
-      return {
-        target: { kind: 'plan-row', taskId: row.id, agentId: row.agents.at(-1)?.id },
-        text: `${ascii ? (row.state === 'done' ? '+' : '*') : (STATE_ICON[row.state] ?? '·')} ${row.id} ${row.title} ${row.agents.map((agent) => agent.id).join(',') || '—'} ${row.state}${summary}`,
-        tone: row.state === 'done' ? 'ok' : 'text',
-      };
-    });
+  if (tab === 0) return planPageLines(session.swarm.board.read('/mission/plan')?.value, ui, selected, width, ascii);
   if (tab === 1) return agentLines(ui.agents[selected], ascii);
   if (tab === 2) {
     if (ui.meta.swarm.find((agent) => agent.id === selected)?.restored)
@@ -92,7 +80,8 @@ export function MissionPane({
     { ascii, hints } = useTerminal(),
     mission = latestMission(ui.agents.main!);
   const output = useMemo(createOutputRows, []);
-  const raw = missionLines(session, ui, tab, selected, ascii);
+  const metrics = paneMetrics(width, height);
+  const raw = missionLines(session, ui, tab, selected, ascii, metrics.width);
   const empty =
     !raw.length ||
     (tab === 5 && raw.length === 1) ||
@@ -103,7 +92,6 @@ export function MissionPane({
       !ui.meta.swarm.find((agent) => agent.id === selected)?.worktree &&
       !ui.meta.swarm.find((agent) => agent.id === selected)?.restored);
   const lines = empty && hints === 'full' ? [{ text: EMPTY_GUIDES[tab]!, tone: 'muted' as const }] : raw;
-  const metrics = paneMetrics(width, height);
   const rich = outputRows ?? (ui.agents[selected] ? output(ui.agents[selected]!, metrics.width, ascii, 0, 0, true) : []);
   const shownRows = rich.length ? rich : [{ spans: [{ text: hints === 'full' ? EMPTY_GUIDES[1]! : '（还没有输出）', dim: true }] }];
   const member = ui.meta.swarm.find((agent) => agent.id === selected);
@@ -150,6 +138,7 @@ export function MissionPane({
       singleLine={tab === 0}
     >
       {tab === 0 &&
+      !raw.length &&
       ((!mission && !raw.length) || (session.resumedFrom && !ui.agents.main!.running && !session.swarm.board.read('/mission/plan'))) ? (
         hints === 'full' && !mission ? (
           <MissionGuide height={metrics.count} width={metrics.width} strategy={ui.meta.strategy ?? 'auto'} n={ui.meta.n ?? 3} />

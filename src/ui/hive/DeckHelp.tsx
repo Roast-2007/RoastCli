@@ -21,6 +21,8 @@ export function deckHelpText(columns: number, ascii: boolean) {
 面板     Tab / Shift+Tab 切换面板 · ↑↓ j/k 选择或滚动 · PgUp/PgDn · g/G
 成员     Enter 看输出 · Space 菜单 · m 指示 · p 暂停 · x×2 取消 · d 改动
 任务区   ${tabs}
+计划页   标题换行与待办 · Enter / 双击 展开计划、验收和依赖
+计划详情 双击成员看输出 · 其他行双击 / Esc 返回原计划位置
 输出页   Markdown 与工具摘要 · 双击窗格 / Enter 全屏阅读
 全屏输出 ↑↓ j/k · PgUp/PgDn b/f · g/G Home/End · 滚轮 · Esc / 双击正文返回
 工具详情 双击工具查看该调用 · Ctrl+O 最近工具 · ←→ [ ] 切换 · Esc/Ctrl+O 关闭

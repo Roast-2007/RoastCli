@@ -39,7 +39,7 @@ export function worktreeNote(wt: Worktree): string {
     `- 你的工作目录：${wt.cwd}`,
     `- 不要修改原仓库 ${wt.parentRoot} 下的文件；使用相对路径即可`,
     '- node_modules 是独立副本，安装或更新依赖不会修改上级的依赖目录',
-    '- shell / 外部执行工具仍能越过目录边界，因此每次执行都需要用户明确批准（yolo 和全局 allow 也不能跳过）；可以用 read / grep 等工具直接调研',
+    '- worktree 只隔离文件改动，不是沙箱；shell / 外部工具遵循普通权限模式与规则，仍可能访问其他目录',
     '- 完成后正常 report；上级会用 merge_worktree 把你的改动合并回去，不需要你提交 git',
   ].join('\n');
 }
@@ -50,7 +50,10 @@ export function worktreeGuardHook(wt: Worktree): PreExecuteHook {
     const { kind, target } = permissionRequestOf(tool, args, ctx);
     if (kind !== 'edit' || tool.permission?.targetKind === 'label' || !target || isPathInside(wt.root, target)) return { action: 'allow' };
     const mapped = isPathInside(wt.parentRoot, target) ? path.join(wt.root, path.relative(wt.parentRoot, target)) : wt.root;
-    return { action: 'deny', reason: `你在隔离的 worktree 中工作，不能直接修改原仓库文件或其他工作区的文件 ${target}。请改为修改 ${mapped}（或使用相对路径）` };
+    return {
+      action: 'deny',
+      reason: `你在隔离的 worktree 中工作，不能直接修改原仓库文件或其他工作区的文件 ${target}。请改为修改 ${mapped}（或使用相对路径）`,
+    };
   };
 }
 
@@ -59,9 +62,14 @@ export function reportWorktreeNote(agentId: string, wt: Worktree): string {
 }
 
 export function formatMerge(agentId: string, r: MergeResult, wt?: Worktree): string {
-  if (r.ok) return r.files.length ? `已把 ${agentId} 的改动合并到你的工作区（${r.files.length} 个文件）：\n${r.files.map((f) => `- ${f}`).join('\n')}` : `${agentId} 没有任何文件改动，无需合并`;
+  if (r.ok)
+    return r.files.length
+      ? `已把 ${agentId} 的改动合并到你的工作区（${r.files.length} 个文件）：\n${r.files.map((f) => `- ${f}`).join('\n')}`
+      : `${agentId} 没有任何文件改动，无需合并`;
   const files = r.conflicts.map((f) => `- ${f}`).join('\n') || r.detail;
-  const where = wt ? `\n它的改动仍保留在 worktree：${wt.root}（基线 ${wt.base.slice(0, 12)}；查看改动：git -C "${wt.root}" status --short 与 git -C "${wt.root}" diff ${wt.base.slice(0, 12)}）` : '';
+  const where = wt
+    ? `\n它的改动仍保留在 worktree：${wt.root}（基线 ${wt.base.slice(0, 12)}；查看改动：git -C "${wt.root}" status --short 与 git -C "${wt.root}" diff ${wt.base.slice(0, 12)}）`
+    : '';
   const resolver = wt
     ? `\n建议的解决方式：spawn_agent 派一个 worker 作为"合并者"，任务是把 ${agentId} 在上述 worktree 中对这些文件的改动重新应用到它自己的工作区（它的基线已包含你当前的改动，可直接读取 ${agentId} 的 worktree），完成后 merge_worktree 合并这个合并者；最后用 merge_worktree({ agentId: "${agentId}", discard: true }) 丢弃原 worktree。`
     : '';

@@ -23,6 +23,7 @@ import { FileSkillRegistry } from '../ext/skills/registry.js';
 import { locateRipgrep } from '../tools/search/rg.js';
 import { resolveShell } from '../tools/bash/shell.js';
 import { displayWidth, padDisplay } from '../core/text-width.js';
+import { pricingDiagnostics } from '../providers/pricing/index.js';
 
 export type CheckLevel = 'ok' | 'warn' | 'fail';
 
@@ -41,13 +42,20 @@ function check(name: string, level: CheckLevel, detail: string): Check {
 
 function nodeCheck(): Check {
   const major = Number(process.versions.node.split('.')[0]);
-  return major >= MIN_NODE_MAJOR ? check('Node.js', 'ok', `v${process.versions.node}`) : check('Node.js', 'fail', `v${process.versions.node}，需要 ≥ ${MIN_NODE_MAJOR}`);
+  return major >= MIN_NODE_MAJOR
+    ? check('Node.js', 'ok', `v${process.versions.node}`)
+    : check('Node.js', 'fail', `v${process.versions.node}，需要 ≥ ${MIN_NODE_MAJOR}`);
 }
 
 function configChecks(cwd: string): { checks: Check[]; config: RoastConfig | null } {
   const present = configSources(cwd).filter((s) => s.exists);
   if (present.length === 0) {
-    return { checks: [check('配置', 'fail', '未找到配置文件。创建 ~/.roast/config.json 或 .roast/config.json（参考 roastcli.config.example.json）')], config: null };
+    return {
+      checks: [
+        check('配置', 'fail', '未找到配置文件。创建 ~/.roast/config.json 或 .roast/config.json（参考 roastcli.config.example.json）'),
+      ],
+      config: null,
+    };
   }
   const where = present.map((s) => `${s.layer}: ${s.path}`).join('；');
   try {
@@ -75,15 +83,32 @@ function providerChecks(cwd: string, config: RoastConfig): Check[] {
       resolveApiKey(p, name);
       out.push(check(`凭据 ${name}`, 'ok', p.auth === 'none' ? '已配置为无密钥接口' : '用户凭据文件 已设置'));
     } catch {
-      out.push(check(`凭据 ${name}`, 'warn', p.apiKeyRef ? '用户凭据无法读取或不存在（运行 roast config 重新配置）' : `未保存 API Key${p.apiKeyEnv ? '，旧环境变量认证已弃用' : ''}（运行 roast config 输入密钥）`));
+      out.push(
+        check(
+          `凭据 ${name}`,
+          'warn',
+          p.apiKeyRef
+            ? '用户凭据无法读取或不存在（运行 roast config 重新配置）'
+            : `未保存 API Key${p.apiKeyEnv ? '，旧环境变量认证已弃用' : ''}（运行 roast config 输入密钥）`,
+        ),
+      );
     }
   }
   const overrides = untrustedProviderOverrides(cwd);
   const state = trustState(cwd);
-  if (state === 'changed') out.push(check('项目信任', 'warn', '信任后仓库配置的敏感部分（钩子 / MCP / provider 连接 / allow 规则）已被修改，需重新运行 roast trust'));
+  if (state === 'changed')
+    out.push(
+      check('项目信任', 'warn', '信任后仓库配置的敏感部分（钩子 / MCP / provider 连接 / allow 规则）已被修改，需重新运行 roast trust'),
+    );
   else if (overrides.length > 0) {
     const trusted = state === 'trusted';
-    out.push(check('项目信任', trusted ? 'ok' : 'warn', trusted ? '已信任' : `项目配置修改了 ${overrides.join(', ')} 的连接信息，需运行 roast trust`));
+    out.push(
+      check(
+        '项目信任',
+        trusted ? 'ok' : 'warn',
+        trusted ? '已信任' : `项目配置修改了 ${overrides.join(', ')} 的连接信息，需运行 roast trust`,
+      ),
+    );
   }
   return out;
 }
@@ -104,7 +129,9 @@ function toolchainChecks(cwd: string): Check[] {
   const rg = locateRipgrep();
   return [
     shellCheck,
-    git ? check('git', 'ok', `${git}${inRepo ? '（当前目录是 git 仓库）' : '（当前目录不是 git 仓库）'}`) : check('git', 'warn', '未找到 git：检查点与 rewind 不可用'),
+    git
+      ? check('git', 'ok', `${git}${inRepo ? '（当前目录是 git 仓库）' : '（当前目录不是 git 仓库）'}`)
+      : check('git', 'warn', '未找到 git：检查点与 rewind 不可用'),
     rg.path ? check('ripgrep', 'ok', rg.source) : check('ripgrep', 'warn', '未找到 rg，grep 使用较慢的 JS 回退实现'),
   ];
 }
@@ -123,21 +150,44 @@ async function extensionChecks(cwd: string): Promise<Check[]> {
   const hookNote = notes(hooks.ignored, hooks.invalid);
   const mcpNote = notes(mcp.ignored.length, mcp.invalid);
   return [
-    check('项目说明', 'ok', instructions.length ? instructions.map((f) => path.basename(f.path)).join(', ') : '无（roast 会话中 /init 可创建 ROAST.md）'),
-    check('Skills', 'ok', skills.list().length ? skills.list().map((s) => s.name).join(', ') : '无'),
+    check(
+      '项目说明',
+      'ok',
+      instructions.length ? instructions.map((f) => path.basename(f.path)).join(', ') : '无（roast 会话中 /init 可创建 ROAST.md）',
+    ),
+    check(
+      'Skills',
+      'ok',
+      skills.list().length
+        ? skills
+            .list()
+            .map((s) => s.name)
+            .join(', ')
+        : '无',
+    ),
     check('钩子', hookNote ? 'warn' : 'ok', `${hookCount} 个${hookNote ? `；${hookNote}` : ''}`),
-    check('MCP', mcpNote ? 'warn' : 'ok', `${mcp.servers.length ? mcp.servers.map((s) => s.name).join(', ') : '无'}${mcpNote ? `；${mcpNote}` : ''}`),
+    check(
+      'MCP',
+      mcpNote ? 'warn' : 'ok',
+      `${mcp.servers.length ? mcp.servers.map((s) => s.name).join(', ') : '无'}${mcpNote ? `；${mcpNote}` : ''}`,
+    ),
   ];
 }
 
 export async function collectChecks(cwd: string): Promise<Check[]> {
   const { checks: cfgChecks, config } = configChecks(cwd);
+  const pricing = pricingDiagnostics();
   return [
     nodeCheck(),
     ...cfgChecks,
+    check('模型价目', pricing.warning ? 'warn' : 'ok', pricing.detail),
     ...(config ? providerChecks(cwd, config) : []),
     ...toolchainChecks(cwd),
-    check('用户目录', existsSync(roastHome()) ? 'ok' : 'warn', existsSync(roastHome()) ? roastHome() : `${roastHome()}（不存在，首次写入时创建）`),
+    check(
+      '用户目录',
+      existsSync(roastHome()) ? 'ok' : 'warn',
+      existsSync(roastHome()) ? roastHome() : `${roastHome()}（不存在，首次写入时创建）`,
+    ),
     ...(await extensionChecks(cwd)),
   ];
 }

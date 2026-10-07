@@ -106,6 +106,7 @@ export function setupSwarm(input: SwarmSetupInput): SwarmSetup {
     roleModels: swarm.models,
     maxAgents: swarm.maxAgents,
     maxDepth: swarm.maxDepth,
+    maxSteps: swarm.maxSteps,
     maxAgentMs: swarm.maxMinutes * 60_000,
     journal: input.journal,
     ...(swarm.worktrees === false ? {} : { worktrees: new WorktreeManager({ runId: input.mainLog.header.runId, home: roastHome() }) }),
@@ -157,7 +158,8 @@ export function setupSwarm(input: SwarmSetupInput): SwarmSetup {
           postExecute: input.postExecute ?? [],
         },
         boundary: composeBoundary(ctl.hooks(), boundary),
-        maxSteps: input.config.maxSteps,
+        maxSteps: swarm.maxSteps ?? 150,
+        budgetReminder: 'agent',
         signal: input.signal,
         debugLog: input.debugLog,
         onPartial: (turn, text, at) =>
@@ -177,6 +179,7 @@ export function setupSwarm(input: SwarmSetupInput): SwarmSetup {
   supervisor.registerRoot('main', `${input.mainRef.provider}:${input.mainRef.model}`);
   const offInteractions = input.broker.onChange(() => {
     const requests = input.broker.pending();
+    supervisor.setUserInteraction(requests.length > 0);
     for (const agent of supervisor.tree()) {
       const request = requests.find((r) => r.agentId === agent.id);
       supervisor.setInteractionWaiting(agent.id, request ? (request.kind === 'permission' ? '等待用户授权' : '等待用户回答') : undefined);

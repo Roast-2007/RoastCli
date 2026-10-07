@@ -4,15 +4,17 @@ import { addUsage, emptyUsage } from '../core/types.js';
 import { isProjectTrusted, parseModelRef, untrustedProviderOverrides, type ModelRef, type RoastConfig } from '../core/config.js';
 import type { ProviderRegistry } from '../providers/adapter.js';
 import type { Message } from '../core/types.js';
+import { resolvePricing, type PricingLookup } from '../providers/pricing/index.js';
 
 /** Prefer the cheapest configured model. No invented model IDs or discovery requests. */
-export function summaryModel(config: RoastConfig, main: ModelRef): ModelRef {
+export function summaryModel(config: RoastConfig, main: ModelRef, lookup: PricingLookup = resolvePricing): ModelRef {
   const selected = config.context.summaryModel;
   if (selected && selected !== 'auto' && selected !== 'extractive') return parseModelRef(selected);
   const models = Object.entries(config.providers).flatMap(([provider, profile]) =>
-    Object.entries(profile.models ?? {})
-      .filter(([, meta]) => meta.pricing)
-      .map(([model, meta]) => ({ provider, model, price: meta.pricing!.input + meta.pricing!.output })),
+    Object.keys(profile.models ?? {}).flatMap((model) => {
+      const resolved = lookup(config, { provider, model });
+      return resolved ? [{ provider, model, price: resolved.pricing.input + resolved.pricing.output }] : [];
+    }),
   );
   models.sort((a, b) => a.price - b.price || `${a.provider}:${a.model}`.localeCompare(`${b.provider}:${b.model}`));
   return models[0] ? { provider: models[0].provider, model: models[0].model } : { ...main };

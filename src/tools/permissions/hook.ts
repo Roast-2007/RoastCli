@@ -69,19 +69,23 @@ export function permissionHook(opts: PermissionHookOptions): PreExecuteHook {
         reason: verdict.reason,
         ...preview,
         ...(verdict.suggestedRule && !verdict.forced ? { suggestedRule: verdict.suggestedRule } : {}),
+        ...(verdict.suggestedRules && !verdict.forced ? { suggestedRules: verdict.suggestedRules } : {}),
         ...(verdict.forced ? { forced: true } : {}),
       },
       ctx.signal,
     );
     if (ctx.signal.aborted) throw new RoastError('ABORTED', '等待授权时被中断');
-    if (response.kind === 'unavailable') return { action: 'deny', reason: verdict.forced ? '此命令需要明确授权。请在交互界面批准，或让主会话执行。' : NON_INTERACTIVE_HINT };
+    if (response.kind === 'unavailable')
+      return { action: 'deny', reason: verdict.forced ? '此命令需要明确授权。请在交互界面批准，或让主会话执行。' : NON_INTERACTIVE_HINT };
     if (response.kind !== 'permission' || response.decision === 'deny') {
       const feedback = response.kind === 'permission' && response.feedback ? `用户说明：${response.feedback}` : '';
       return { action: 'deny', reason: `用户拒绝了此操作。${feedback}` };
     }
     if (response.remember && verdict.suggestedRule && !verdict.forced) {
-      opts.engine.grant(verdict.suggestedRule, response.remember);
-      opts.onGrant?.(verdict.suggestedRule, response.remember);
+      for (const rule of verdict.suggestedRules ?? [verdict.suggestedRule]) {
+        opts.engine.grant(rule, response.remember);
+        opts.onGrant?.(rule, response.remember);
+      }
     }
     return { action: 'allow' };
   };

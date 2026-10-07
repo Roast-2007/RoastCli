@@ -14,26 +14,61 @@ export interface Line {
   text: string;
   target?: Target;
   tone: LineTone;
+  mutedSuffix?: string;
 }
 
 function itemLines(item: DisplayItem, ascii = false): Line[] {
   switch (item.kind) {
-    case 'mission': return [{ text: `${ascii ? '*' : '⬡'} 任务 #${item.missionId.slice(1)} · ${item.strategy} · ${item.goal}`, tone: 'user' }];
+    case 'mission':
+      return [{ text: `${ascii ? '*' : '⬡'} 任务 #${item.missionId.slice(1)} · ${item.strategy} · ${item.goal}`, tone: 'user' }];
     case 'user':
       return [{ text: `${ascii ? '>' : '›'} ${item.text.split('\n')[0]}`, tone: 'user' }];
     case 'markdown':
-      return item.text.split('\n').filter((l) => l.trim()).map((l) => ({ text: l, tone: 'text' as const }));
+      return item.text
+        .split('\n')
+        .filter((l) => l.trim())
+        .map((l) => ({ text: l, tone: 'text' as const }));
     case 'reasoning':
       return [{ text: `${ascii ? '...' : '💭'} ${item.text.replace(/\s+/g, ' ').slice(0, 120)}`, tone: 'muted' }];
     case 'tool': {
       const t = item.tool;
-      const icon = t.status === 'done' ? ascii ? '+' : '✓' : t.status === 'error' ? ascii ? 'x' : '✗' : t.status === 'interrupted' ? ascii ? '-' : '⊘' : ascii ? '.' : '◌';
-      return [{ text: `${icon} ${t.name} ${argSummary(t.name, t.args)}`, tone: t.status === 'error' ? 'error' : t.status === 'done' ? 'ok' : 'warn' }];
+      const icon =
+        t.status === 'done'
+          ? ascii
+            ? '+'
+            : '✓'
+          : t.status === 'error'
+            ? ascii
+              ? 'x'
+              : '✗'
+            : t.status === 'interrupted'
+              ? ascii
+                ? '-'
+                : '⊘'
+              : ascii
+                ? '.'
+                : '◌';
+      return [
+        {
+          text: `${icon} ${t.name} ${argSummary(t.name, t.args)}`,
+          tone: t.status === 'error' ? 'error' : t.status === 'done' ? 'ok' : 'warn',
+        },
+      ];
     }
     case 'tool-group':
-      return item.tools.map((tool) => ({ text: `${ascii ? '+' : '✓'} ${tool.name} ${argSummary(tool.name, tool.args)}`, tone: 'ok' as const }));
+      return item.tools.map((tool) => ({
+        text: `${ascii ? '+' : '✓'} ${tool.name} ${argSummary(tool.name, tool.args)}`,
+        tone: 'ok' as const,
+      }));
     case 'notice':
-      return item.quiet ? [] : [{ text: `${ascii ? '*' : '•'} ${item.text.split('\n')[0]}`, tone: item.tone === 'error' ? 'error' : item.tone === 'warn' ? 'warn' : 'muted' }];
+      return item.quiet
+        ? []
+        : [
+            {
+              text: `${ascii ? '*' : '•'} ${item.text.split('\n')[0]}`,
+              tone: item.tone === 'error' ? 'error' : item.tone === 'warn' ? 'warn' : 'muted',
+            },
+          ];
     case 'turn-summary':
       return [{ text: `${ascii ? '*' : '✻'} ${(item.durationMs / 1000).toFixed(1)}s · ${item.reason}`, tone: 'muted' }];
   }
@@ -44,10 +79,23 @@ export function agentLines(view: AgentView | undefined, ascii = false): Line[] {
   if (!view) return [{ text: '（还没有输出）', tone: 'muted' }];
   const lines = view.items.flatMap((item) => itemLines(item, ascii));
   if (view.reasoning) lines.push({ text: `${ascii ? '...' : '💭'} 思考中… ${view.reasoning.length} 字`, tone: 'muted' });
-  if (view.pending) lines.push(...view.pending.split('\n').filter((l) => l.trim()).map((l) => ({ text: l, tone: 'text' as const })));
+  if (view.pending)
+    lines.push(
+      ...view.pending
+        .split('\n')
+        .filter((l) => l.trim())
+        .map((l) => ({ text: l, tone: 'text' as const })),
+    );
   for (const t of view.tools) {
     lines.push({ text: `${ascii ? '.' : '◌'} ${t.name} ${argSummary(t.name, t.args)}`, tone: 'accent' });
-    if (t.live) lines.push(...t.live.split('\n').filter(Boolean).slice(-3).map((l) => ({ text: `  ${l}`, tone: 'muted' as const })));
+    if (t.live)
+      lines.push(
+        ...t.live
+          .split('\n')
+          .filter(Boolean)
+          .slice(-3)
+          .map((l) => ({ text: `  ${l}`, tone: 'muted' as const })),
+      );
   }
   return lines.length ? lines : [{ text: '（还没有输出）', tone: 'muted' }];
 }
@@ -64,12 +112,17 @@ export function treeOrder(agents: AgentInfo[]): AgentInfo[] {
     }
   };
   walk(null);
-  for (const a of agents) if (a.parentId && !agents.some((parent) => parent.id === a.parentId)) { out.push(a); walk(a.id); }
+  for (const a of agents)
+    if (a.parentId && !agents.some((parent) => parent.id === a.parentId)) {
+      out.push(a);
+      walk(a.id);
+    }
   return out;
 }
 
 export function messageLine(e: Envelope, ascii = false): Line {
-  const tone: LineTone = e.kind === 'alert' ? 'error' : e.kind === 'question' ? 'warn' : e.kind === 'report' ? 'ok' : e.kind === 'steer' ? 'accent' : 'muted';
+  const tone: LineTone =
+    e.kind === 'alert' ? 'error' : e.kind === 'question' ? 'warn' : e.kind === 'report' ? 'ok' : e.kind === 'steer' ? 'accent' : 'muted';
   return { text: `${e.from}${ascii ? '->' : '→'}${formatAddress(e.to)} [${e.kind}] ${e.subject}`, tone };
 }
 

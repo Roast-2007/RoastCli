@@ -90,7 +90,7 @@ async function assembleCore(input: AssemblyInput): Promise<Core> {
   const perms = setupPermissions({
     cwd,
     services,
-    readRoots: [runWorktreesDir(roastHome(), opened.log.header.runId)],
+    readRoots: [cwd, runWorktreesDir(roastHome(), opened.log.header.runId)],
     ...(opts.permissionMode ? { mode: opts.permissionMode } : {}),
     ...(opened.permissions ? { restored: opened.permissions } : {}),
   });
@@ -170,8 +170,8 @@ export async function assembleSession(input: AssemblyInput): Promise<Session> {
     ? displaySource(opts.resumeLogPath, path.isAbsolute(config.logsDir) ? config.logsDir : path.join(cwd, config.logsDir))
     : { events: [], runDirs: [] };
   const display = [...source.events];
-  const members = restoreHiveMembers(source.runDirs, display);
   const journal = new HiveJournal(path.dirname(opened.log.path), source.runDirs.flatMap(readHiveRecords));
+  const members = restoreHiveMembers(source.runDirs, display, journal.state().board);
   if (opts.resumeLogPath && path.resolve(opts.resumeLogPath) !== path.resolve(opened.log.path))
     journal.snapshot(opened.initialHistory.turn);
   const checkpoints = new CheckpointManager(new ShadowGit(cwd), () => core.perms.engine.mode);
@@ -211,6 +211,7 @@ export async function assembleSession(input: AssemblyInput): Promise<Session> {
     initialHistory: opened.initialHistory,
     signal: lifetime.signal,
     maxSteps: config.maxSteps,
+    budgetReminder: 'main',
     debugLog,
     onPartial: (turn, text, at) => journal.append({ v: 1, type: 'partial', turn, agentId: 'main', text, at }),
     ...(config.temperature !== undefined ? { temperature: config.temperature } : {}),

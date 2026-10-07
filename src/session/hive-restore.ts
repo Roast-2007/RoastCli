@@ -2,6 +2,7 @@ import { readdirSync } from 'node:fs';
 import path from 'node:path';
 import { findRunLog } from '../cli/logs.js';
 import { ROLE_INFO } from '../swarm/roles.js';
+import type { BoardEntry } from '../swarm/board.js';
 import type { AgentInfo, AgentRole, Report } from '../swarm/types.js';
 import type { LogHeader, SessionEvent } from './events.js';
 import { loadRunLog } from './projection.js';
@@ -43,7 +44,11 @@ export function displaySource(
   runDirs.push(path.dirname(logPath));
   return { events, runDirs: [...new Set(runDirs)], header };
 }
-export function restoreHiveMembers(runDir: string | string[], mainEvents: readonly SessionEvent[]): RestoredMember[] {
+export function restoreHiveMembers(
+  runDir: string | string[],
+  mainEvents: readonly SessionEvent[],
+  board: readonly BoardEntry[] = [],
+): RestoredMember[] {
   const logs = new Map<string, { header: LogHeader; events: SessionEvent[] }>();
   for (const dir of typeof runDir === 'string' ? [runDir] : runDir) {
     let names: string[];
@@ -129,6 +134,13 @@ export function restoreHiveMembers(runDir: string | string[], mainEvents: readon
       }
     }
     const end = log.events.filter((event) => event.type === 'turn/end').at(-1);
+    if (!report) {
+      const saved = board.find((entry) => entry.key === `/reports/${id}` && entry.author === id)?.value;
+      const match = saved && /^\[(done|partial|failed|cancelled|changes_requested)\] ([\s\S]*)$/.exec(saved);
+      if (match) report = { agentId: id, status: match[1] as Report['status'], summary: match[2]!, refs: [] };
+      else if (end?.type === 'turn/end' && end.reason === 'max-steps')
+        report = { agentId: id, status: 'partial', summary: '未提交 report：达到步数上限后停止。', refs: [] };
+    }
     const state = report
       ? report.status === 'failed'
         ? 'failed'

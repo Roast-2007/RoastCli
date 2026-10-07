@@ -7,6 +7,7 @@
  */
 import path from 'node:path';
 import picomatch from 'picomatch';
+import { commandText, commandTokens, isReadOnlyCommand, parseCommand } from './bash-parse.js';
 
 export type PermissionKind = 'read' | 'edit' | 'execute' | 'network' | 'interact';
 
@@ -52,10 +53,11 @@ function toolNameMatches(ruleTool: string, tool: string): boolean {
 
 /** bash 单条命令（已拆分的段）是否命中模式 */
 export function commandMatches(pattern: string, command: string): boolean {
-  const cmd = command.trim().replace(/\s+/g, ' ');
+  const cmd = commandText(command);
   if (pattern.endsWith(':*')) {
-    const prefix = pattern.slice(0, -2).trim();
-    return cmd === prefix || cmd.startsWith(prefix + ' ');
+    const prefix = commandTokens(pattern.slice(0, -2));
+    const tokens = commandTokens(command);
+    return prefix.length > 0 && prefix.length <= tokens.length && prefix.every((t, i) => t.value === tokens[i]!.value);
   }
   if (pattern.includes('*')) return wildcardRegex(pattern).test(cmd);
   return cmd === pattern;
@@ -99,8 +101,7 @@ export function matchesRule(rule: Rule, req: PermissionRequest): boolean {
 export function suggestRule(req: PermissionRequest): string {
   if (req.targetKind === 'label') return req.tool;
   if (req.tool === 'bash' && req.target) {
-    const words = req.target.trim().split(/\s+/).filter((w) => !w.startsWith('-'));
-    return `bash(${words.slice(0, 2).join(' ')}:*)`;
+    return bashSuggestion(req.target) ?? req.tool;
   }
   if (req.kind === 'network' && req.target) {
     const host = hostOf(req.target);
@@ -114,4 +115,24 @@ export function suggestRule(req: PermissionRequest): string {
     }
   }
   return req.tool;
+}
+
+function bashSuggestion(segment: string): string | undefined {
+  const [first, second] = commandTokens(segment);
+  if (!first) return undefined;
+  const subcommand = second && !second.quoted && /^[A-Za-z][\w.-]*$/.test(second.raw);
+  return `bash(${first.raw}${subcommand ? ` ${second.raw}` : ''}:*)`;
+}
+
+/** 只建议尚未放行的段，禁止为子 shell 生成可记住的规则。 */
+export function suggestRules(req: PermissionRequest, allowed: (segment: string) => boolean): string[] {
+  if (req.tool !== 'bash' || !req.target) return [suggestRule(req)];
+  const parsed = parseCommand(req.target);
+  if (parsed.hasSubshell) return [];
+  const rules = parsed.segments.flatMap((segment) => {
+    if ((!parseCommand(segment).writesFiles && isReadOnlyCommand(segment)) || allowed(segment)) return [];
+    const rule = bashSuggestion(segment);
+    return rule ? [rule] : [];
+  });
+  return [...new Set(rules)];
 }

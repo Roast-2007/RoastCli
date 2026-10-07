@@ -10,6 +10,9 @@ export type Target =
   | { kind: 'agent'; id: string }
   | { kind: 'tab'; index: number }
   | { kind: 'plan-row'; taskId: string; agentId?: string }
+  | { kind: 'todo-row'; agentId: string }
+  | { kind: 'plan-detail'; taskId?: string; todoAgentId?: string }
+  | { kind: 'plan-member'; agentId: string }
   | { kind: 'output-row'; agentId: string; callId?: string }
   | { kind: 'signal'; type: 'approval' | 'message' | 'board'; id: string }
   | { kind: 'hint'; action: string }
@@ -41,7 +44,7 @@ export interface HitModel {
   outputRows?: OutputRow[];
   outputAgentId?: string;
   signalPinned?: Line[];
-  zoom?: { rows: OutputRow[]; start: number; padding: number; agentId: string };
+  zoom?: { rows: (OutputRow | Line)[]; start: number; padding: number; agentId: string; plan?: boolean };
 }
 export function hitTest(regions: Region[], x: number, y: number, panesOnly = false): Region | undefined {
   return regions
@@ -67,16 +70,28 @@ export function deckRegions(layout: ReturnType<typeof deckLayout>, model: HitMod
   const colonyWidth = layout.colony || columns;
   if (model.zoom) {
     pane(0, columns, 'mission');
-    add(0, layout.header, columns, layout.body, { kind: 'output-row', agentId: model.zoom.agentId });
-    model.zoom.rows
-      .slice(model.zoom.start, model.zoom.start + Math.max(0, layout.body - 1))
-      .forEach((row, index) =>
-        add(model.zoom!.padding, layout.header + 1 + index, columns - 2 * model.zoom!.padding, 1, {
-          kind: 'output-row',
-          agentId: model.zoom!.agentId,
-          callId: row.callId,
-        }),
-      );
+    add(
+      0,
+      layout.header,
+      columns,
+      layout.body,
+      model.zoom.plan ? { kind: 'plan-detail' } : { kind: 'output-row', agentId: model.zoom.agentId },
+    );
+    model.zoom.rows.slice(model.zoom.start, model.zoom.start + Math.max(0, layout.body - 1)).forEach((row, index) =>
+      add(
+        model.zoom!.padding,
+        layout.header + 1 + index,
+        columns - 2 * model.zoom!.padding,
+        1,
+        'target' in row && row.target
+          ? row.target
+          : {
+              kind: 'output-row',
+              agentId: model.zoom!.agentId,
+              callId: 'callId' in row ? row.callId : undefined,
+            },
+      ),
+    );
   } else if (layout.compact) pane(0, columns, 'mission');
   else {
     if (colonyVisible) pane(0, colonyWidth, 'colony');
@@ -131,15 +146,13 @@ export function deckRegions(layout: ReturnType<typeof deckLayout>, model: HitMod
       add(layout.colony, layout.header, layout.mission, layout.body, { kind: 'output-row', agentId: model.outputAgentId ?? 'main' });
       const max = Math.max(0, model.outputRows.length - visible.metrics.count),
         start = Math.max(0, max - Math.min(model.offset, max));
-      model.outputRows
-        .slice(start, start + visible.metrics.count)
-        .forEach((row, index) =>
-          add(visible.x, visible.y + index, visible.metrics.width, 1, {
-            kind: 'output-row',
-            agentId: model.outputAgentId ?? 'main',
-            callId: row.callId,
-          }),
-        );
+      model.outputRows.slice(start, start + visible.metrics.count).forEach((row, index) =>
+        add(visible.x, visible.y + index, visible.metrics.width, 1, {
+          kind: 'output-row',
+          agentId: model.outputAgentId ?? 'main',
+          callId: row.callId,
+        }),
+      );
     }
     missionTabs(
       Math.max(0, visible.metrics.width - 2 - displayWidth(tabMemberSuffix(visible.metrics.width - 2, model.tab, model.memberLabel))),

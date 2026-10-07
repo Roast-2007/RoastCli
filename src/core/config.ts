@@ -88,7 +88,7 @@ export const ConfigSchema = z.object({
   }),
   /** "provider:model"，例如 "deepseek:deepseek-chat" */
   default: z.string().min(3),
-  maxSteps: z.number().int().positive().default(50),
+  maxSteps: z.number().int().positive().default(100),
   logsDir: z.string().default('logs'),
   temperature: z.number().min(0).max(2).optional(),
   /** 上下文引擎参数（见 docs/DESIGN.md「上下文引擎」） */
@@ -116,6 +116,7 @@ export const ConfigSchema = z.object({
       efforts: z.record(z.enum(['queen', 'lead', 'worker', 'scout', 'critic', 'judge']), ReasoningEffortSchema.nullable()).optional(),
       maxAgents: z.number().int().min(1).max(64).default(12),
       maxDepth: z.number().int().min(1).max(5).default(3),
+      maxSteps: z.number().int().positive().default(150),
       /** 单个子 agent 的运行时长上限（分钟） */
       maxMinutes: z
         .number()
@@ -194,7 +195,7 @@ type UiPreferences = NonNullable<ParsedConfig['ui']>;
 export type RoastConfig = Omit<ParsedConfig, 'swarm' | 'ui'> & {
   ui?: Omit<UiPreferences, 'home' | 'notify' | 'title' | 'gutter' | 'mouse' | 'hints'> &
     Partial<Pick<UiPreferences, 'home' | 'notify' | 'title' | 'gutter' | 'mouse' | 'hints'>>;
-  swarm: Omit<ParsedConfig['swarm'], 'strategy' | 'n'> & { strategy?: string; n?: number };
+  swarm: Omit<ParsedConfig['swarm'], 'strategy' | 'n' | 'maxSteps'> & { strategy?: string; n?: number; maxSteps?: number };
 };
 
 export interface ModelRef {

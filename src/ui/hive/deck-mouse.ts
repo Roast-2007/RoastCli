@@ -12,6 +12,8 @@ export interface MouseActions {
   mode(): void;
   strategy(): void;
   output?(target: Extract<Target, { kind: 'output-row' }>): void;
+  plan?(target: Extract<Target, { kind: 'plan-row' | 'todo-row' }>): void;
+  planDetail?(target: Extract<Target, { kind: 'plan-detail' | 'plan-member' }>): void;
   zoom?: boolean;
 }
 export function createDeckMouse() {
@@ -39,14 +41,23 @@ export function createDeckMouse() {
       if (pane?.kind === 'pane') actions.focus(pane.pane);
       if (target.kind === 'agent' || target.kind === 'plan-row') {
         const id = target.kind === 'agent' ? target.id : target.agentId;
-        if (!id) continue;
-        actions.select(id);
-        if (event.button === 'right') actions.menu(id);
-        else if (event.button === 'left' && doubleClick(`${target.kind}:${id}`)) {
+        if (id) actions.select(id);
+        if (event.button === 'right' && id) actions.menu(id);
+        else if (event.button === 'left' && doubleClick(`${target.kind}:${target.kind === 'plan-row' ? target.taskId : id}`)) {
+          if (target.kind === 'plan-row' && actions.plan) {
+            actions.plan(target);
+            continue;
+          }
           actions.tab(1);
           actions.focus('mission');
         }
       } else if (event.button === 'left') {
+        if (target.kind === 'todo-row' && doubleClick(`todo:${target.agentId}`)) actions.plan?.(target);
+        if (
+          (target.kind === 'plan-detail' || target.kind === 'plan-member') &&
+          doubleClick(`plan-detail:${target.kind === 'plan-member' ? target.agentId : 'exit'}`)
+        )
+          actions.planDetail?.(target);
         if (target.kind === 'tab') actions.tab(target.index);
         if (target.kind === 'signal') actions.signal(target);
         if (target.kind === 'hint') actions.hint(target.action);
