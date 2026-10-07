@@ -17,6 +17,7 @@ import { displayWidth } from '../../src/core/text-width.js';
 import type { EditorState } from '../../src/ui/input/editor.js';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { clearsAreSynchronized, screenOf } from './hive/vt.js';
 
 class Terminal extends EventEmitter {
   isTTY = true;
@@ -495,14 +496,24 @@ describe('fullscreen workspace in real Ink', () => {
   it('renders the character startup, accepts a typed skip and stops animation timers', async () => {
     session.config.ui = { motion: 'full' };
     const { tty, stdin, draft } = workspace(80, 24, true);
-    await vi.waitFor(() => expect(tty.frames().at(-1)).toContain('__'));
+    await vi.waitFor(() => expect(screenOf(tty.chunks, 80, 24).join('\n')).toContain('\\____/    \\'));
     await instance!.waitUntilRenderFlush();
     for (const character of ['a', 'b', 'c']) stdin.write(character);
     await vi.waitFor(() => expect(draft.state?.lines.join('\n')).toBe('abc'));
     await instance!.waitUntilRenderFlush();
-    expect(tty.frames().at(-1)).not.toContain('\\__/  \\__/');
-    fits(tty);
-    expect(tty.chunks.join('')).not.toContain('\x1b[2J');
+    // The workspace starts from a cleared screen: no hive cell survives the handoff,
+    // and every clear happens inside a synchronized update (no blank frame).
+    const shown = screenOf(tty.chunks, 80, 24);
+    // A hive cell row; the chat wordmark also contains `\____/`, so match the cell spacing.
+    expect(shown.join('\n')).not.toContain('\\____/    \\');
+    expect(shown.join('\n')).toContain('abc');
+    expect(clearsAreSynchronized(tty.chunks)).toBe(true);
+    const handoff = tty.chunks.map((chunk) => chunk.includes('\x1b[2J')).lastIndexOf(true);
+    expect(handoff).toBeGreaterThan(-1);
+    for (const frame of tty.chunks.slice(handoff + 1).map((chunk) => stripVTControlCharacters(chunk).trimEnd()).filter(Boolean)) {
+      expect(frame.split('\n').length, frame).toBeLessThan(tty.rows);
+      expect(frame.split('\n').every((line) => displayWidth(line) <= tty.columns), frame).toBe(true);
+    }
     await tick(300);
     const frames = tty.frames().length;
     await tick(100);

@@ -7,6 +7,7 @@ import { TerminalContext } from '../../../src/ui/terminal.js';
 import { ThemeContext, THEMES } from '../../../src/ui/theme.js';
 import { emptyUsage } from '../../../src/core/types.js';
 import type { Session } from '../../../src/agent/session.js';
+import { screenOf } from './vt.js';
 const tick = (ms = 20) => new Promise((resolve) => setTimeout(resolve, ms));
 // Waits for the real 900ms ignition; hosted runners with coverage can exceed the default 5s.
 describe('quiet Hive chrome', { timeout: 20_000 }, () => {
@@ -37,8 +38,11 @@ describe('quiet Hive chrome', { timeout: 20_000 }, () => {
     try {
       await vi.advanceTimersByTimeAsync(IGNITION_MS - 1); expect(done).not.toHaveBeenCalled();
       await vi.advanceTimersByTimeAsync(1); expect(done).toHaveBeenCalledTimes(1);
-      expect(screen.lastFrame()).not.toMatch(/任意键|正在进入/);
-      expect(screen.lastFrame()).toContain('H   I   V   E');
+      const shown = screenOf(screen.frames, 80, 23).join('\n');
+      expect(shown).not.toMatch(/任意键|正在进入/);
+      expect(shown).toContain('H   I   V   E');
+      // Monochrome keeps bold/dim only: no colour codes reach the terminal.
+      expect(screen.frames.join('')).not.toMatch(/\x1b\[[\d;]*(?:38;[25];|3[0-7]m|9[0-7]m)/);
     } finally { screen.unmount(); vi.useRealTimers(); }
     await tick();
   });

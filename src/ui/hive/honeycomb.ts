@@ -1,3 +1,4 @@
+import { VERSION } from '../../core/version.js';
 import { ROAST_LOGO, BIG_ROAST_LOGO } from './wordmark.js';
 export type HiveTier = 'XL' | 'L' | 'M' | 'S' | 'line' | 'tiny';
 export const CELL_SIZE = { XL: { s: 3, L: 8 }, L: { s: 2, L: 6 }, M: { s: 1, L: 4 }, S: { s: 1, L: 2 } } as const;
@@ -17,7 +18,7 @@ export function ignitionSize(columns: number, rows: number): HiveTier {
 export function chamberLayout(columns: number, rows: number, tier: HiveTier) {
   const big = tier === 'L' || tier === 'XL';
   let logo = big ? BIG_ROAST_LOGO : ROAST_LOGO;
-  if (rows < logo.length + 6 || columns < Math.max(...logo.map(line => line.length)) + 6) logo = ['ROAST HIVE v0.5.0'];
+  if (rows < logo.length + 6 || columns < Math.max(...logo.map(line => line.length)) + 6) logo = [`ROAST HIVE v${VERSION}`];
   const width = Math.max(...logo.map(line => line.length));
   const height = logo.length + (logo.length > 1 ? 4 : 2);
   const block = { x: Math.floor((columns - width) / 2), y: Math.floor((rows - height) / 2), w: width, h: height };
