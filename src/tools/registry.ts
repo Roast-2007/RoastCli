@@ -5,6 +5,7 @@
 import { RoastError } from '../core/errors.js';
 import type { ToolSchema } from '../core/types.js';
 import { toolSchemaOf, type ToolDefinition } from './tool.js';
+import { matchesRule, parseRule } from './permissions/rules.js';
 
 export interface ToolRegistryFilter {
   /** 非空时仅允许名单内的工具可见 */
@@ -28,6 +29,17 @@ export class ToolRegistry {
       throw new RoastError('CONFIG', `工具重复注册: ${def.name}`);
     }
     this.tools.set(def.name, def);
+  }
+
+  hide(rules: string[]): void {
+    for (const name of this.tools.keys())
+      if (
+        rules.some((text) => {
+          const rule = parseRule(text);
+          return rule.pattern === undefined && matchesRule(rule, { tool: name, kind: 'read', cwd: '' });
+        })
+      )
+        this.deny.add(name);
   }
 
   /** deny 优先；allow 非空时名单外不可见 */

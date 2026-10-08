@@ -2,6 +2,28 @@
 
 安装包和校验文件见 [GitHub Releases](https://github.com/Roast-2007/RoastCli/releases)。
 
+## 0.6.0 - 2026-10-09
+
+新增
+
+- 图片附件：Chat 和 Deck 中按 `Alt+V`（macOS 用 `Ctrl+V`）附加剪贴板图片，或把图片文件拖进终端；输入框显示 `[图片 #N]` 占位符，删掉即取消。Deck 空闲时图片随新任务发给 Queen。
+- 管道输入：`git diff | roast -p "评审"` 把管道内容附在任务后面，`git diff | roast -p` 直接把它当作任务；`roast hive --print` 同样支持。
+- 管道模式新增 `--output-format json`，结束时输出一行结果，含回答、用量、费用和 runId；`--max-budget-usd` 设置费用上限，达到后中断全部成员。
+- `--max-steps` 临时调整主会话步数上限；`--allowed-tools` / `--disallowed-tools` 为本次运行追加工具规则，不带括号的禁止项同时对模型隐藏该工具。
+- 自定义角色：在 `~/.roast/agents/` 或项目的 `.roast/agents/` 中用 Markdown 定义成员的职责、基础角色、模型和可用工具，Queen 用 `spawn_agent` 的 `agent` 参数派生。兼容项目中 Claude Code 的 `.claude/agents/`。`roast hive --list-agents` 查看。
+- 修改后自动诊断：改完 TS/JS 文件后，用 TypeScript 检查该文件，把新引入的错误附在工具结果后面。检查在后台线程进行，可用 `diagnostics` 配置或 `ROAST_DIAGNOSTICS=0` 关闭。
+- `/export [路径]` 和 `roast logs export` 把对话导出为 Markdown；`/copy [N]` 复制回答，SSH 下使用 OSC 52。
+
+变更
+
+- `/init` 改为让 agent 分析仓库后生成或更新项目说明，已有的 `ROAST.md` / `AGENTS.md` / `CLAUDE.md` 在原内容上改进；`/init template` 保留原来的空模板。
+
+兼容性
+
+- `hive/mission` 事件新增可选的 `images` 字段。0.5.x 可以读取 0.6 的日志，但会丢失任务中的图片。
+- `-p` 的值改为可选。`roast -p "任务"` 的用法不变；stdin 不是终端时会尝试读取管道输入，有任务时最多等 3 秒第一个字节。
+- 项目未受信任时不加载项目级自定义角色，启动时提示忽略的数量。
+
 ## 0.5.2 - 2026-10-08
 
 新增

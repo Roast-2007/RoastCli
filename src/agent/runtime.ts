@@ -202,6 +202,7 @@ export class AgentRuntime {
           strategy: mission.strategy.name,
           n: mission.n,
           brief: brief + extra,
+          ...(mission.images?.length ? { images: mission.images } : {}),
           ...(mission.strategy.readOnly ? { readOnly: true } : {}),
         });
         yield event as Extract<UiEvent, { type: 'hive/mission' }>;
@@ -345,9 +346,11 @@ export class AgentRuntime {
           continue;
         }
         const message = userMessage(text);
-        if (typeof queued !== 'string' && 'content' in queued) message.content.push(...queued.content.filter((b) => b.type === 'image'));
+        const images =
+          typeof queued === 'string' ? [] : isMission(queued) ? (queued.images ?? []) : queued.content.filter((b) => b.type === 'image');
+        message.content.push(...images);
         this.committer.commit({ type: 'user/message', turn, at: this.now(), message, source: 'steer' });
-        yield { type: 'user-injected', text: raw };
+        yield { type: 'user-injected', text: raw, ...(images.length ? { images } : {}) };
       }
     }
     const actions = (await this.deps.boundary?.beforeRequest?.(this.boundaryCtx(turn, step, signal))) ?? [];

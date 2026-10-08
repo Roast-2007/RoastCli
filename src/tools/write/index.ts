@@ -7,6 +7,7 @@ import { z } from 'zod';
 import { resolveUserPath } from '../../core/paths.js';
 import { commitWrite, loadForWrite } from '../file-ops.js';
 import { defineTool, textResult, toolErrorResult, type ToolResult } from '../tool.js';
+import { appendDiagnostics } from '../lsp/diagnostics.js';
 
 const parameters = z.object({
   path: z.string().describe('文件路径；相对路径基于当前工作目录解析；父目录不存在会自动创建'),
@@ -35,14 +36,23 @@ export const writeTool = defineTool({
       crlf = loaded.file.crlf;
     }
     const after = crlf ? args.content.replace(/\r\n/g, '\n') : args.content;
-    const out = await commitWrite(abs, before, after, crlf, ctx.services);
-    const verb = exists ? '覆盖' : '创建';
-    return textResult(`write 完成：${verb} ${abs}（${out.bytes} 字节，+${out.diff.added} -${out.diff.removed}）。`, {
-      path: abs,
-      created: !exists,
-      bytesAfter: out.bytes,
-      fileState: out.fileState,
-      diff: out.diff,
+    const out = await commitWrite(abs, before, after, crlf, ctx.services, {
+      expectedExists: exists,
+      signal: ctx.signal,
+      diagnostics: true,
     });
+    const verb = exists ? '覆盖' : '创建';
+    return appendDiagnostics(
+      textResult(`write 完成：${verb} ${abs}（${out.bytes} 字节，+${out.diff.added} -${out.diff.removed}）。`, {
+        path: abs,
+        created: !exists,
+        bytesAfter: out.bytes,
+        fileState: out.fileState,
+        diff: out.diff,
+      }),
+      out.diagnostics,
+      abs,
+      ctx.services,
+    );
   },
 });

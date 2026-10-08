@@ -7,6 +7,7 @@ import { resolveUserPath } from '../../core/paths.js';
 import { z } from 'zod';
 import { defineTool, textResult, toolErrorResult, type ToolResult } from '../tool.js';
 import { getFileStateStore, sha1Of } from '../fs-state.js';
+import { DIAGNOSTICS_KEY, type DiagnosticsHost } from '../lsp/diagnostics.js';
 
 const DEFAULT_LIMIT = 2000;
 const MAX_LINE_CHARS = 2000;
@@ -74,6 +75,7 @@ export const readTool = defineTool({
     // 记录 read-state，供 edit 校验"先读后改 / 外部修改"
     const fileState = { mtimeMs: st.mtimeMs, size: st.size, sha1: sha1Of(buf) };
     getFileStateStore(ctx.services).record(abs, fileState);
+    ctx.services.get<DiagnosticsHost>(DIAGNOSTICS_KEY)?.warm(abs);
 
     return textResult(out.join('\n'), {
       path: abs,

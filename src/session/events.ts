@@ -82,6 +82,7 @@ export type SessionEventBody =
       n: number;
       brief: string;
       readOnly?: boolean;
+      images?: import('../core/types.js').ImageBlock[];
     }
   /** 流式 chunk（仅 debugLog；不参与投影） */
   | { type: 'assistant/chunk'; turn: number; step: number; chunk: StreamChunk }

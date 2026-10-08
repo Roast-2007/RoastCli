@@ -51,6 +51,13 @@ export function toolDetailRows(tool: ToolView, width: number) {
     (tool.status === 'running' ? tool.live : (tool.output ?? tool.preview)) || '（无输出）',
     tool.status === 'error' ? 'danger' : undefined,
   );
+  const diagnostics = tool.metadata?.['diagnostics'] as
+    | { file: string; items: { line: number; column: number; code: number; message: string }[] }
+    | undefined;
+  if (diagnostics?.items?.length) {
+    add('TypeScript 诊断', 'warn');
+    for (const item of diagnostics.items) add(`${diagnostics.file}:${item.line}:${item.column} TS${item.code} ${item.message}`, 'warn');
+  }
   return rows;
 }
 export function ToolDetail({

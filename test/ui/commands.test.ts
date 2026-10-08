@@ -53,13 +53,14 @@ describe('slash commands', () => {
     const h = await harness();
     await h.run('/help');
     expect(h.store.getState().meta.overlay).toBe('help');
-    for (const command of ['model', 'theme', 'cost', 'todo', 'logs', 'mcp', 'skills', 'agents', 'board', 'memory', 'init', 'compact'] as const) {
+    for (const command of ['model', 'theme', 'cost', 'todo', 'logs', 'mcp', 'skills', 'agents', 'board', 'memory', 'compact'] as const) {
       await h.run(`/${command}`);
       expect(h.store.getState().meta.overlay).toBe(command);
     }
     await h.run('/context');
     expect(h.store.getState().meta.overlay).toBe('context');
-    await h.run('/swarm'); expect(h.store.getState().meta.screen).toBe('hive');
+    await h.run('/swarm');
+    expect(h.store.getState().meta.screen).toBe('hive');
     expect(await h.run('/config')).toContain('roast config');
     h.session.swarm.board.write('/example', 'complete value', { author: 'main' });
     expect(await h.run('/board /example')).toContain('complete value');
@@ -88,9 +89,8 @@ describe('slash commands', () => {
 
   it('init creates ROAST.md once; # notes append to its memory section', async () => {
     const h = await harness();
-    await h.run('/init');
-    expect(h.store.getState().meta.overlay).toBe('init');
-    expect(existsSync(path.join(h.ws.dir, 'ROAST.md'))).toBe(false);
+    await h.run('/init template');
+    expect(existsSync(path.join(h.ws.dir, 'ROAST.md'))).toBe(true);
     expect(await h.run('#偏好 pnpm')).toContain('已记住');
     const file = path.join(h.ws.dir, 'ROAST.md');
     expect(readFileSync(file, 'utf8')).toContain('## 记忆\n- 偏好 pnpm');

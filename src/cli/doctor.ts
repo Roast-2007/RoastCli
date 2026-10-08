@@ -24,6 +24,7 @@ import { locateRipgrep } from '../tools/search/rg.js';
 import { resolveShell } from '../tools/bash/shell.js';
 import { displayWidth, padDisplay } from '../core/text-width.js';
 import { pricingDiagnostics } from '../providers/pricing/index.js';
+import { loadProfiles } from '../swarm/profiles.js';
 
 export type CheckLevel = 'ok' | 'warn' | 'fail';
 
@@ -145,11 +146,17 @@ async function extensionChecks(cwd: string): Promise<Check[]> {
   const hooks = loadHooks(cwd, trusted);
   const hookCount = HOOK_EVENTS.reduce((n, e) => n + hooks.hooks[e].length, 0);
   const mcp = loadMcpServers(cwd, trusted);
+  const profiles = loadProfiles(cwd, home, { trusted });
   const notes = (ignored: number, invalid: string[]) =>
     [ignored ? `${ignored} 个因项目未信任未启用` : '', invalid.length ? `格式错误：${invalid.join(', ')}` : ''].filter(Boolean).join('；');
   const hookNote = notes(hooks.ignored, hooks.invalid);
   const mcpNote = notes(mcp.ignored.length, mcp.invalid);
   return [
+    check(
+      'Agent profiles',
+      profiles.warnings.length ? 'warn' : 'ok',
+      `${profiles.profiles.size} 个${profiles.warnings.length ? `；${profiles.warnings.join('；')}` : ''}`,
+    ),
     check(
       '项目说明',
       'ok',

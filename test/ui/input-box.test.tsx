@@ -9,51 +9,120 @@ const deps = { commands: [{ name: 'context', description: '上下文占用' }], 
 describe('InputBox', () => {
   it('accumulates typing, completion arrows and Enter before the next paint', async () => {
     const submit = vi.fn();
-    const screen = render(<InputBox active placeholder="" initialHistory={[]} deps={{ ...deps, commands: [{ name: 'theme', description: 'theme' }, { name: 'model', description: 'model' }] }} onSubmit={submit} />);
+    const screen = render(
+      <InputBox
+        active
+        placeholder=""
+        initialHistory={[]}
+        deps={{
+          ...deps,
+          commands: [
+            { name: 'theme', description: 'theme' },
+            { name: 'model', description: 'model' },
+          ],
+        }}
+        onSubmit={submit}
+      />,
+    );
     try {
-      await tick(); for (const key of ['你', '好', '\r']) screen.stdin.write(key);
-      expect(submit).toHaveBeenLastCalledWith('你好', '你好');
-      await tick(); for (const key of ['/', '\x1b[B', '\r']) screen.stdin.write(key);
-      expect(submit).toHaveBeenLastCalledWith('/model', '/model');
-    } finally { screen.unmount(); }
+      await tick();
+      for (const key of ['你', '好', '\r']) screen.stdin.write(key);
+      expect(submit).toHaveBeenLastCalledWith('你好', '你好', []);
+      await tick();
+      for (const key of ['/', '\x1b[B', '\r']) screen.stdin.write(key);
+      expect(submit).toHaveBeenLastCalledWith('/model', '/model', []);
+    } finally {
+      screen.unmount();
+    }
   });
   it('opens the selected command with Enter without requiring a typed command name', async () => {
     const submit = vi.fn();
-    const screen = render(<InputBox active placeholder="" initialHistory={[]} deps={{ ...deps, commands: [{ name: 'theme', description: 'theme' }, { name: 'model', description: 'models' }] }} onSubmit={submit} />);
-    await tick(); screen.stdin.write('/'); await tick(); screen.stdin.write('\x1b[B'); await tick(); screen.stdin.write('\r'); await tick();
-    expect(submit).toHaveBeenCalledWith('/model', '/model'); screen.unmount();
+    const screen = render(
+      <InputBox
+        active
+        placeholder=""
+        initialHistory={[]}
+        deps={{
+          ...deps,
+          commands: [
+            { name: 'theme', description: 'theme' },
+            { name: 'model', description: 'models' },
+          ],
+        }}
+        onSubmit={submit}
+      />,
+    );
+    await tick();
+    screen.stdin.write('/');
+    await tick();
+    screen.stdin.write('\x1b[B');
+    await tick();
+    screen.stdin.write('\r');
+    await tick();
+    expect(submit).toHaveBeenCalledWith('/model', '/model', []);
+    screen.unmount();
   });
   it('selects a completion with arrows, and reverse search keeps the draft until accepted', async () => {
     const submit = vi.fn();
-    const screen = render(<InputBox active placeholder="" initialHistory={['old auth question', 'recent auth question']} initialText="draft" deps={{ ...deps, commands: [{ name: 'context', description: 'ctx' }, { name: 'cost', description: 'usage' }] }} onSubmit={submit} />);
+    const screen = render(
+      <InputBox
+        active
+        placeholder=""
+        initialHistory={['old auth question', 'recent auth question']}
+        initialText="draft"
+        deps={{
+          ...deps,
+          commands: [
+            { name: 'context', description: 'ctx' },
+            { name: 'cost', description: 'usage' },
+          ],
+        }}
+        onSubmit={submit}
+      />,
+    );
     await tick();
-    screen.stdin.write('\u0012'); await tick();
-    screen.stdin.write('auth'); await tick();
+    screen.stdin.write('\u0012');
+    await tick();
+    screen.stdin.write('auth');
+    await tick();
     expect(screen.lastFrame()).toContain('recent auth question');
-    screen.stdin.write('\u0012'); await tick();
+    screen.stdin.write('\u0012');
+    await tick();
     expect(screen.lastFrame()).toContain('old auth question');
-    screen.stdin.write('\u001b'); await tick();
+    screen.stdin.write('\u001b');
+    await tick();
     expect(screen.lastFrame()).toContain('draft');
-    screen.stdin.write('\u0015'); await tick();
-    screen.stdin.write('/co'); await tick();
-    screen.stdin.write('\u001b[B'); await tick();
-    screen.stdin.write('\t'); await tick();
-    screen.stdin.write('\r'); await tick();
-    expect(submit).toHaveBeenCalledWith('/cost', '/cost ');
+    screen.stdin.write('\u0015');
+    await tick();
+    screen.stdin.write('/co');
+    await tick();
+    screen.stdin.write('\u001b[B');
+    await tick();
+    screen.stdin.write('\t');
+    await tick();
+    screen.stdin.write('\r');
+    await tick();
+    expect(submit).toHaveBeenCalledWith('/cost', '/cost ', []);
     screen.unmount();
   });
   it('restores the editor caret and collapsed paste across a screen remount', async () => {
     const original = 'a\nb\nc\nd\ne\nf';
     let saved: EditorState = editorReducer(createEditor(), { type: 'paste', text: original });
-    const capture = (state: EditorState) => { saved = state; };
-    const first = render(<InputBox active placeholder="" initialHistory={[]} initialState={saved} onStateChange={capture} deps={deps} onSubmit={vi.fn()} />);
+    const capture = (state: EditorState) => {
+      saved = state;
+    };
+    const first = render(
+      <InputBox active placeholder="" initialHistory={[]} initialState={saved} onStateChange={capture} deps={deps} onSubmit={vi.fn()} />,
+    );
     await tick();
     first.stdin.write('\u001B[D');
     await tick();
     const caret = saved.col;
     first.unmount();
     const submit = vi.fn();
-    const second = render(<InputBox active placeholder="" initialHistory={[]} initialState={saved} onStateChange={capture} deps={deps} onSubmit={submit} />);
+    const second = render(
+      <InputBox active placeholder="" initialHistory={[]} initialState={saved} onStateChange={capture} deps={deps} onSubmit={submit} />,
+    );
     await tick();
     expect(saved.col).toBe(caret);
     expect(expand(saved)).toBe(original);
@@ -61,7 +130,7 @@ describe('InputBox', () => {
     await tick();
     second.stdin.write('\r');
     await tick();
-    expect(submit).toHaveBeenCalledWith(original, original);
+    expect(submit).toHaveBeenCalledWith(original, original, []);
     second.unmount();
   });
   it('输入后回车提交，并清空', async () => {
@@ -73,7 +142,7 @@ describe('InputBox', () => {
     expect(lastFrame()).toContain('你好');
     stdin.write('\r');
     await tick();
-    expect(onSubmit).toHaveBeenCalledWith('你好', '你好');
+    expect(onSubmit).toHaveBeenCalledWith('你好', '你好', []);
     expect(lastFrame()).toContain('输入消息');
   });
 
@@ -89,7 +158,7 @@ describe('InputBox', () => {
     await tick();
     stdin.write('\r');
     await tick();
-    expect(onSubmit).toHaveBeenCalledWith('/context', '/context ');
+    expect(onSubmit).toHaveBeenCalledWith('/context', '/context ', []);
   });
 
   it('行尾反斜杠 + 回车 = 换行而不提交', async () => {
@@ -107,7 +176,9 @@ describe('InputBox', () => {
   });
 
   it('↑ 取历史', async () => {
-    const { stdin, lastFrame } = render(<InputBox active placeholder="" initialHistory={['上一次的问题']} deps={deps} onSubmit={vi.fn()} />);
+    const { stdin, lastFrame } = render(
+      <InputBox active placeholder="" initialHistory={['上一次的问题']} deps={deps} onSubmit={vi.fn()} />,
+    );
     await tick();
     stdin.write('\u001B[A');
     await tick();

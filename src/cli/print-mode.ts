@@ -3,8 +3,8 @@
  * 抽成纯函数便于单测 —— out/err 只要求可写流接口（{ write }）。
  */
 import type { UiEvent } from '../agent/ui-events.js';
-import { terminalText } from '../core/terminal-text.js';
 import type { RuntimeInput } from '../agent/runtime.js';
+import { toolSummary } from '../session/export-markdown.js';
 
 export interface WritableLike {
   write(chunk: string): unknown;
@@ -50,8 +50,7 @@ export async function runPrintMode(
         break;
       case 'tool-call-start':
         closeText();
-        const args = ev.args as { path?: string; command?: string; query?: string; url?: string; pattern?: string } | null;
-        const summary = terminalText(String(args?.path ?? args?.command ?? args?.query ?? args?.url ?? args?.pattern ?? '')).replace(/\s+/g, ' ').slice(0, 140);
+        const summary = toolSummary(ev.args);
         out.write(`> tool: ${ev.name}${summary ? ` · ${summary}` : ''}\n`);
         break;
       case 'tool-call-end':
@@ -107,7 +106,12 @@ export interface StreamJsonSession {
  * stream-json 输出：每行一个 {"agent": id, "event": UiEvent}，包含主会话与全部子 agent。
  * 返回退出码规则同 runPrintMode。
  */
-export async function runStreamJson(session: StreamJsonSession, prompt: RuntimeInput, out: WritableLike, signal?: AbortSignal): Promise<number> {
+export async function runStreamJson(
+  session: StreamJsonSession,
+  prompt: RuntimeInput,
+  out: WritableLike,
+  signal?: AbortSignal,
+): Promise<number> {
   const write = (agent: string, event: UiEvent) => out.write(JSON.stringify({ agent, event }) + '\n');
   const off = session.onAgentEvent(write);
   let exitCode = 0;

@@ -27,6 +27,7 @@ import type { HiveJournal } from './hive-journal.js';
 import { ActiveClock } from './active-clock.js';
 import { autoReportSummary } from './auto-report.js';
 import { TODOS_KEY, type TodoItem } from '../tools/interact/index.js';
+import type { AgentProfile } from './profiles.js';
 
 export interface CreateRuntimeInput {
   id: string;
@@ -41,6 +42,7 @@ export interface CreateRuntimeInput {
 }
 
 export interface SupervisorDeps {
+  profiles?: Map<string, AgentProfile>;
   /** 主日志路径（子 agent 日志写在同目录 agents/<id>.jsonl） */
   mainLogPath: string;
   runId: string;
@@ -310,7 +312,8 @@ export class Supervisor {
   spawn(
     parentId: string,
     opts: {
-      role: AgentRole;
+      role?: AgentRole;
+      agent?: string;
       task: string;
       taskId?: string;
       refs?: string[];
@@ -319,10 +322,17 @@ export class Supervisor {
       reasoningEffort?: ReasoningEffort | null;
     },
   ): SpawnResult {
+    const profile = opts.agent ? this.deps.profiles?.get(opts.agent) : undefined;
+    if (opts.agent && !profile)
+      return { ok: false, reason: `未知 profile ${opts.agent}（可用：${[...(this.deps.profiles?.keys() ?? [])].join(', ') || '无'}）` };
+    if (profile && opts.role && opts.role !== profile.role)
+      return { ok: false, reason: `profile ${profile.name} 的 role 为 ${profile.role}` };
+    const role = profile?.role ?? opts.role;
+    if (!role) return { ok: false, reason: '请指定 role 或 agent' };
     const parent = this.recs.get(parentId);
     if (!parent) return { ok: false, reason: `未知的上级 ${parentId}` };
-    if (this.readOnlyMission && (opts.role === 'worker' || opts.role === 'lead')) return { ok: false, reason: '本任务为只读调研' };
-    if (opts.role === 'queen') return { ok: false, reason: '不能派生 queen' };
+    if (this.readOnlyMission && (role === 'worker' || role === 'lead')) return { ok: false, reason: '本任务为只读调研' };
+    if (role === 'queen') return { ok: false, reason: '不能派生 queen' };
     const maxAgents = this.deps.maxAgents ?? 12;
     const maxDepth = this.deps.maxDepth ?? 3;
     if (this.recs.size - 1 >= maxAgents) return { ok: false, reason: `已达 agent 数量上限 ${maxAgents}` };
@@ -330,20 +340,27 @@ export class Supervisor {
     if (parent.controller.signal.aborted) return { ok: false, reason: '上级已取消，不能派生新 agent' };
     let modelRef: ModelRef;
     try {
-      const userRoute = this.deps.roleModels?.[opts.role];
-      if (userRoute && opts.model && opts.model !== userRoute) throw new Error(`${opts.role} 已由用户指定为 ${userRoute}`);
+      const userRoute = profile?.model ?? this.deps.roleModels?.[role];
+      if (userRoute && opts.model && opts.model !== userRoute) throw new Error(`${profile?.name ?? role} 已由用户指定为 ${userRoute}`);
+      if (profile?.reasoningEffort !== undefined && opts.reasoningEffort !== undefined && opts.reasoningEffort !== profile.reasoningEffort)
+        throw new Error(`${profile.name} 已由用户指定 reasoning effort 为 ${profile.reasoningEffort}`);
       modelRef = {
-        ...this.deps.modelFor(opts.role, userRoute ? undefined : (opts.model ?? this.roleModels.get(opts.role)), opts.reasoningEffort),
+        ...this.deps.modelFor(
+          role,
+          profile?.model ?? (userRoute ? undefined : (opts.model ?? this.roleModels.get(role))),
+          profile?.reasoningEffort ?? opts.reasoningEffort,
+        ),
       };
     } catch (err) {
       return { ok: false, reason: err instanceof Error ? err.message : '模型选择失败' };
     }
-    const id = `${ROLE_INFO[opts.role].prefix}${++this.seq}`;
+    const id = `${ROLE_INFO[role].prefix}${++this.seq}`;
     const rec = this.makeRec(
       {
         id,
         parentId,
-        role: opts.role,
+        role,
+        ...(profile ? { profile: profile.name } : {}),
         depth: parent.info.depth + 1,
         state: 'running',
         brief: opts.task,
@@ -367,7 +384,8 @@ export class Supervisor {
       modelRef,
       roleCard({
         id,
-        role: opts.role,
+        role,
+        profile,
         parentId,
         task: opts.task,
         taskId: opts.taskId,

@@ -16,6 +16,7 @@ import { missionUsage } from './usage.js';
 import { useMemo } from 'react';
 import { createOutputRows, type OutputRow } from '../output-rows.js';
 import { terminalText } from '../../core/terminal-text.js';
+import { agentLabel } from '../../swarm/types.js';
 export { TABS } from './tabs.js';
 export function missionLines(session: Session, ui: UiStoreState, tab: number, selected: string, ascii: boolean, width = 80): Line[] {
   const main = ui.agents.main!,
@@ -98,7 +99,7 @@ export function MissionPane({
   const suffix = tabMemberSuffix(
     metrics.width - 2,
     tab,
-    member ? terminalText(`${member.id === 'main' ? 'queen' : member.id} ${member.role}`) : undefined,
+    member ? terminalText(`${member.id === 'main' ? 'queen' : agentLabel(member)} ${member.role}`) : undefined,
   );
   const tabs = missionTabs(Math.max(0, metrics.width - 2 - displayWidth(suffix)), tab, signals, ascii);
   const tabWidth = tabs.length ? tabs.at(-1)!.x + tabs.at(-1)!.width : 0;

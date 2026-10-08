@@ -9,6 +9,7 @@ import path from 'node:path';
 import { structuredPatch } from 'diff';
 import { getFileStateStore, sha1Of, type FileState } from './fs-state.js';
 import type { ToolServices } from './tool.js';
+import { beginDiagnostics, finishDiagnostics, type DiagnosticCheck } from './lsp/diagnostics.js';
 
 export interface LoadedFile {
   abs: string;
@@ -128,6 +129,7 @@ export function makeDiff(file: string, before: string, after: string): DiffMeta 
 }
 
 export interface WriteOutcome {
+  diagnostics?: DiagnosticCheck;
   fileState: FileState;
   diff: DiffMeta;
   bytes: number;
@@ -140,13 +142,35 @@ export async function commitWrite(
   after: string,
   crlf: boolean,
   services: ToolServices,
+  opts: { expectedExists?: boolean; signal?: AbortSignal; diagnostics?: boolean } = {},
 ): Promise<WriteOutcome> {
+  opts.signal?.throwIfAborted();
   const outText = crlf ? after.replace(/\n/g, '\r\n') : after;
+  const original = await readFile(abs).catch((err: NodeJS.ErrnoException) => {
+    if (err.code === 'ENOENT') return undefined;
+    throw err;
+  });
+  if (opts.expectedExists !== undefined && opts.expectedExists !== (original !== undefined))
+    throw new Error(`文件 ${abs} 已被外部创建或删除，请重新读取后再修改`);
+  if (original && original.toString('utf8').replace(/\r\n/g, '\n') !== before.replace(/\r\n/g, '\n'))
+    throw new Error(`文件 ${abs} 已被外部修改，请重新读取后再修改`);
+  const baseline = opts.diagnostics ? await beginDiagnostics(services, abs, before) : undefined;
+  opts.signal?.throwIfAborted();
+  if (baseline !== undefined) {
+    const current = await readFile(abs).catch((err: NodeJS.ErrnoException) => {
+      if (err.code === 'ENOENT') return undefined;
+      throw err;
+    });
+    if (original === undefined ? current !== undefined : !current?.equals(original))
+      throw new Error(`文件 ${abs} 在诊断期间被外部修改，请重新读取后再修改`);
+  }
   const outBuf = Buffer.from(outText, 'utf8');
   await mkdir(path.dirname(abs), { recursive: true });
-  await writeFile(abs, outBuf);
+  opts.signal?.throwIfAborted();
+  await writeFile(abs, outBuf, original === undefined ? { flag: 'wx' } : undefined);
   const st = await stat(abs);
   const fileState: FileState = { mtimeMs: st.mtimeMs, size: st.size, sha1: sha1Of(outBuf) };
   getFileStateStore(services).record(abs, fileState);
-  return { fileState, diff: makeDiff(path.basename(abs), before, after), bytes: outBuf.length };
+  const diagnostics = await finishDiagnostics(services, abs, after, baseline);
+  return { fileState, diff: makeDiff(path.basename(abs), before, after), bytes: outBuf.length, diagnostics };
 }

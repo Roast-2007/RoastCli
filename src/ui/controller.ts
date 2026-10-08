@@ -10,7 +10,7 @@ import { runForeground } from '../tools/bash/run.js';
 import { appendMemory, runSlash, skillPrompt } from './commands.js';
 import { appendHistory } from './input/history.js';
 import type { UiStore } from './store/store.js';
-import { emptyUsage } from '../core/types.js';
+import { emptyUsage, type ImageBlock } from '../core/types.js';
 import type { RuntimeInput } from '../agent/runtime.js';
 import { loadStrategies, missionInput, DEFAULT_STRATEGY, DEFAULT_N } from '../swarm/strategies.js';
 import { isProjectTrusted, roastHome } from '../core/config.js';
@@ -20,7 +20,7 @@ import { ctrlC, type InterruptAction } from './hive/interrupt.js';
 const TIMELINE_MAX = 50;
 
 export interface UiController {
-  submit(text: RuntimeInput, raw: string): void;
+  submit(text: RuntimeInput, raw: string, images?: ImageBlock[]): void;
   interrupt(): void;
   ctrlC(draft: string): InterruptAction;
   notify(text: string, tone?: 'info' | 'warn'): void;
@@ -144,6 +144,7 @@ export function createUiController(
   };
 
   async function runTurn(text: RuntimeInput): Promise<void> {
+    let turnStart = session.displayEvents().length;
     running = true;
     store.setMeta({ running: true });
     const controller = new AbortController();
@@ -152,10 +153,24 @@ export function createUiController(
       let started = false;
       for await (const ev of session.loop.run(text, controller.signal)) {
         if (ev.type === 'turn-start') {
+          turnStart = session.displayEvents().length - 1;
           if (started) store.setMeta((m) => ({ queued: m.queued.slice(1) }));
           started = true;
         }
         store.pushEvent('main', ev);
+        if (
+          ev.type === 'error' &&
+          ev.error.code === 'INVALID_REQUEST' &&
+          session
+            .displayEvents()
+            .slice(turnStart)
+            .some((event) =>
+              event.type === 'hive/mission'
+                ? !!event.images?.length
+                : event.type === 'user/message' && event.message.content.some((block) => block.type === 'image'),
+            )
+        )
+          notify('当前模型可能不支持图片输入', 'warn');
         if (ev.type === 'queue-restored')
           store.setMeta((m) => ({ queued: [], inputSeed: { key: m.inputSeed.key + 1, text: ev.texts.join('\n'), screen: m.screen } }));
         if (ev.type === 'user-injected') store.setMeta((m) => ({ queued: m.queued.slice(1) }));
@@ -228,8 +243,8 @@ export function createUiController(
     }
   }
 
-  function send(text: RuntimeInput): void {
-    if (running && typeof text !== 'string' && 'kind' in text) text = text.goal;
+  function send(text: RuntimeInput, onComplete?: () => void): void {
+    if (running && typeof text !== 'string' && 'kind' in text) text = withImages(text.goal, text.images ?? []);
     const shown =
       typeof text === 'string'
         ? text
@@ -240,6 +255,8 @@ export function createUiController(
               .map((b) => b.text)
               .join('\n');
     if (shellRunning) {
+      if (typeof text !== 'string' && ('kind' in text ? text.images?.length : text.content.some((b) => b.type === 'image')))
+        notify('shell 正在执行，图片未保留', 'warn');
       store.setMeta((m) => ({ inputSeed: { key: m.inputSeed.key + 1, text: shown } }));
       store.addNotice('main', 'shell 正在执行，消息已保留在输入框；结束后可发送', 'info');
       return;
@@ -247,6 +264,11 @@ export function createUiController(
     if (running && session.loop.enqueue(text)) return store.setMeta((m) => ({ queued: [...m.queued, shown] }));
     if (typeof text === 'string' || !('kind' in text)) store.addUser('main', shown);
     pending = runTurn(text);
+    if (onComplete) pending = pending.then(onComplete);
+  }
+
+  function withImages(text: string, images: ImageBlock[]): RuntimeInput {
+    return images.length ? { role: 'user', content: [{ type: 'text', text }, ...images] } : text;
   }
 
   /** 内置命令优先；否则同名技能 → 作为一条用户消息交给模型 */
@@ -257,6 +279,7 @@ export function createUiController(
         store,
         exit: opts.exit,
         send,
+        notify,
         openProviders: opts.openProviders,
         clearScreen: opts.clearScreen,
         resumeSession,
@@ -285,9 +308,10 @@ export function createUiController(
     else store.addNotice('main', `可用 roast -r 恢复会话：${logPath}`, 'info');
   }
   return {
-    submit(text, raw) {
+    submit(text, raw, images = []) {
       appendHistory(cwd, raw);
       if (typeof text !== 'string') return send(text);
+      if (images.length && /^[/!#]/.test(text)) notify('图片只能随普通消息发送', 'warn');
       if (text.startsWith('/')) return void slash(text);
       if (text.startsWith('!')) {
         if (running) {
@@ -313,7 +337,8 @@ export function createUiController(
         );
         if (instruction) {
           if (historical(instruction.agent)) return store.addNotice('main', '历史成员，不可操作', 'warn');
-          if (instruction.agent === 'main') return send(instruction.body);
+          if (instruction.agent === 'main') return send(withImages(instruction.body, images));
+          if (images.length) return notify('图片只能发给 Queen', 'warn');
           const result = session.swarm.bus.send('main', {
             to: { agent: instruction.agent },
             kind: 'steer',
@@ -329,13 +354,16 @@ export function createUiController(
         if (!running) {
           const meta = store.getState().meta;
           try {
-            return send(missionInput(loadStrategies(cwd, roastHome(), { trusted: isProjectTrusted(cwd) }), text, meta.strategy, meta.n));
+            return send({
+              ...missionInput(loadStrategies(cwd, roastHome(), { trusted: isProjectTrusted(cwd) }), text, meta.strategy, meta.n),
+              ...(images.length ? { images } : {}),
+            });
           } catch (err) {
             return store.addNotice('main', err instanceof Error ? err.message : String(err), 'warn');
           }
         }
       }
-      send(text);
+      send(withImages(text, images));
     },
     interrupt() {
       if (running) abort?.abort();

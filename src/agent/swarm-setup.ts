@@ -40,8 +40,13 @@ import { CheckpointManager } from '../ext/audit/checkpoints.js';
 import { ShadowGit } from '../ext/audit/shadow-git.js';
 import type { HiveJournal } from '../swarm/hive-journal.js';
 import { canonicalPath } from '../core/paths.js';
+import { DIAGNOSTICS_KEY, type DiagnosticsHost } from '../tools/lsp/diagnostics.js';
+import { profileGuard, type AgentProfile } from '../swarm/profiles.js';
 
 export interface SwarmSetupInput {
+  profiles?: Map<string, AgentProfile>;
+  /** 主会话的诊断服务；成员共用它的 worker，只换工作区 */
+  diagnostics?: DiagnosticsHost;
   cwd: string;
   config: RoastConfig;
   mainRef: ModelRef;
@@ -80,7 +85,14 @@ export function setupSwarm(input: SwarmSetupInput): SwarmSetup {
   swarm.models ??= {};
   const modelFor = (role: AgentRole, override?: string, effort?: ReasoningEffort | null): ModelRef => {
     const ref = swarm.models?.[role];
-    const model = override ? parseModelRef(override) : ref && ref !== 'inherit' ? parseModelRef(ref) : { ...input.mainRef };
+    const model =
+      override === 'inherit'
+        ? { ...input.mainRef }
+        : override
+          ? parseModelRef(override)
+          : ref && ref !== 'inherit'
+            ? parseModelRef(ref)
+            : { ...input.mainRef };
     const profile = input.config.providers[model.provider];
     if (!profile) throw new RoastError('CONFIG', `未配置 provider ${model.provider}`);
     if (!isProjectTrusted(input.cwd) && untrustedProviderOverrides(input.cwd).includes(model.provider))
@@ -99,6 +111,7 @@ export function setupSwarm(input: SwarmSetupInput): SwarmSetup {
   const leases = new LeaseManager((id) => live.has(supervisor.info(id)?.state ?? 'done'));
   const lease = leaseHook(leases);
   const supervisor: Supervisor = new Supervisor({
+    profiles: input.profiles,
     mainLogPath: input.mainLog.path,
     runId: input.mainLog.header.runId,
     cwd: input.cwd,
@@ -124,6 +137,7 @@ export function setupSwarm(input: SwarmSetupInput): SwarmSetup {
       return s;
     },
     createRuntime({ id, role, log, services, boundary, modelRef, cwd, worktree }) {
+      if (input.diagnostics) services.set(DIAGNOSTICS_KEY, input.diagnostics.forWorkspace(cwd));
       if (worktree) services.set(EXECUTION_ROOT_KEY, worktree.root);
       if (READ_ONLY_ROLES.has(role)) services.set(READ_ONLY_ROLE_KEY, role);
       const checkpoints = new CheckpointManager(new ShadowGit(cwd), () => input.engine.mode);
@@ -151,6 +165,7 @@ export function setupSwarm(input: SwarmSetupInput): SwarmSetup {
             ...(input.prePermission ?? []),
             ...(worktree ? [worktreeGuardHook(worktree)] : []),
             roleGuardHook(role),
+            profileGuard(id, input.profiles?.get(supervisor.info(id)?.profile ?? '')),
             input.permissionHook,
             lease,
             checkpoint,

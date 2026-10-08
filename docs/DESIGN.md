@@ -78,7 +78,7 @@
 
 ### Hive 任务事件
 
-`hive/mission` 取代任务的那条 `user/message`，记录 `turn`、`at`、`missionId`、`goal`、`strategy`、`n`、`brief` 和可选 `readOnly`。任务编号 m1、m2……由运行时在会话内递增，恢复后继续计数。brief 渲染一次后写入日志，恢复时不重新读取策略或渲染简报。
+`hive/mission` 取代任务的那条 `user/message`，记录 `turn`、`at`、`missionId`、`goal`、`strategy`、`n`、`brief`，以及可选的 `readOnly` 和 `images`。history reducer 把 brief 文本和图片拼成同一条 user 消息，显示投影用 goal 加图片；没有 `images` 的旧日志行为不变。任务编号 m1、m2……由运行时在会话内递增，恢复后继续计数。brief 渲染一次后写入日志，恢复时不重新读取策略或渲染简报。
 
 模型读取完整 brief，UI reducer、transcript 和 `logs show` 投影原始 goal；stream-json 保留任务事件。简报是 user 内容，不加入 system。Deck / Chat 切换只改变 UI，不改 system、工具 schema 或历史前缀。`listTurns` 与抽取式摘要提取 brief 中的 `<goal>`，避免把策略指令当成用户目标。
 
@@ -423,6 +423,17 @@ strategyUsesN 根据 playbook 中允许空格的 n 占位符或 YAML n 判断，
 
 模型路由（`model-routing.ts`）：用户指定的角色模型（配置的 `swarm.models`、`--role-model`，包括 `inherit`）优先且锁定。其余角色由 Queen 通过 `configure_swarm` 或在 `spawn_agent` 时指定，可选范围是已配置、受信任的模型，Queen 能看到它们的价格和上下文长度。都没有指定时跟随主会话。
 
+### 自定义角色
+
+`swarm/profiles.ts` 依次读取 `~/.roast/agents`、`<cwd>/.claude/agents`、`<cwd>/.roast/agents`，同名后者覆盖。项目未信任时跳过两个项目目录并报告数量，因为 profile 可以选择付费模型。`.claude` 来源按宽松模式解析：Claude Code 的工具名映射为 RoastCli 工具名，模型别名和未知工具静默忽略。
+
+profile 清单在会话装配时渲染为 system 分段 `agents`（order 302），会话内不变；工具 schema 不随 profile 变化，全员相同，前缀缓存不受影响。profile 正文追加在角色卡的 duty 后，角色卡是成员的首条 user 消息。
+
+- `spawn_agent` 的 `agent` 参数选择 profile，role 可省略，与 profile 冲突时返回工具错误。
+- profile 的 model / effort 视为用户指定：优先于 `swarm.models[基础角色]`，Queen 传入不同值时报错；`inherit` 表示主模型。最终仍经 `modelFor` 校验 provider 已配置且受信任。
+- 工具白名单由 `profileGuard` 在角色守卫之后、权限检查之前拦截，只能收窄基础角色的范围；协作协议工具始终放行。
+- `AgentInfo.profile` 与 spawn_agent 结果 metadata 记录 profile，恢复时从 metadata 和调用参数重建；旧日志没有这些字段，按 id 前缀推断角色。
+
 ## 扩展
 
 装配代码在 `agent/extensions-setup.ts`（skills、记忆、prompt 覆盖、注入检查、代码索引）、`agent/hooks-setup.ts` 和 `agent/mcp-setup.ts`。子 agent 共用工具（包括 MCP）、system prompt、扩展服务、PreToolUse/PostToolUse 钩子和注入检查；Stop 和 UserPromptSubmit 钩子只作用于主会话。
@@ -443,6 +454,18 @@ system prompt 由 `agent/system-prompt.ts` 按 order 拼接：identity（0）、
 | 注入检查 | `ext/guard/injection.ts`：对 read、grep、bash、bash_output、web_fetch、web_search、search_code 和所有 MCP 工具的成功结果匹配中英文注入特征，命中时追加警告，不拦截 |
 
 `ext/http-json.ts` 是 Mem0 和向量服务共用的 HTTP 传输，限制响应大小，支持超时和中断，不跟随重定向，不回显远端的错误正文。
+
+### 自动诊断
+
+修改后诊断分三层：
+
+- `tools/lsp/diagnostics-core.ts`：纯逻辑。按 tsconfig / jsconfig 路径缓存 LanguageService（LRU 2 个，淘汰时 dispose）。tsconfig 只在首次或配置文件变化时解析；被检查的文件用内存文本和递增版本号，其他文件用 mtime + size 作为版本，外部修改能被感知。
+- `tools/lsp/diagnostics-worker.ts`：worker_threads 入口，处理带 id 的 check / warm 请求。
+- `tools/lsp/diagnostics.ts`：主线程。`DiagnosticsWorkerClient` 是会话内唯一的 worker，主会话和所有成员共用，请求串行排队；超时时 terminate worker 并跳过本次，下次请求重建，连续 3 次超时后会话内停用。`DiagnosticsHost` 只是某个工作区（主会话 cwd 或成员 worktree）的视图，决定文件是否在范围内，成员的 host 由主会话的 `forWorkspace` 派生，不拥有 worker。会话 shutdown 时关闭 worker。
+
+`commitWrite` 在写入前用旧文本查基线，写入后再查一次，按 `(code, message)` 多重集求差得到新增错误，位置不参与比较；基线失败时报告写入后的全部错误并注明“含已有错误”。等待基线期间重新比对文件字节，被外部改动就放弃写入。结果作为文本和 metadata 写进 tool/result，日志、恢复和 `Ctrl+O` 看到的内容一致。
+
+tsdown 单独产出 `dist/diagnostics-worker.js`，host 按 `import.meta.url` 寻址；源码和测试环境找不到 `.js` 时用同目录的 `.ts` 加 tsx 启动。`typescript` 是运行时依赖，`check:package` 和 CI 的全局安装冒烟会实际启动安装后的 worker。
 
 ## 测试
 

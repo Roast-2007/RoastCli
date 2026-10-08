@@ -25,6 +25,7 @@ import { COMMANDS, skillCommands, mcpPromptCommands } from './commands.js';
 import { FileIndex } from './input/files.js';
 import { loadHistory } from './input/history.js';
 import { createEditor, editorReducer, textOf, type EditorState } from './input/editor.js';
+import { readClipboardImage } from '../core/clipboard.js';
 import { InputBox } from './input/InputBox.js';
 import { Overlay } from './components/Overlay.js';
 import { Ignition, ROAST_LOGO } from './hive/Ignition.js';
@@ -393,9 +394,10 @@ function Workspace({
                 }}
                 deps={deps}
                 onHelp={() => store.setMeta({ overlay: 'help' })}
-                onSubmit={(text, raw) => {
+                attachments={{ cwd: session.log.header.cwd, readClipboard: readClipboardImage, notify: controller.notify }}
+                onSubmit={(text, raw, images) => {
                   leaveReading();
-                  controller.submit(text, raw);
+                  controller.submit(text, raw, images);
                 }}
               />
             )}

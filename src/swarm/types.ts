@@ -35,6 +35,7 @@ export interface Report {
 }
 
 export interface AgentInfo {
+  profile?: string;
   id: string;
   parentId: string | null;
   role: AgentRole;
@@ -58,6 +59,10 @@ export interface AgentInfo {
   worktree?: string;
   restored?: boolean;
   spawnTurn?: number;
+}
+
+export function agentLabel(agent: Pick<AgentInfo, 'id' | 'profile'>): string {
+  return `${agent.id}${agent.profile ? `·${agent.profile}` : ''}`;
 }
 
 /** 只有这些消息会唤醒处于等待中的 agent；info 等到下一次自然边界再送达 */

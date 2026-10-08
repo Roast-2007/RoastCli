@@ -14,10 +14,12 @@ import { readFileSync } from 'node:fs';
 import { Command } from 'commander';
 import { VERSION } from '../core/version.js';
 import { asRoastError, RoastError } from '../core/errors.js';
-import { createSession, type Session } from '../agent/session.js';
+import { createSession, type Session, type CreateSessionOptions } from '../agent/session.js';
 import { deriveDisplayMessages, deriveMessages, loadRunLog } from '../session/projection.js';
 import type { ContentBlock } from '../core/types.js';
-import { runPrintMode, runStreamJson } from '../cli/print-mode.js';
+import { runHeadless } from '../cli/headless.js';
+import { promptWithStdin } from '../cli/stdin.js';
+import { parseBudget, parseMaxSteps, parseToolRules } from '../cli/headless-options.js';
 import { findRunLog, listRuns, readHeader, resolveLogsRoot } from '../cli/logs.js';
 import { findLatestRunFor } from '../session/resume.js';
 import { canonicalPath } from '../core/paths.js';
@@ -36,6 +38,9 @@ import type { AgentRole } from '../swarm/types.js';
 import { terminalText } from '../core/terminal-text.js';
 import { runUpdate } from '../cli/update.js';
 import { runPricing } from '../cli/pricing.js';
+import { renderTranscriptMarkdown, writeTranscript } from '../session/export-markdown.js';
+import { describeProfiles, loadProfiles } from '../swarm/profiles.js';
+import { displaySource } from '../session/hive-restore.js';
 
 /**
  * 把 `roast -p ...` / `roast` 归一化为 `roast chat -p ...` / `roast chat`，
@@ -70,10 +75,14 @@ function normalizeArgv(argv: string[]): string[] {
 }
 
 interface ChatOptions {
+  maxSteps?: string;
+  maxBudgetUsd?: string;
+  allowedTools?: string[];
+  disallowedTools?: string[];
   chat?: boolean;
   solo?: boolean;
   hive?: boolean;
-  prompt?: RuntimeInput;
+  prompt?: RuntimeInput | true;
   model?: string;
   roleModels?: Partial<Record<AgentRole, string>>;
   continue?: boolean;
@@ -85,6 +94,11 @@ interface ChatOptions {
 }
 
 interface SwarmOptions {
+  listAgents?: boolean;
+  maxSteps?: string;
+  maxBudgetUsd?: string;
+  allowedTools?: string[];
+  disallowedTools?: string[];
   strategy?: string;
   listStrategies?: boolean;
   template?: string;
@@ -153,14 +167,10 @@ function resolveResumeLog(opts: ChatOptions): string | undefined {
 }
 
 /** createSession 的错误出口：配置缺失提示 example 并 exit 2，其余 exit 1 */
-async function openSession(opts: {
-  modelRef?: string;
-  resumeLogPath?: string;
-  permissionMode?: PermissionMode;
-  roleModels?: Partial<Record<AgentRole, string>>;
-}): Promise<Session> {
+async function openSession(opts: CreateSessionOptions): Promise<Session> {
   try {
     return await createSession({
+      ...opts,
       ...(opts.modelRef ? { modelRef: opts.modelRef } : {}),
       ...(opts.roleModels ? { roleModels: opts.roleModels } : {}),
       ...(opts.resumeLogPath ? { resumeLogPath: opts.resumeLogPath } : {}),
@@ -179,6 +189,16 @@ async function openSession(opts: {
 }
 
 async function runChat(opts: ChatOptions): Promise<void> {
+  const maxSteps = parseMaxSteps(opts.maxSteps);
+  const budget = parseBudget(opts.maxBudgetUsd, opts.prompt !== undefined);
+  const allowedTools = parseToolRules(opts.allowedTools),
+    disallowedTools = parseToolRules(opts.disallowedTools);
+  if (opts.outputFormat !== undefined && !['text', 'json', 'stream-json'].includes(opts.outputFormat))
+    throw new RoastError('INVALID_REQUEST', '未知输出格式（text / json / stream-json）');
+  if (opts.prompt === true || typeof opts.prompt === 'string') {
+    opts.prompt = await promptWithStdin(opts.prompt === true ? '' : opts.prompt, process.stdin, (text) => process.stderr.write(text));
+    if (!opts.prompt.trim()) throw new RoastError('INVALID_REQUEST', '请提供 -p "任务"，或通过管道传入任务');
+  }
   const permissionMode = parsePermissionMode(opts.permissionMode);
   const interactive = opts.prompt === undefined && !!process.stdin.isTTY && !!process.stdout.isTTY;
   if (opts.prompt === undefined && !interactive)
@@ -191,6 +211,9 @@ async function runChat(opts: ChatOptions): Promise<void> {
   const initialPrompt = typeof opts.initialPrompt === 'function' ? opts.initialPrompt() : opts.initialPrompt;
   const resumeLogPath = resolveResumeLog(opts);
   const session = await openSession({
+    maxSteps,
+    allowedTools,
+    disallowedTools,
     ...(opts.model ? { modelRef: opts.model } : {}),
     ...(opts.roleModels ? { roleModels: opts.roleModels } : {}),
     ...(resumeLogPath ? { resumeLogPath } : {}),
@@ -206,12 +229,14 @@ async function runChat(opts: ChatOptions): Promise<void> {
         process.exit(130); // 第二次 Ctrl+C 强退
       }
     });
-    const code =
-      opts.outputFormat === 'stream-json'
-        ? await runStreamJson(session, opts.prompt, process.stdout, controller.signal)
-        : await runPrintMode(session.loop, opts.prompt, process.stdout, process.stderr, controller.signal);
-    process.stderr.write(savedWorktreesText((await session.shutdown()).worktrees));
-    process.exit(controller.signal.aborted && code === 0 ? 130 : code);
+    const code = await runHeadless(session, opts.prompt as RuntimeInput, {
+      format: opts.outputFormat,
+      budget,
+      out: process.stdout,
+      err: process.stderr,
+      controller,
+    });
+    process.exit(code);
   }
   // 全屏对话 ⇄ Mission Control（Ctrl+G）；退出时中断进行中的 turn 并等它收尾再关日志
   const { runInteractive } = await import('../ui/screens.js');
@@ -297,7 +322,21 @@ async function main(): Promise<void> {
   program
     .command('chat', { isDefault: true })
     .description('启动交互式 REPL（默认命令）')
-    .option('-p, --prompt <prompt>', '管道模式：直接输出结果，不进 Ink')
+    .option('-p, --prompt [prompt]', '管道模式：直接输出结果，可读取 stdin')
+    .option('--max-steps <n>', '主会话步骤上限（1–1000）')
+    .option('--max-budget-usd <amount>', '管道模式预算（美元）')
+    .option(
+      '--allowed-tools <rules>',
+      '本次进程的 allow 规则，逗号分隔，可重复',
+      (value: string, previous: string[]) => [...previous, value],
+      [],
+    )
+    .option(
+      '--disallowed-tools <rules>',
+      '本次进程的 deny 规则，逗号分隔，可重复；不带括号的工具名同时对模型隐藏',
+      (value: string, previous: string[]) => [...previous, value],
+      [],
+    )
     .option('--chat', '本次启动进入 Chat')
     .option('--solo', '--chat 的别名')
     .option('--hive', '本次启动进入 Hive Deck')
@@ -305,7 +344,7 @@ async function main(): Promise<void> {
     .option('-c, --continue', '继续当前目录最近一次会话')
     .option('-r, --resume [runId]', '恢复指定会话（不带 id 时列出本目录最近会话）')
     .option('--permission-mode <mode>', '权限模式：default / acceptEdits / plan / yolo')
-    .option('--output-format <format>', '管道模式输出格式：text（默认）/ stream-json（含全部子 agent 事件）')
+    .option('--output-format <format>', '管道模式输出格式：text（默认）/ json / stream-json')
     .action(async (opts: ChatOptions) => {
       const model = opts.model ?? (program.opts()['model'] as string | undefined);
       await runChat({ ...opts, ...(model !== undefined ? { model } : {}) });
@@ -321,8 +360,23 @@ async function main(): Promise<void> {
     .option('-n, --n <count>', 'best-of-n 的候选数 / research 的角度数（默认 3）')
     .option('--list-templates', '列出可用的策略模板')
     .option('--list-strategies', '列出可用策略')
+    .option('--list-agents', '列出自定义 agent profiles')
     .option('-p, --print', '管道模式：不进入 TUI')
-    .option('--output-format <format>', 'text（默认）/ stream-json')
+    .option('--output-format <format>', 'text（默认）/ json / stream-json')
+    .option('--max-steps <n>', '主会话步骤上限（1–1000）')
+    .option('--max-budget-usd <amount>', '管道模式预算（美元）')
+    .option(
+      '--allowed-tools <rules>',
+      '本次进程的 allow 规则，逗号分隔，可重复',
+      (value: string, previous: string[]) => [...previous, value],
+      [],
+    )
+    .option(
+      '--disallowed-tools <rules>',
+      '本次进程的 deny 规则，逗号分隔，可重复；不带括号的工具名同时对模型隐藏',
+      (value: string, previous: string[]) => [...previous, value],
+      [],
+    )
     .option('-m, --model <provider:model>', '覆盖默认模型')
     .option(
       '--role-model <role=provider:model>',
@@ -332,19 +386,32 @@ async function main(): Promise<void> {
     )
     .option('--permission-mode <mode>', '权限模式：default / acceptEdits / plan / yolo')
     .action(async (goal: string[], opts: SwarmOptions) => {
+      if (opts.listAgents) {
+        const loaded = loadProfiles(process.cwd(), roastHome(), { trusted: isProjectTrusted(process.cwd()) });
+        process.stdout.write(describeProfiles(loaded.profiles) + '\n');
+        for (const warning of loaded.warnings) process.stderr.write(warning + '\n');
+        return;
+      }
       const config = loadConfig();
       const n = opts.n === undefined ? config?.swarm.n : parseN(opts.n);
       if (opts.listTemplates || opts.listStrategies) return void process.stdout.write(describeStrategies(swarmTemplates(), n) + '\n');
       const headless = opts.print === true || opts.outputFormat !== undefined;
-      if (goal.length === 0 && (headless || !process.stdin.isTTY || !process.stdout.isTTY))
+      const goalText = headless
+        ? await promptWithStdin(goal.join(' '), process.stdin, (text) => process.stderr.write(text))
+        : goal.join(' ');
+      if (!goalText.trim() && (headless || !process.stdin.isTTY || !process.stdout.isTTY))
         throw new RoastError('INVALID_REQUEST', '非 TTY 环境请提供蜂群目标');
       const prompt = () =>
-        missionInput(swarmTemplates(), goal.join(' '), opts.strategy ?? opts.template ?? config?.swarm.strategy ?? DEFAULT_STRATEGY, n);
+        missionInput(swarmTemplates(), goalText, opts.strategy ?? opts.template ?? config?.swarm.strategy ?? DEFAULT_STRATEGY, n);
       const roleModels = parseRoleModels(opts.roleModel ?? []);
       await runChat({
+        maxSteps: opts.maxSteps,
+        maxBudgetUsd: opts.maxBudgetUsd,
+        allowedTools: opts.allowedTools,
+        disallowedTools: opts.disallowedTools,
         hive: true,
         roleModels,
-        ...(goal.length ? (headless ? { prompt: prompt() } : { initialPrompt: prompt }) : {}),
+        ...(goalText ? (headless ? { prompt: prompt() } : { initialPrompt: prompt }) : {}),
         ...(opts.model ? { model: opts.model } : {}),
         ...(opts.permissionMode ? { permissionMode: opts.permissionMode } : {}),
         ...(opts.outputFormat ? { outputFormat: opts.outputFormat } : {}),
@@ -473,6 +540,19 @@ async function main(): Promise<void> {
     .command('list')
     .description('列出最近 20 次运行')
     .action(() => runLogsList());
+  logs
+    .command('export')
+    .description('导出主会话为 Markdown；省略文件时输出到 stdout')
+    .argument('<runId>')
+    .argument('[file]')
+    .action((runId: string, file?: string) => {
+      const logPath = findRunLog(resolveLogsRoot(), runId);
+      if (!logPath) throw new RoastError('INVALID_REQUEST', `未找到会话 "${runId}"`);
+      const { header, events } = loadRunLog(logPath);
+      const markdown = renderTranscriptMarkdown(header, header.version === 0 ? events : displaySource(logPath, resolveLogsRoot()).events);
+      if (file) process.stdout.write(`已导出 ${writeTranscript(process.cwd(), runId, markdown, file)}\n`);
+      else process.stdout.write(markdown);
+    });
   logs
     .command('show')
     .description('重建并打印某次运行的会话')

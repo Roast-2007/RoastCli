@@ -143,7 +143,7 @@ describe('fullscreen workspace in real Ink', () => {
     stdin.write('second');
     await frameContains(tty, 'second');
     await click('Enter 发送');
-    expect(submit).toHaveBeenCalledWith('first\nsecond', 'first\nsecond');
+    expect(submit).toHaveBeenCalledWith('first\nsecond', 'first\nsecond', []);
     expect(draft.state?.lines).toEqual(['']);
     await click('? 帮助');
     expect(store.getState().meta.overlay).toBe('help');

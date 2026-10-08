@@ -1,4 +1,4 @@
-import type { AgentInfo } from '../../swarm/types.js';
+import { agentLabel, type AgentInfo } from '../../swarm/types.js';
 import type { AgentView } from '../store/reducer.js';
 import { Pane } from './Pane.js';
 import { useTerminal } from '../terminal.js';
@@ -28,7 +28,7 @@ export function colonyLines(
     const state = idle ? '空闲' : (agent.waitingFor ?? agent.report?.status ?? view?.tools.at(-1)?.name ?? agent.state);
     const elapsed = idle ? 0 : Math.floor(((agent.endedAt ?? Date.now()) - (view?.turnStartedAt ?? agent.startedAt)) / 1000);
     return {
-      text: `${agent.id === selected ? '>' : ' '} ${'  '.repeat(agent.depth)}${ascii ? (agent.state === 'done' ? '+' : '*') : idle ? '·' : STATE_ICON[agent.state]} ${agent.id === 'main' ? 'queen' : agent.id}${agent.restored ? (ascii ? ' ~' : ' ↺') : ''} [${agent.role}] ${state} ${elapsed}s`,
+      text: `${agent.id === selected ? '>' : ' '} ${'  '.repeat(agent.depth)}${ascii ? (agent.state === 'done' ? '+' : '*') : idle ? '·' : STATE_ICON[agent.state]} ${agent.id === 'main' ? 'queen' : agentLabel(agent)}${agent.restored ? (ascii ? ' ~' : ' ↺') : ''} [${agent.role}] ${state} ${elapsed}s`,
       tone:
         agent.id === selected
           ? 'accent'

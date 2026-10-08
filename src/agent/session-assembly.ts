@@ -49,6 +49,8 @@ import { modelCatalogSection } from '../swarm/model-routing.js';
 import { displaySource, restoreHiveMembers, type RestoredMember } from '../session/hive-restore.js';
 import { HiveJournal, readHiveRecords } from '../swarm/hive-journal.js';
 import type { PreExecuteHook } from '../tools/tool.js';
+import { DiagnosticsHost, DIAGNOSTICS_KEY } from '../tools/lsp/diagnostics.js';
+import { loadProfiles, profilesSection } from '../swarm/profiles.js';
 
 /** 模型未配置 contextWindow 时的默认窗口 */
 const DEFAULT_CONTEXT_WINDOW = 128_000;
@@ -67,6 +69,7 @@ export interface AssemblyInput {
 }
 
 interface Core {
+  profiles: ReturnType<typeof loadProfiles>;
   services: MapToolServices;
   perms: PermissionSetup;
   instructions: InstructionFile[];
@@ -87,7 +90,10 @@ async function assembleCore(input: AssemblyInput): Promise<Core> {
   const fileStore = new FileStateStore();
   for (const [p, s] of opened.fileStates) fileStore.record(p, s);
   services.set(FS_STATE_KEY, fileStore);
+  services.set(DIAGNOSTICS_KEY, new DiagnosticsHost(cwd, input.config.diagnostics));
   const perms = setupPermissions({
+    allow: opts.allowedTools,
+    deny: opts.disallowedTools,
     cwd,
     services,
     readRoots: [cwd, runWorktreesDir(roastHome(), opened.log.header.runId)],
@@ -96,6 +102,9 @@ async function assembleCore(input: AssemblyInput): Promise<Core> {
   });
   const instructions = findInstructionFiles(cwd, { home: roastHome() });
   const systemPrompt = input.buildSystemPrompt(cwd, instructions);
+  const profiles = loadProfiles(cwd, roastHome(), { trusted: isProjectTrusted(cwd) });
+  const agents = profilesSection(profiles.profiles);
+  if (agents) systemPrompt.register({ name: 'agents', order: 302, text: agents });
   systemPrompt.register({ name: 'agent-models', order: 301, text: modelCatalogSection(input.config) });
   const ext = await setupExtensions({
     cwd,
@@ -107,7 +116,7 @@ async function assembleCore(input: AssemblyInput): Promise<Core> {
   });
   ext.provide(services);
   const hooks = await setupHooks({ cwd, sessionId: opened.log.header.runId, resumed: !!opened.resumedFrom, systemPrompt });
-  return { services, perms, instructions, systemPrompt, ext, hooks };
+  return { services, perms, instructions, systemPrompt, ext, hooks, profiles };
 }
 
 function contextFor(input: AssemblyInput, core: Core) {
@@ -134,6 +143,8 @@ function buildSwarm(
   sharedCheckpoint: PreExecuteHook,
 ) {
   return setupSwarm({
+    profiles: core.profiles.profiles,
+    diagnostics: core.services.get<DiagnosticsHost>(DIAGNOSTICS_KEY),
     cwd: input.cwd,
     config: input.config,
     mainRef: input.ref,
@@ -274,6 +285,7 @@ function startupWarnings(cwd: string, core: Core, mcp: McpSetup): string[] {
     ...core.ext.warnings,
     ...core.hooks.warnings,
     ...mcp.warnings,
+    ...core.profiles.warnings,
   ];
 }
 
@@ -317,14 +329,20 @@ function sessionApi(p: ApiParts): Session {
         }
       }
   }
-  listeners.usage.add((ref, event) => usageCost.observe(event, ref));
-  loop.committer.onCommit((event) => usageCost.observe(event));
+  const costListeners = new Set<() => void>();
+  const observeCost = (event: SessionEvent, ref?: ModelRef) => {
+    usageCost.observe(event, ref);
+    if (event.type === 'usage' || (event.type === 'context/compact' && event.auxUsage)) costListeners.forEach((listener) => listener());
+  };
+  listeners.usage.add((ref, event) => observeCost(event, ref));
+  loop.committer.onCommit((event) => observeCost(event));
   const previousModel = input.opened.events.filter((event) => event.type === 'model/change').at(-1) ?? input.opened.log.header;
   if ('provider' in previousModel && (previousModel.provider !== input.ref.provider || previousModel.model !== input.ref.model)) {
     loop.committer.commit({ type: 'model/change', at: new Date().toISOString(), ...input.ref });
     loop.committer.flush();
   }
   return {
+    profiles: core.profiles.profiles,
     loop,
     log: input.opened.log,
     config: input.config,
@@ -377,6 +395,10 @@ function sessionApi(p: ApiParts): Session {
     resume: input.resume,
     cost: () => usageCost.value(),
     costBreakdown: () => usageCost.breakdown(),
+    onCostChange(listener) {
+      costListeners.add(listener);
+      return () => costListeners.delete(listener);
+    },
     switchModel(value, effort) {
       if (loop.busy || swarm.tree().some((a) => a.parentId && ['queued', 'running', 'waiting', 'paused'].includes(a.state)))
         throw new RoastError('INVALID_REQUEST', '请等主会话和子 agent 空闲后切换模型');
@@ -428,6 +450,7 @@ function sessionApi(p: ApiParts): Session {
       p.lifetime.abort();
       await loop.whenIdle();
       await swarm.whenIdle();
+      await core.services.get<DiagnosticsHost>(DIAGNOSTICS_KEY)?.shutdown();
       // 没有改动的 worktree 删除；有未合并改动的保留在 ROAST_HOME/worktrees 下供检查
       const worktrees = await swarm.cleanupWorktrees();
       await input.mcp.manager.disconnectAll();

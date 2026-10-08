@@ -5,6 +5,7 @@ import { z } from 'zod';
 import { resolveUserPath } from '../../core/paths.js';
 import { applyEdit, commitWrite, loadForWrite } from '../file-ops.js';
 import { defineTool, textResult, toolErrorResult, type ToolResult } from '../tool.js';
+import { appendDiagnostics } from '../lsp/diagnostics.js';
 
 const editSchema = z.object({
   old_string: z.string().describe('要被替换的原始字符串（基于前序替换之后的内容）'),
@@ -40,14 +41,23 @@ export const multiEditTool = defineTool({
       content = r.content;
       total += r.count;
     }
-    const out = await commitWrite(abs, file.content, content, file.crlf, ctx.services);
-    return textResult(`multi_edit 完成：${abs}，${args.edits.length} 组替换共 ${total} 处（+${out.diff.added} -${out.diff.removed}）。`, {
-      path: abs,
-      replacements: total,
-      bytesBefore: file.bytes,
-      bytesAfter: out.bytes,
-      fileState: out.fileState,
-      diff: out.diff,
+    const out = await commitWrite(abs, file.content, content, file.crlf, ctx.services, {
+      expectedExists: true,
+      signal: ctx.signal,
+      diagnostics: true,
     });
+    return appendDiagnostics(
+      textResult(`multi_edit 完成：${abs}，${args.edits.length} 组替换共 ${total} 处（+${out.diff.added} -${out.diff.removed}）。`, {
+        path: abs,
+        replacements: total,
+        bytesBefore: file.bytes,
+        bytesAfter: out.bytes,
+        fileState: out.fileState,
+        diff: out.diff,
+      }),
+      out.diagnostics,
+      abs,
+      ctx.services,
+    );
   },
 });

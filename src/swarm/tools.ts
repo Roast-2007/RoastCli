@@ -8,7 +8,7 @@ import { ReasoningEffortSchema } from '../core/config.js';
 import { isMutating } from '../ext/audit/checkpoints.js';
 import { defineTool, textResult, toolErrorResult, type PreExecuteHook, type ToolContext, type ToolResult } from '../tools/tool.js';
 import type { Supervisor, WaitResult } from './supervisor.js';
-import { parseAddress, READ_ONLY_ROLES, type AgentRole, type Report } from './types.js';
+import { parseAddress, READ_ONLY_ROLES, agentLabel, type AgentRole, type Report } from './types.js';
 import { ISOLATION_MODES } from './isolation.js';
 import { formatProgress } from './progress.js';
 
@@ -59,9 +59,11 @@ function formatReports(r: WaitResult, age: (at: number) => number): string {
 
 export const spawnAgentTool = defineTool({
   name: 'spawn_agent',
-  description: '派生一个子 agent 并行处理子任务。role：lead / worker / scout / critic / judge。返回 agent id；完成后它会 report。',
+  description:
+    '派生一个子 agent 并行处理子任务。role：lead / worker / scout / critic / judge；agent 可选择已列出的自定义 profile（此时 role 可省略）。返回 agent id；完成后它会 report。',
   parameters: z.object({
-    role: z.enum(SPAWNABLE),
+    role: z.enum(SPAWNABLE).optional(),
+    agent: z.string().min(1).optional().describe('自定义 agent profile 名称；省略 role 时使用 profile 的基础角色'),
     task: z.string().min(1).describe('清晰、自包含的任务描述（子 agent 看不到你的对话历史）'),
     task_id: z.string().min(1).optional().describe('/mission/plan 中的任务 id'),
     refs: z.array(z.string()).optional().describe('参考资料：黑板键、文件路径或 ctx 句柄'),
@@ -80,6 +82,7 @@ export const spawnAgentTool = defineTool({
     if (!s) return toolErrorResult('spawn_agent', NO_SWARM);
     const r = s.supervisor.spawn(s.agentId, {
       role: args.role,
+      agent: args.agent,
       task: args.task,
       ...(args.task_id ? { taskId: args.task_id } : {}),
       ...(args.model ? { model: args.model } : {}),
@@ -88,7 +91,12 @@ export const spawnAgentTool = defineTool({
       ...(args.isolation ? { isolation: args.isolation } : {}),
     });
     if (!r.ok) return toolErrorResult('spawn_agent', r.reason);
-    return textResult(`已派生 ${r.id}（${args.role}）。它完成后会 report；可用 await_agents 等待，或继续做其他事。`, { agentId: r.id });
+    const info = s.supervisor.info(r.id)!;
+    return textResult(`已派生 ${agentLabel(info)}（${info.role}）。它完成后会 report；可用 await_agents 等待，或继续做其他事。`, {
+      agentId: r.id,
+      role: info.role,
+      ...(info.profile ? { profile: info.profile } : {}),
+    });
   },
 });
 
@@ -268,7 +276,7 @@ export const agentsStatusTool = defineTool({
       .tree()
       .map(
         (a) =>
-          `${'  '.repeat(a.depth)}${a.id} [${a.role}] ${a.state}${a.waitingFor ? `（${a.waitingFor}）` : ''} · ${a.model}${a.reasoningEffort ? ` / ${a.reasoningEffort}` : ''}：${a.brief.slice(0, 60)}${a.report ? ` → ${a.report.status}` : ''}`,
+          `${'  '.repeat(a.depth)}${agentLabel(a)} [${a.role}] ${a.state}${a.waitingFor ? `（${a.waitingFor}）` : ''} · ${a.model}${a.reasoningEffort ? ` / ${a.reasoningEffort}` : ''}：${a.brief.slice(0, 60)}${a.report ? ` → ${a.report.status}` : ''}`,
       );
     return textResult(
       lines.map((line, i) => `${line}\n${formatProgress(s.supervisor.tree()[i]!, (at) => s.supervisor.activityAge(at))}`).join('\n'),

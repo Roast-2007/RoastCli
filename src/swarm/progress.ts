@@ -1,7 +1,7 @@
-import type { AgentInfo } from './types.js';
+import { agentLabel, type AgentInfo } from './types.js';
 
 export function formatProgress(agent: AgentInfo, age: (at: number) => number = (at) => Date.now() - at): string {
-  const parts = [agent.id, agent.state];
+  const parts = [agentLabel(agent), agent.state];
   if (agent.steps !== undefined) parts.push(`步骤 ${agent.steps}${agent.maxSteps ? `/${agent.maxSteps}` : ''}`);
   if (agent.lastActivityAt !== undefined) {
     const ms = Math.max(0, age(agent.lastActivityAt));

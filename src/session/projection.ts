@@ -19,9 +19,30 @@ export function deriveMessages(events: (LogHeader | SessionEvent)[]): Message[] 
 
 /** Terminal history hides internal attachments and projects missions as goals. */
 export function deriveDisplayMessages(events: SessionEvent[]): Message[] {
-  return [...foldHistory(events.filter((event) => event.type !== 'attachment/injected').map((event): SessionEvent => event.type === 'hive/mission'
-    ? { type: 'user/message', turn: event.turn, at: event.at, seq: event.seq, message: { role: 'user', content: [{ type: 'text', text: `⬡ 任务 #${event.missionId.slice(1)} · ${event.strategy} · ${event.goal}` }] } }
-    : event)).messages];
+  return [
+    ...foldHistory(
+      events
+        .filter((event) => event.type !== 'attachment/injected')
+        .map(
+          (event): SessionEvent =>
+            event.type === 'hive/mission'
+              ? {
+                  type: 'user/message',
+                  turn: event.turn,
+                  at: event.at,
+                  seq: event.seq,
+                  message: {
+                    role: 'user',
+                    content: [
+                      { type: 'text', text: `⬡ 任务 #${event.missionId.slice(1)} · ${event.strategy} · ${event.goal}` },
+                      ...(event.images ?? []),
+                    ],
+                  },
+                }
+              : event,
+        ),
+    ).messages,
+  ];
 }
 
 /**

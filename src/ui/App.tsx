@@ -24,6 +24,7 @@ import { loadHistory } from './input/history.js';
 import { COMMANDS, skillCommands, mcpPromptCommands } from './commands.js';
 import { pickTheme, ThemeContext, useTheme } from './theme.js';
 import { createEditor, editorReducer, textOf, type EditorState } from './input/editor.js';
+import { readClipboardImage } from '../core/clipboard.js';
 import { QueueLine } from './hive/QueueLine.js';
 import { inlineLayout } from './layout.js';
 import { TerminalContext, terminalPreferences, useGlyphs } from './terminal.js';
@@ -368,7 +369,8 @@ function Shell({
                         draft.state = state;
                       }}
                       deps={deps}
-                      onSubmit={(text, raw) => controller.submit(text, raw)}
+                      attachments={{ cwd: session.log.header.cwd, readClipboard: readClipboardImage, notify: controller.notify }}
+                      onSubmit={(text, raw, images) => controller.submit(text, raw, images)}
                     />
                   </Box>
                 ) : null}

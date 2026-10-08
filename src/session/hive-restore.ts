@@ -65,7 +65,7 @@ export function restoreHiveMembers(
       }
     }
   }
-  type Spawn = { id: string; parentId: string; role: AgentRole; brief: string; taskId?: string; spawnTurn?: number };
+  type Spawn = { id: string; parentId: string; role: AgentRole; profile?: string; brief: string; taskId?: string; spawnTurn?: number };
   const spawns = new Map<string, Spawn>(),
     seenIds = new Set<string>();
   const scan = (parentId: string, events: readonly SessionEvent[], inherited?: number) => {
@@ -76,10 +76,25 @@ export function restoreHiveMembers(
         const call = calls.get(event.callId),
           id = event.metadata?.['agentId'];
         if (!call || typeof id !== 'string') continue;
-        const args = (call.args ?? {}) as { role?: AgentRole; task?: string; task_id?: string };
-        const role = args.role && Object.hasOwn(ROLE_INFO, args.role) ? args.role : inferRole(id);
+        const args = (call.args ?? {}) as { role?: AgentRole; agent?: string; task?: string; task_id?: string };
+        const savedRole = event.metadata?.['role'];
+        const role =
+          typeof savedRole === 'string' && Object.hasOwn(ROLE_INFO, savedRole)
+            ? (savedRole as AgentRole)
+            : args.role && Object.hasOwn(ROLE_INFO, args.role)
+              ? args.role
+              : inferRole(id);
+        const profile = typeof event.metadata?.['profile'] === 'string' ? event.metadata['profile'] : args.agent;
         const spawnTurn = parentId === 'main' ? call.turn : inherited;
-        spawns.set(id, { id, parentId, role, brief: typeof args.task === 'string' ? args.task : '', taskId: args.task_id, spawnTurn });
+        spawns.set(id, {
+          id,
+          parentId,
+          role,
+          ...(profile ? { profile } : {}),
+          brief: typeof args.task === 'string' ? args.task : '',
+          taskId: args.task_id,
+          spawnTurn,
+        });
         seenIds.add(id);
       }
       if (parentId === 'main' && event.type === 'rewind')

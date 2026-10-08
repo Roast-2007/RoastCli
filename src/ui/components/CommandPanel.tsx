@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { existsSync, writeFileSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Session } from '../../agent/session.js';
 import { saveConfigPatch } from '../../cli/provider-settings.js';
@@ -8,7 +8,9 @@ import { MODE_CYCLE, type PermissionMode } from '../../tools/permissions/engine.
 import { renderTodos } from '../../tools/interact/index.js';
 import type { UiController } from '../controller.js';
 import type { OverlayKind, UiStore } from '../store/store.js';
-import { INIT_TEMPLATE, skillPrompt } from '../commands.js';
+import { skillPrompt } from '../commands.js';
+import { initTarget } from '../init-prompt.js';
+import { agentLabel } from '../../swarm/types.js';
 import { formatCost } from '../status-info.js';
 import { formatUsageBreakdown } from '../../core/usage-cost.js';
 import { DEFAULT_THEME, THEMES } from '../theme.js';
@@ -115,21 +117,19 @@ export function CommandPanel({
   if (kind === 'init')
     return (
       <SelectPanel
-        title="创建 ROAST.md 项目说明"
+        title="初始化项目说明"
         height={height}
         onClose={close}
         entries={[
-          { id: 'create', label: '创建项目说明模板' },
+          { id: 'analyze', label: `分析仓库并生成/更新 ${initTarget(cwd)}` },
+          { id: 'create', label: `只创建空模板 ROAST.md${existsSync(join(cwd, 'ROAST.md')) ? '（已存在，不能覆盖）' : ''}` },
           { id: 'cancel', label: '返回' },
         ]}
         message={existsSync(join(cwd, 'ROAST.md')) ? 'ROAST.md 已存在' : '写入项目约定、常用命令和记忆'}
         onSelect={(entry) => {
           if (entry.id === 'cancel') return close();
-          const file = join(cwd, 'ROAST.md');
-          if (existsSync(file)) throw new Error(`ROAST.md 已存在：${file}`);
-          writeFileSync(file, INIT_TEMPLATE, { encoding: 'utf8', flag: 'wx' });
-          store.addNotice('main', `已创建 ${file}（下次会话生效）`, 'success');
           close();
+          controller.runCommand(entry.id === 'create' ? '/init template' : '/init');
         }}
       />
     );
@@ -239,7 +239,10 @@ export function CommandPanel({
         height={height}
         entries={store
           .getState()
-          .meta.swarm.map((info) => ({ id: info.id, label: `${info.id} [${info.role}] ${info.state} · ${info.model} · ${info.brief}` }))}
+          .meta.swarm.map((info) => ({
+            id: info.id,
+            label: `${agentLabel(info)} [${info.role}] ${info.state} · ${info.model} · ${info.brief}`,
+          }))}
         onClose={close}
         onSelect={(entry) => setAgent(entry.id)}
       />

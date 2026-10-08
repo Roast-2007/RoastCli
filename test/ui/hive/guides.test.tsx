@@ -55,7 +55,7 @@ describe('Hive guides, shared key bar and help', () => {
       const submit = vi.spyOn(f.controller, 'submit');
       await clickHint(f, '/ 命令'); expect(f.draft.state?.lines).toEqual(['/']);
       await f.send('strat'); await clickHint(f, 'Enter 发起任务');
-      expect(submit).toHaveBeenCalledWith('/strategy', '/strategy'); expect(f.draft.state?.lines).toEqual(['']);
+      expect(submit).toHaveBeenCalledWith('/strategy', '/strategy', []); expect(f.draft.state?.lines).toEqual(['']);
       expect(f.store.getState().meta.overlay).toBe('strategy');
       await f.send('\x1b'); await f.send('未发送草稿');
       await clickHint(f, '点击/F6 面板'); expect(f.tty.frame()).toContain('Space 菜单');

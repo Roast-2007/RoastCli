@@ -89,6 +89,13 @@ export const ConfigSchema = z.object({
   /** "provider:model"，例如 "deepseek:deepseek-chat" */
   default: z.string().min(3),
   maxSteps: z.number().int().positive().default(100),
+  diagnostics: z
+    .object({
+      enabled: z.boolean().default(true),
+      maxItems: z.number().int().min(1).max(50).default(10),
+      timeoutMs: z.number().int().min(1000).max(60000).default(8000),
+    })
+    .default({}),
   logsDir: z.string().default('logs'),
   temperature: z.number().min(0).max(2).optional(),
   /** 上下文引擎参数（见 docs/DESIGN.md「上下文引擎」） */
@@ -192,7 +199,8 @@ export type ProviderProfile = z.infer<typeof ProviderProfileSchema>;
 type ParsedConfig = z.infer<typeof ConfigSchema>;
 /** Programmatic callers may omit Hive preferences; parsed configuration resolves defaults. */
 type UiPreferences = NonNullable<ParsedConfig['ui']>;
-export type RoastConfig = Omit<ParsedConfig, 'swarm' | 'ui'> & {
+export type RoastConfig = Omit<ParsedConfig, 'swarm' | 'ui' | 'diagnostics'> & {
+  diagnostics?: Partial<ParsedConfig['diagnostics']>;
   ui?: Omit<UiPreferences, 'home' | 'notify' | 'title' | 'gutter' | 'mouse' | 'hints'> &
     Partial<Pick<UiPreferences, 'home' | 'notify' | 'title' | 'gutter' | 'mouse' | 'hints'>>;
   swarm: Omit<ParsedConfig['swarm'], 'strategy' | 'n' | 'maxSteps'> & { strategy?: string; n?: number; maxSteps?: number };

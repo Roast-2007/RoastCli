@@ -4,6 +4,7 @@
 import type { AgentRole } from './types.js';
 import { ROLE_PROMPT, SWARM_PROMPT } from './prompts.js';
 import { substitute } from './strategies.js';
+import type { AgentProfile } from './profiles.js';
 
 export const ROLE_INFO: Record<AgentRole, { name: string; prefix: string; duty: string }> = {
   queen: { name: '总指挥 Queen', prefix: 'q', duty: '理解用户目标，拆解为子任务派发给 Lead / Worker，汇总评审结果。' },
@@ -35,6 +36,7 @@ export const ROLE_INFO: Record<AgentRole, { name: string; prefix: string; duty: 
 };
 
 export function roleCard(opts: {
+  profile?: AgentProfile;
   id: string;
   role: AgentRole;
   parentId: string;
@@ -54,7 +56,7 @@ export function roleCard(opts: {
     parentId: opts.parentId,
     task: opts.task,
     maxSteps: String(opts.maxSteps ?? 150),
-    duty: substitute(info.duty, { id: opts.id }),
+    duty: substitute(info.duty, { id: opts.id }) + (opts.profile ? `\n\nProfile ${opts.profile.name}:\n${opts.profile.body}` : ''),
   });
 }
 

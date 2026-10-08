@@ -21,6 +21,8 @@ export interface PermissionSetup {
 }
 
 export interface PermissionSetupOptions {
+  allow?: string[];
+  deny?: string[];
   cwd: string;
   services: ToolServices;
   /** CLI 显式指定的模式（最高优先） */
@@ -34,9 +36,9 @@ export interface PermissionSetupOptions {
 export function setupPermissions(opts: PermissionSetupOptions): PermissionSetup {
   const rules = loadPermissionRules(opts.cwd);
   const engine = new PermissionEngine({
-    allow: rules.allow,
+    allow: [...rules.allow, ...(opts.allow ?? [])],
     ask: rules.ask,
-    deny: rules.deny,
+    deny: [...rules.deny, ...(opts.deny ?? [])],
     mode: opts.mode ?? opts.restored?.mode ?? rules.defaultMode ?? 'default',
     // 本次运行的蜂群 worktree 是用户仓库的副本：评审 / 裁判读取候选方案无需逐个审批
     ...(opts.readRoots ? { readRoots: opts.readRoots } : {}),

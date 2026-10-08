@@ -105,7 +105,8 @@ function applyMessages(state: HistoryState, ev: SessionEvent): HistoryState {
     }
     case 'hive/mission':
     case 'user/message': {
-      const message: Message = ev.type === 'hive/mission' ? { role: 'user', content: [{ type: 'text', text: ev.brief }] } : ev.message;
+      const message: Message =
+        ev.type === 'hive/mission' ? { role: 'user', content: [{ type: 'text', text: ev.brief }, ...(ev.images ?? [])] } : ev.message;
       const last = state.messages[state.messages.length - 1];
       const messages = last?.role === 'user' ? appendToTrailingUser(state.messages, message.content) : [...state.messages, message];
       return {

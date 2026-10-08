@@ -22,13 +22,18 @@ import { isProjectTrusted, roastHome, ReasoningEffortSchema } from '../core/conf
 import { missionInput, DEFAULT_STRATEGY, describeStrategies, loadStrategies, strategyUsesN } from '../swarm/strategies.js';
 import { setStrategy, strategyLabel, sessionStrategies } from './strategy.js';
 import type { RuntimeInput } from '../agent/runtime.js';
+import { initPrompt, initTarget } from './init-prompt.js';
+import { assistantAnswers, renderTranscriptMarkdown, writeTranscript } from '../session/export-markdown.js';
+import { writeClipboardText } from '../core/clipboard.js';
+import { agentLabel } from '../swarm/types.js';
 
 export interface CommandContext {
   session: Session;
   store: UiStore;
   exit(): void;
   /** 作为一条用户消息发给模型（/swarm 等） */
-  send?(text: RuntimeInput): void;
+  send?(text: RuntimeInput, onComplete?: () => void): void;
+  notify?(text: string, tone?: 'info' | 'warn'): void;
   openProviders?(): void;
   openOverlay?(overlay: OverlayKind): void;
   clearScreen?(): void;
@@ -44,6 +49,7 @@ export interface SlashCommand extends CommandInfo {
 export const KEYS_HELP = [
   '快捷键：',
   '  Enter 发送 · Shift+Enter / Ctrl+J / 行尾 \\ 换行 · ↑↓ 选择 · Tab 补全 · Ctrl+R 搜索历史',
+  '  Alt+V / Ctrl+V 附加剪贴板图片 · 拖入图片文件也会成为附件',
   '  ? / F1 帮助 · Esc 中断（空闲时连按两次：回退菜单）· Ctrl+C 中断 / 退出',
   '  Shift+Tab 切换权限模式 · 双击工具 / Ctrl+O 工具详情 · ←→ 切换 · Esc/Ctrl+O 关闭 · Ctrl+G Deck / Chat',
   '  鼠标滚轮翻阅聊天 · Shift+↑↓ / PgUp 阅读 · Home 顶部 · End / Enter / Esc 返回输入',
@@ -132,6 +138,36 @@ async function rewind(ctx: CommandContext, arg: string): Promise<void> {
 }
 
 export const COMMANDS: SlashCommand[] = [
+  {
+    name: 'export',
+    description: '导出主会话为 Markdown',
+    args: '[路径]',
+    run: (ctx, args) => {
+      const file = writeTranscript(
+        ctx.session.log.header.cwd,
+        ctx.session.log.header.runId,
+        renderTranscriptMarkdown(ctx.session.log.header, ctx.session.displayEvents()),
+        args || undefined,
+      );
+      (ctx.notify ?? ((text) => say(ctx, text)))(`已导出 ${file}`);
+    },
+  },
+  {
+    name: 'copy',
+    description: '复制最近的主会话回答',
+    args: '[N]',
+    run: async (ctx, args) => {
+      const n = args ? Number(args) : 1;
+      if (!Number.isInteger(n) || n < 1) return say(ctx, '用法：/copy [正整数 N]', 'warn');
+      const text = assistantAnswers(ctx.session.log.header, ctx.session.displayEvents()).at(-n);
+      if (!text) return say(ctx, '没有对应的回答可复制', 'warn');
+      const result = await writeClipboardText(text);
+      (ctx.notify ?? ((text, tone) => say(ctx, text, tone)))(
+        result.ok ? `已复制 ${Array.from(text).length} 个字符（${result.method}）` : result.reason,
+        result.ok ? 'info' : 'warn',
+      );
+    },
+  },
   {
     name: 'mouse',
     description: '开启或关闭鼠标操作',
@@ -256,13 +292,22 @@ export const COMMANDS: SlashCommand[] = [
   },
   {
     name: 'init',
-    description: '创建 ROAST.md 项目说明模板',
-    run: (ctx) => {
-      if (ctx.openOverlay) return ctx.openOverlay('init');
+    description: '分析仓库并生成或更新项目说明',
+    args: '[template]',
+    run: (ctx, args) => {
       const file = path.join(ctx.session.log.header.cwd, 'ROAST.md');
-      if (existsSync(file)) return say(ctx, `ROAST.md 已存在：${file}`, 'warn');
-      writeFileSync(file, INIT_TEMPLATE, 'utf8');
-      say(ctx, `已创建 ${file}（下次会话生效）`, 'success');
+      if (args === 'template') {
+        if (existsSync(file)) return say(ctx, `ROAST.md 已存在：${file}`, 'warn');
+        writeFileSync(file, INIT_TEMPLATE, { encoding: 'utf8', flag: 'wx' });
+        return say(ctx, `已创建 ${file}（下次会话生效）`, 'success');
+      }
+      if (args) return say(ctx, '用法：/init 或 /init template', 'warn');
+      if (ctx.session.loop.busy || ctx.store.getState().meta.running) return say(ctx, '请等主会话空闲后分析仓库', 'warn');
+      if (ctx.session.permissions.mode === 'plan') return say(ctx, 'plan 模式下不能生成说明文件，请先切换权限模式', 'warn');
+      if (!ctx.send) return say(ctx, '当前界面不支持分析仓库', 'warn');
+      ctx.send(initPrompt(initTarget(ctx.session.log.header.cwd)), () =>
+        (ctx.notify ?? ((text) => say(ctx, text)))('说明文件在下次会话生效'),
+      );
     },
   },
   {
@@ -356,7 +401,10 @@ export const COMMANDS: SlashCommand[] = [
             ctx,
             ctx.session.swarm
               .tree()
-              .map((agent) => `${'  '.repeat(agent.depth)}${agent.id} [${agent.role}] ${agent.state} · ${agent.model} · ${agent.brief}`)
+              .map(
+                (agent) =>
+                  `${'  '.repeat(agent.depth)}${agentLabel(agent)} [${agent.role}] ${agent.state} · ${agent.model} · ${agent.brief}`,
+              )
               .join('\n'),
           ),
   },

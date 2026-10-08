@@ -49,6 +49,7 @@ import type { RestoredMember } from '../session/hive-restore.js';
 import type { HiveState } from '../swarm/hive-journal.js';
 
 export interface Session {
+  profiles?: Map<string, import('../swarm/profiles.js').AgentProfile>;
   loop: AgentRuntime;
   log: RunLogWriter;
   config: RoastConfig;
@@ -66,6 +67,7 @@ export interface Session {
   /** 主会话费用估算；任一已用模型缺少定价时返回 null。 */
   cost(): number | null;
   costBreakdown?(): import('../core/usage-cost.js').UsageBreakdown;
+  onCostChange?(listener: () => void): () => void;
   resume(logPath: string): Promise<Session>;
   instructions: InstructionFile[];
   /** 已加载的技能（/技能名 斜杠命令、命令面板） */
@@ -105,6 +107,9 @@ export interface Session {
 }
 
 export interface CreateSessionOptions {
+  maxSteps?: number;
+  allowedTools?: string[];
+  disallowedTools?: string[];
   cwd?: string;
   /** 覆盖 config.default（"provider:model"） */
   modelRef?: string;
@@ -174,7 +179,11 @@ function requireConfig(cwd: string, injected: RoastConfig | undefined): RoastCon
 export async function createSession(opts: CreateSessionOptions = {}): Promise<Session> {
   const cwd = opts.cwd ?? process.cwd();
   const baseConfig = requireConfig(cwd, opts.config);
-  const config = { ...baseConfig, swarm: { ...baseConfig.swarm, models: { ...baseConfig.swarm.models, ...opts.roleModels } } };
+  const config = {
+    ...baseConfig,
+    ...(opts.maxSteps !== undefined ? { maxSteps: opts.maxSteps } : {}),
+    swarm: { ...baseConfig.swarm, models: { ...baseConfig.swarm.models, ...opts.roleModels } },
+  };
   const queen = config.swarm.models.queen;
   const ref = chooseModel(config, opts.modelRef ?? (queen && queen !== 'inherit' ? queen : undefined), opts.resumeLogPath);
   assertProviderTrusted(cwd, ref.provider);
@@ -189,6 +198,7 @@ export async function createSession(opts: CreateSessionOptions = {}): Promise<Se
   });
   const tools = createDefaultToolRegistry();
   const mcp = await setupMcp(cwd, tools, opts.mcpTransport);
+  tools.hide(opts.disallowedTools ?? []);
   try {
     return await assembleSession({
       cwd,

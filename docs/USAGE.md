@@ -161,6 +161,38 @@ prompt: |
 
 没有指定模型的角色，由 Queen 根据已配置模型的价格和上下文长度选择，信息不够时跟随主会话。你指定过的角色（包括 `inherit`）Queen 不能更改。
 
+### 自定义角色
+
+在内置角色之外，可以用 Markdown 文件定义自己的成员，例如专门审查安全问题的评审员。Queen 会在 system prompt 中看到这些角色的名称和说明，按需派生。
+
+```markdown
+---
+name: security-reviewer
+description: 审查改动中的注入、越权和密钥泄露
+role: critic
+model: deepseek:deepseek-reasoner
+reasoning_effort: high
+tools: read, grep, glob, bash
+---
+逐个检查改动涉及的输入边界，按严重程度列出问题，每条附上代码位置和修改建议。
+```
+
+| 字段 | 说明 |
+|---|---|
+| `name` | 小写字母开头，可含数字和连字符，最长 40 字符。省略时用文件名 |
+| `description` | 一句话说明用途，Queen 据此决定何时使用 |
+| `role` | 基础角色：`lead`、`worker`（默认）、`scout`、`critic`、`judge`。只读与否由基础角色决定 |
+| `model`、`reasoning_effort` | 可选，`provider:model` 或 `inherit`。指定后 Queen 不能更改 |
+| `tools` | 可选，逗号分隔或 YAML 数组，MCP 工具可写 `mcp__github__*`。省略时可用基础角色的全部工具 |
+
+正文是角色说明，追加在基础角色的职责后面，最多 8000 字符。
+
+文件放在 `~/.roast/agents/` 或项目的 `.roast/agents/` 下，同名时项目级优先。项目中的 `.claude/agents/` 也会读取，Claude Code 的工具名（Read、Edit、Bash 等）会自动转换；它特有的模型名（如 `sonnet`）和工具会被忽略，不提示。项目级角色可以选择付费模型和工具，所以项目没有信任时全部不加载，启动时会提示忽略的数量。`roast hive --list-agents` 列出当前可用的角色，格式有误的文件在启动警告和 `roast doctor` 中报告。
+
+- 模型的优先级：角色文件的 `model` → `swarm.models` 中为基础角色设置的模型 → Queen 选择 → 主会话模型。
+- `tools` 只能在基础角色的范围内收窄，不能让只读角色写文件。协作必需的工具（`report`、`send_message`、`await_agents`、黑板工具、`task`、`recall`、`todo_write`）始终可用，权限规则照常生效。
+- 蜂群树和 `/agents` 中显示为 `c1·security-reviewer`。
+
 ### worktree
 
 在 git 仓库中，worker 和 lead 默认各自在独立的 worktree 里改代码，完成后由上级审阅合并。合并前会先检查冲突，有冲突时一个文件也不会写入。只读角色和非 git 项目共用工作目录，通过文件租约避免两个 agent 同时改同一个文件。设置 `swarm.worktrees: false` 可以关闭 worktree。
@@ -277,22 +309,26 @@ echo "$API_KEY" | roast init --provider deepseek --api-key-stdin   # 或者从�
 |---|---|
 | `roast` | 按 `ui.home` 打开首页，默认 Hive Deck |
 | `roast --chat`（`--solo`） / `roast --hive` | 本次启动进入 Chat / Deck |
-| `roast -p "<任务>"` | 非交互执行，输出结果后退出。加 `--output-format stream-json` 以 JSON 行输出所有事件，包括子 agent |
+| `roast -p "<任务>"` | 非交互执行，输出结果后退出。可以从管道读取输入，见[管道模式](#管道模式) |
 | `roast -c` | 继续当前目录最近的会话 |
 | `roast -r [runId]` | 恢复指定会话；不带 ID 时列出当前目录最近 20 个会话 |
 | `roast -m provider:model` | 本次使用指定的模型 |
 | `roast --permission-mode <模式>` | 以指定权限模式启动：`default`、`acceptEdits`、`plan`、`yolo` |
+| `roast --max-steps <n>` | 本次主会话每个 turn 的步数上限，1–1000 |
+| `roast --allowed-tools <规则>` / `--disallowed-tools <规则>` | 本次运行额外放行 / 禁止的工具，见[临时工具规则](#临时工具规则) |
 | `roast hive [目标]`（`roast swarm`） | 打开 Deck 或立即发起任务，见 [Hive](#hive) |
 | `roast hive --strategy <名称> -n <数量> <目标>` | 指定策略和并行数，旧 `-t/--template` 仍可用 |
 | `roast hive --list-strategies` | 列出策略，旧 `--list-templates` 仍可用 |
+| `roast hive --list-agents` | 列出自定义角色，见[自定义角色](#自定义角色) |
 | `roast config` | 配置向导 |
 | `roast init` | 不经向导生成配置，见[不用向导](#不用向导) |
-| `roast doctor` | 检查 Node.js 版本、配置、密钥、信任状态、shell、git、ripgrep、项目说明、skills、hooks 和 MCP |
+| `roast doctor` | 检查 Node.js 版本、配置、密钥、信任状态、shell、git、ripgrep、项目说明、skills、自定义角色、hooks 和 MCP |
 | `roast pricing [list] [--all]` / `update` / `path` | 查看模型价格或整份价目、主动更新官方价目、查看价目路径 |
 | `roast trust` | 信任当前目录 |
 | `roast mcp add` / `list` / `remove` | 管理 MCP 服务器，见 [MCP](#mcp) |
 | `roast logs list` | 列出最近 20 次运行 |
 | `roast logs show <runId> [--raw]` | 从日志还原某次运行的对话，`--raw` 输出原始事件 |
+| `roast logs export <runId> [文件]` | 把某次运行的对话导出为 Markdown，不给文件时输出到 stdout |
 | `roast worktrees list` / `prune` | 查看或清理蜂群保留下来的 worktree |
 | `roast update` | 从官方 GitHub Release 更新全局安装；`--check` 只检查、不安装 |
 | `roast --version` | 显示版本 |
@@ -307,6 +343,53 @@ Windows 上 bash 工具和 `!命令` 优先使用 Git Bash（`C:\Program Files\G
 
 更新完全自愿：退出会话后运行 `roast update`，它会调用 npm 安装对应版本的官方发布附件。`roast update --check` 只检查。npm 不可用或安装失败时会给出手动安装指令，不自动提权。Windows 执行策略拦截命令时用 `roast.cmd update`、`npm.cmd`。
 
+### 管道模式
+
+`roast -p` 和 `roast hive --print`（`roast swarm --print`）不进入界面，直接执行并输出结果，可以从管道读取输入：
+
+```sh
+git diff | roast -p "审查这个补丁"     # 管道内容作为附带材料
+git diff | roast -p                    # 管道内容就是任务
+roast -p "总结失败原因" < test.log
+cat goal.txt | roast hive --print
+```
+
+- 同时给了任务和管道输入时，管道内容放在 `<stdin>` 标签里，接在任务后面。
+- 给了任务时，如果 3 秒内管道没有任何输出，RoastCli 会忽略 stdin 继续执行，避免 CI 中一直不关闭的 stdin 卡住运行。输出很慢的命令，先写到文件再用 `< 文件` 传入。只用管道内容作为任务时会一直等到输入结束。
+- 管道输入最多 10 MiB。交互模式不读取 stdin。
+- Windows PowerShell 5.1 默认用 ASCII 编码传给外部程序，管道里的中文会变成问号。先运行 `$OutputEncoding = [Text.UTF8Encoding]::new()`，或改用 `< 文件`。
+
+`--output-format` 控制输出：
+
+| 格式 | 输出 |
+|---|---|
+| `text`（默认） | 流式输出回答，工具调用显示为一行摘要 |
+| `stream-json` | 每行一个 JSON 事件，包括所有子 agent |
+| `json` | 运行期间 stdout 不输出，结束时输出一行结果 |
+
+`json` 的结果格式：
+
+```json
+{"type":"result","subtype":"success","isError":false,"result":"最后一条回答","runId":"…","logPath":"…","model":"provider:model","durationMs":1234,"steps":2,"usage":{"input":10,"output":5,"cacheRead":0,"cacheWrite":0},"costUsd":0.00002,"worktrees":[]}
+```
+
+`subtype` 可能是 `success`、`error`、`aborted`、`max-steps` 或 `budget`，其中 `error` 和 `budget` 会另带 `error: {"code", "message"}` 字段。`usage` 和 `costUsd` 包括主会话、子 agent 和上下文摘要；用到的模型中有任何一个缺少定价，`costUsd` 为 `null`。错误和重试提示仍写到 stderr，退出码与 `text` 相同。
+
+`--max-budget-usd <金额>` 为本次运行设置费用上限，只能在管道模式使用。主模型没有定价时直接拒绝运行。每次请求返回用量后检查累计费用，达到上限，或者某个用到的模型缺少定价时，中断主会话并取消所有成员，退出码为 1。由于是在请求结束后检查，实际花费可能超出上限，超出的部分最多是最后一次请求的费用。
+
+### 临时工具规则
+
+`--allowed-tools` 和 `--disallowed-tools` 为本次运行追加 allow / deny 规则，语法和[规则](#规则)相同，Chat、Deck 和管道模式都可以用：
+
+```sh
+roast -p "修复 lint 错误" --allowed-tools "edit(src/**),bash(pnpm lint:*)" --disallowed-tools web_fetch,web_search
+```
+
+- 一个参数里可以用逗号写多条规则，括号内的逗号不拆开；也可以重复使用同一个参数。
+- 不带括号的禁止项（如 `web_fetch`、`mcp__github__*`）还会把这些工具从模型的工具列表中移除，主会话和所有成员都看不到。
+- deny 规则优先级最高；plan 模式、高危命令确认、只读角色和 worktree 边界照常生效。
+- 规则只在本次进程中有效，不写入配置、项目授权或会话日志，恢复会话时需要重新指定。
+
 ## Chat
 
 Chat 是单 agent 对话工作面，用 `--chat`、`/chat` 或 `Ctrl+G` 进入。标题只占一行，输入框和状态栏固定在底部，空白页只显示暗色字标。完整环境与配置状态用 `/status` 查看。
@@ -316,6 +399,7 @@ Chat 是单 agent 对话工作面，用 `--chat`、`/chat` 或 `Ctrl+G` 进入�
 | 按键 | 作用 |
 |---|---|
 | `Enter` | 发送 |
+| `Alt+V` / `Ctrl+V` | 附加剪贴板中的图片，见[图片附件](#图片附件) |
 | `Shift+Enter`、`Alt+Enter`、`Ctrl+J`，或在行尾输入 `\` | 换行 |
 | `Esc` | 运行中：中断。空闲时在 600 毫秒内按两次：打开回退菜单 |
 | `Ctrl+C` | 运行中中断；空闲清草稿；无草稿时提示，两秒内再按一次退出 |
@@ -347,10 +431,44 @@ Chat 是单 agent 对话工作面，用 `--chat`、`/chat` 或 `Ctrl+G` 进入�
 - `!` 开头直接在当前目录执行 shell 命令，结果只显示在界面上，**不会发给模型**。默认超时 600 秒，可以用 `ui.shellTimeoutMs` 调整（1 秒到 24 小时）。完整输出在 `Ctrl+O` 里查看。agent 运行时不能执行。
 - `#` 开头会把这句话追加到当前目录 `ROAST.md` 的 `## 记忆` 一节，下次会话生效。
 - 超过 5 行的粘贴会折叠成 `[粘贴 N 行]`，发送时展开。
+- 粘贴或拖入图片文件路径会变成图片附件，见[图片附件](#图片附件)。
 
 agent 运行时输入的消息会排队，在下一个 step 送达，不用先中断。中断时，排队的内容会放回输入框。
 
 输入历史按项目保存，最多 500 条。
+
+### 图片附件
+
+Chat 和 Deck 都可以把截图、设计稿或报错图片直接发给模型，模型需要支持视觉。
+
+- **剪贴板**：按 `Alt+V` 或 `Ctrl+V`。Windows Terminal 会把 `Ctrl+V` 当作文本粘贴自己处理，Windows 上请用 `Alt+V`；macOS 的 Option 键默认不发送 Alt，请用 `Ctrl+V`。在 Windows 资源管理器中复制的图片文件也可以这样附加。
+- **图片路径**：把图片文件拖进终端，或粘贴图片路径，会自动变成附件。粘贴的内容必须全部是存在的图片路径（可以多行，每行一个），否则按普通文本粘贴。
+
+附加后输入框中出现 `[图片 #1]` 这样的占位符，上方显示图片数量。删掉占位符就不会发送这张图片；占位符本身会保留在消息里，方便在文字中指代“图片 #1”。支持 PNG、JPEG、GIF 和 WebP，单张不超过 5 MiB，一条消息最多 8 张、合计不超过 20 MiB。
+
+- 图片只发给主会话（Deck 中是 Queen）。Deck 空闲时随新任务发送，运行中随插话排队；`@成员` 的指示不能带图片。
+- `/`、`!`、`#` 开头的输入会忽略图片。输入历史只保存文字。
+- 图片还在读取时按 `Enter` 不会发送。切换 Deck / Chat 时，草稿中的图片会保留。
+- 如果模型返回请求无效的错误，会提示当前模型可能不支持图片。
+
+读取剪贴板时，Windows 使用系统自带的 PowerShell，macOS 使用 `osascript`，Linux 需要安装 `wl-clipboard`（Wayland）或 `xclip`（X11）。
+
+### 生成项目说明
+
+`/init` 让 agent 分析当前仓库并写出项目说明：它会阅读 README、包清单、CI、测试和格式化配置、目录结构以及已有的说明文件，整理出项目概述、常用命令、目录结构、约定和注意事项，控制在 150 行左右。只写配置中确认过的命令，分析过程中不运行安装或构建。
+
+- 写入当前目录中第一个存在的 `ROAST.md`、`AGENTS.md` 或 `CLAUDE.md`，都没有时新建 `ROAST.md`。
+- 文件已存在时在原有内容上改进，`## 记忆` 一节原样保留。
+- 写文件照常经过权限确认。需要主会话空闲，plan 模式下不能使用。新的说明在下次会话生效。
+- 只想要一个空模板时用 `/init template`，`ROAST.md` 已存在时不会覆盖。
+
+### 导出与复制
+
+`/export [路径]` 把主会话的对话导出为 Markdown，包括你的消息、回答和工具调用，工具输出每个最多保留 30 行，不包含模型的思考过程。不给路径时写到当前目录的 `roast-export-<runId>.md`，重名时自动加 `-2`、`-3`；指定的文件已存在时不会覆盖。导出文件在项目目录里，注意不要误提交。
+
+`roast logs export <runId> [文件]` 在会话外导出任意一次运行，不给文件时输出到 stdout。
+
+`/copy [N]` 把倒数第 N 条回答（默认最后一条）复制到系统剪贴板。Windows、macOS 和 Linux 分别使用 PowerShell、`pbcopy` 和 `wl-copy` / `xclip` / `xsel`。通过 SSH 连接或系统剪贴板不可用时，改用终端的 OSC 52 复制，需要终端支持；内容较长时会提示改用 `/export`。
 
 ### 斜杠命令
 
@@ -368,7 +486,9 @@ agent 运行时输入的消息会排队，在下一个 step 送达，不用先�
 | `/compact [关注点]` | 立即压缩上下文，关注点会交给摘要模型 |
 | `/cost` | 费用明细 |
 | `/todo` | 任务清单 |
-| `/init` | 在当前目录创建 `ROAST.md` 模板 |
+| `/init [template]` | 分析仓库，生成或更新项目说明，见[生成项目说明](#生成项目说明)；`template` 只创建空模板 |
+| `/export [路径]` | 把对话导出为 Markdown，见[导出与复制](#导出与复制) |
+| `/copy [N]` | 复制倒数第 N 条回答，默认最后一条 |
 | `/memory [关键词]` | 查看或搜索长期记忆 |
 | `/skills` | 选择并运行技能 |
 | `/mcp` | MCP 服务器的连接状态 |
@@ -544,6 +664,29 @@ Brave 和 Tavily 需要密钥。目前没有命令可以添加，需要手动在
 
 其他语言可以通过 MCP 接入对应的语义工具。
 
+### 修改后自动诊断
+
+`edit`、`multi_edit` 或 `write` 改完 TS/JS 文件后，RoastCli 会用 TypeScript 检查这个文件，把这次修改**新引入**的错误附在工具结果后面，模型可以当场修正：
+
+```
+诊断：新增 1 个 TypeScript 错误
+src/app.ts:12:5 TS2304 Cannot find name 'foo'.
+```
+
+- 只在文件所在目录或上级目录（不超出工作区）有 `tsconfig.json` 或 `jsconfig.json` 时检查。
+- 修改前就存在的错误不会报告，位置移动了也能识别。没有新增错误时不附加任何内容。
+- 只检查改动的这个文件，不检查其他文件因此产生的错误。
+- 检查在后台线程中进行，不会卡住界面，主会话和所有成员共用一个检查进程。读取 TS/JS 文件时会提前加载项目，第一次修改不用等太久。单次检查超时就跳过，连续超时三次后本次会话不再检查。
+- `Ctrl+O` 的工具详情中也能看到诊断结果。
+
+用 `diagnostics` 配置调整，或设置环境变量 `ROAST_DIAGNOSTICS=0` 关闭：
+
+```json
+{ "diagnostics": { "enabled": true, "maxItems": 10, "timeoutMs": 8000 } }
+```
+
+`maxItems` 是每次最多列出的错误数（1–50），`timeoutMs` 是单次检查的超时（1000–60000 毫秒）。
+
 ### 提示注入检查
 
 `read`、`grep`、`bash`、`bash_output`、`web_fetch`、`web_search`、`search_code` 和所有 MCP 工具的结果中，如果出现疑似提示注入的内容，会在结果后面附加警告。只提示，不拦截。
@@ -552,7 +695,7 @@ Brave 和 Tavily 需要密钥。目前没有命令可以添加，需要手动在
 
 ### 项目说明
 
-从 git 根目录到当前目录，每一层取第一个存在的 `ROAST.md`、`AGENTS.md` 或 `CLAUDE.md`，再加上用户级的 `~/.roast/ROAST.md`，一起放进 system prompt，总共最多 4 万字符。`/init` 可以生成一个 `ROAST.md` 模板。
+从 git 根目录到当前目录，每一层取第一个存在的 `ROAST.md`、`AGENTS.md` 或 `CLAUDE.md`，再加上用户级的 `~/.roast/ROAST.md`，一起放进 system prompt，总共最多 4 万字符。`/init` 可以让 agent 分析仓库后写好这份说明，见[生成项目说明](#生成项目说明)。
 
 ### Skills
 
@@ -652,7 +795,7 @@ roast mcp remove github
 
 ### Prompt 覆盖
 
-`.roast/prompts/<名称>.md` 或 `~/.roast/prompts/<名称>.md` 会替换同名的 system prompt 分段，项目级优先。可以替换的分段有 `identity`（身份和总体准则）、`environment`（工作目录、平台、日期）、`swarm`（蜂群说明）、`agent-models`（可用模型），以及存在时的 `instructions`（项目说明）、`skills` 和 `memory`。其他名字会作为新的分段追加到末尾。文件中可以使用 `{{cwd}}`、`{{date}}`、`{{platform}}`。
+`.roast/prompts/<名称>.md` 或 `~/.roast/prompts/<名称>.md` 会替换同名的 system prompt 分段，项目级优先。可以替换的分段有 `identity`（身份和总体准则）、`environment`（工作目录、平台、日期）、`swarm`（蜂群说明）、`agent-models`（可用模型），以及存在时的 `agents`（自定义角色列表）、`instructions`（项目说明）、`skills` 和 `memory`。其他名字会作为新的分段追加到末尾。文件中可以使用 `{{cwd}}`、`{{date}}`、`{{platform}}`。
 
 ## 配置参考
 
@@ -682,6 +825,7 @@ roast mcp remove github
 | `providers.<id>.models.<模型>` | `contextWindow`、`maxTokens`、`pricing`、`reasoning`、`reasoningEffort`、`reasoningEfforts`、`reasoningReplay`；Anthropic 另有 `thinkingBudget`，OpenAI 兼容另有 `maxTokensField` |
 | `default` | 默认模型，格式为 `provider:model` |
 | `maxSteps` | 主会话每个 turn 最多的 step 数，默认 100 |
+| `diagnostics` | `enabled`（默认 `true`）、`maxItems`（默认 10）、`timeoutMs`（默认 8000），见[修改后自动诊断](#修改后自动诊断) |
 | `temperature` | 0–2 |
 | `logsDir` | 运行日志目录，默认 `logs`，**相对于当前目录**。记得加进项目的 `.gitignore`，或改成绝对路径 |
 | `debugLog` | 记录完整的请求体，也可以用环境变量 `ROAST_DEBUG_LOG=1` 开启 |
@@ -717,6 +861,7 @@ roast mcp remove github
 | `ROAST_REDUCED_MOTION=1` | 关闭动画 |
 | `ROAST_RG_PATH` | 指定 ripgrep 路径。默认依次查找 PATH、安装包自带的 ripgrep，都没有时使用较慢的内置搜索 |
 | `ROAST_DEBUG_LOG=1` | 记录完整请求体 |
+| `ROAST_DIAGNOSTICS=0` | 关闭修改后自动诊断 |
 | `MEM0_API_KEY` | Mem0 密钥的默认来源 |
 
 ### 文件位置
@@ -736,6 +881,7 @@ roast mcp remove github
 | `indexes/` | 代码向量缓存 |
 | `worktrees/` | 蜂群 worktree |
 | `skills/`、`prompts/`、`strategies/`、`templates/` | 用户级技能、prompt 覆盖和 Hive 策略（兼容模板） |
+| `agents/` | 用户级自定义角色 |
 
 项目目录：
 
@@ -744,6 +890,8 @@ roast mcp remove github
 | `.roast/config.json` | 项目配置 |
 | `.roast/shadow.git`、`.roast/snapshots/` | 检查点 |
 | `.roast/skills/`、`.roast/prompts/`、`.roast/strategies/`、`.roast/templates/` | 项目级技能、prompt 覆盖和 Hive 策略（兼容模板） |
+| `.roast/agents/`、`.claude/agents/` | 项目级自定义角色，项目受信任后才加载 |
+| `roast-export-<runId>.md` | `/export` 的默认导出文件 |
 | `ROAST.md` | 项目说明，`#` 写入的记忆也在这里 |
 | `logs/` | 运行日志（默认位置） |
 | `logs/<日期>/<runId>/log.jsonl`、`agents/<成员>.jsonl` | Queen 和子 agent 的主日志、子日志 |

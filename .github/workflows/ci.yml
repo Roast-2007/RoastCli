@@ -45,3 +45,5 @@ jobs:
           test "$(roast --version)" = "$(node -p 'require("./package.json").version')"
           roast --help
           roast config --help
+          installed_modules="$(npm root --global --prefix "$temporary_root/roastcli-install")"
+          node scripts/check-installed-diagnostics.mjs "$installed_modules/roastcli"

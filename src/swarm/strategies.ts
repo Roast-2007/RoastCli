@@ -2,6 +2,7 @@ import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import { BRIEF_PROMPT, PLAYBOOKS } from './prompts.js';
+import type { ImageBlock } from '../core/types.js';
 
 export interface HiveStrategy {
   name: string;
@@ -12,6 +13,7 @@ export interface HiveStrategy {
   readOnly?: boolean;
 }
 export interface MissionInput {
+  images?: ImageBlock[];
   kind: 'mission';
   goal: string;
   strategy: HiveStrategy;

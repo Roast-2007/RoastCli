@@ -3,7 +3,7 @@
  * Ink TUI 与 `-p` 管道模式消费同一个 AsyncGenerator<UiEvent>。
  */
 import type { RoastError } from '../core/errors.js';
-import type { TokenUsage } from '../core/types.js';
+import type { ImageBlock, TokenUsage } from '../core/types.js';
 
 export type TurnEndReason = 'completed' | 'aborted' | 'error' | 'max-steps';
 
@@ -18,6 +18,7 @@ export type UiEvent =
       n: number;
       brief: string;
       readOnly?: boolean;
+      images?: import('../core/types.js').ImageBlock[];
     }
   | { type: 'turn-start'; turn: number }
   | { type: 'text-delta'; text: string }
@@ -42,7 +43,7 @@ export type UiEvent =
       metadata?: Record<string, unknown>;
     }
   /** 运行中排队的用户插话已送达模型 */
-  | { type: 'user-injected'; text: string }
+  | { type: 'user-injected'; text: string; images?: ImageBlock[] }
   /** 中断后未送达的排队插话（UI 可放回输入框） */
   | { type: 'queue-restored'; texts: string[] }
   /** 运行时提示（不进模型上下文），如"上下文已压缩" */

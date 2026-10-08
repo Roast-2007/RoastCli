@@ -18,6 +18,8 @@ import { ThemeContext, pickTheme, useTheme } from '../theme.js';
 import { TerminalContext, terminalPreferences, useTerminal } from '../terminal.js';
 import { InputBox } from '../input/InputBox.js';
 import { createEditor, editorReducer, textOf, type EditorState } from '../input/editor.js';
+import { readClipboardImage } from '../../core/clipboard.js';
+import { agentLabel } from '../../swarm/types.js';
 import { suggestions } from '../input/suggest.js';
 import { loadHistory } from '../input/history.js';
 import { FileIndex } from '../input/files.js';
@@ -451,7 +453,7 @@ function Workspace({ session, store, controller, onExit, inputDraft, initialProm
       : {}),
     signalLines: signalLines(session, ui),
     signalPinned: pinnedSignals(ui),
-    memberLabel: current ? `${current.id === 'main' ? 'queen' : current.id} ${current.role}` : undefined,
+    memberLabel: current ? `${current.id === 'main' ? 'queen' : agentLabel(current)} ${current.role}` : undefined,
     modeWidth: modeWidth(ui.meta.mode),
     strategyWidth: displayWidth(chip),
     interaction: Boolean(card),
@@ -667,7 +669,7 @@ function Workspace({ session, store, controller, onExit, inputDraft, initialProm
                 title={
                   planZoom.active
                     ? '计划详情 · Enter / 双击展开 · Esc 返回'
-                    : `${current?.id === 'main' ? 'queen' : current?.id} ${current?.role} · 输出 · ${selectedView?.running ? '运行中' : current?.parentId ? current.state : phase}`
+                    : `${current?.id === 'main' ? 'queen' : current ? agentLabel(current) : ''} ${current?.role} · 输出 · ${selectedView?.running ? '运行中' : current?.parentId ? current.state : phase}`
                 }
                 rows={planZoom.active ? planLines : zoomRows}
                 start={planZoom.active ? planZoom.start : zoomStart}
@@ -770,7 +772,8 @@ function Workspace({ session, store, controller, onExit, inputDraft, initialProm
                   deps={deps}
                   maxHeight={layout.input - (layout.input >= 2 ? 1 : 0)}
                   onHelp={() => store.setMeta({ overlay: 'help' })}
-                  onSubmit={(text, raw) => controller.submit(text, raw)}
+                  attachments={{ cwd: session.log.header.cwd, readClipboard: readClipboardImage, notify: controller.notify }}
+                  onSubmit={(text, raw, images) => controller.submit(text, raw, images)}
                 />
               </>
             )}

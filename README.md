@@ -10,6 +10,9 @@
 - 每个 turn 第一次改文件前自动打快照，`/rewind` 可以同时回退文件和对话。`roast -c` 继续上次的会话。
 - 四种权限模式，可以按规则放行或拒绝命令。高危命令即使在 yolo 模式下也要你确认。
 - 支持 skills、MCP、hooks、长期记忆、代码检索、网页搜索和读取图片，内置 TS/JS 的引用查找和跨文件重命名。
+- 可以把截图直接贴进输入框发给模型；`git diff | roast -p "评审"` 这样从管道传入材料，`--output-format json` 和费用上限方便在脚本和 CI 中使用。
+- 在 `.roast/agents/` 中用 Markdown 定义自己的成员角色，指定职责、模型和可用工具，也能读取项目里 Claude Code 的 `.claude/agents/`。
+- 改完 TS/JS 文件后自动检查新引入的类型错误，并反馈给模型。
 
 ## 安装
 
@@ -54,6 +57,7 @@ roast --chat   # 直接进入单 agent 的 Chat
 |---|---|
 | `Enter` | 空闲 Deck 发起任务；运行中给 Queen 插话 |
 | `Shift+Enter` 或 `Ctrl+J` | 换行 |
+| `Alt+V` / `Ctrl+V` | 附加剪贴板中的图片（Windows 用 `Alt+V`，macOS 用 `Ctrl+V`） |
 | `Esc` | 输入框聚焦时中断；面板聚焦时返回输入框 |
 | `Ctrl+C` | 运行中中断；空闲清草稿，再按一次退出 |
 | `Tab` | 输入框中仅补全；面板中切到下一栏 |
