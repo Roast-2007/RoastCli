@@ -3,6 +3,7 @@ import { ConfigSchema } from '../../src/core/config.js';
 import { createSession, type Session } from '../../src/agent/session.js';
 import { ProviderRegistry } from '../../src/providers/adapter.js';
 import { ScriptedProvider } from '../fixtures/scripted-provider.js';
+import type { GenerateOptions, StreamChunk } from '../../src/core/types.js';
 import { RoutedProvider } from '../fixtures/routed-provider.js';
 import { textScript, toolCallScript, errorScript } from '../fixtures/chunks.js';
 import { tempWorkspace } from '../fixtures/workspace.js';
@@ -24,6 +25,20 @@ afterEach(async () => {
   for (const session of sessions.splice(0)) await session.shutdown();
   vi.unstubAllEnvs();
 });
+/** 第一个请求在 finish 前停住，直到测试放行；保证排队输入一定在下一个 step 之前送达 */
+class GatedProvider extends ScriptedProvider {
+  release!: () => void;
+  private readonly gate = new Promise<void>((resolve) => {
+    this.release = resolve;
+  });
+  override async *stream(options: GenerateOptions): AsyncGenerator<StreamChunk> {
+    const first = this.requests.length === 0;
+    for await (const chunk of super.stream(options)) {
+      if (first && chunk.type === 'finish') await this.gate;
+      yield chunk;
+    }
+  }
+}
 const drain = async (stream: AsyncIterable<unknown>) => {
   for await (const _ of stream) {
   }
@@ -99,9 +114,7 @@ describe('image runtime and controller', () => {
   it.each([1, 5])(
     'warns about unsupported images delivered by a queued mission while the initial turn has only text (steps=%i)',
     async (maxSteps) => {
-      const provider = new ScriptedProvider([toolCallScript('r', 'read', { path: 'a.txt' }), errorScript('INVALID_REQUEST')], {
-        chunkDelayMs: 5,
-      });
+      const provider = new GatedProvider([toolCallScript('r', 'read', { path: 'a.txt' }), errorScript('INVALID_REQUEST')]);
       const { session, ws } = await open(provider, { maxSteps });
       ws.file('a.txt', 'text');
       const store = createUiStore({ frameMs: 1 }),
@@ -119,6 +132,7 @@ describe('image runtime and controller', () => {
           },
           'queued picture',
         );
+        provider.release();
         await controller.whenIdle();
         expect(provider.requests[1]!.messages.at(-1)!.content).toContainEqual(image);
         expect(store.getState().meta.signals?.some((signal) => signal.text === '当前模型可能不支持图片输入')).toBe(true);
