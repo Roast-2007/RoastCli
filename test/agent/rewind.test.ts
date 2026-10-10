@@ -25,10 +25,10 @@ async function drain(rt: AgentRuntime, text: string) {
 }
 
 describe('检查点与 rewind', () => {
-  it('yolo snapshots every bash and replays the first turn baseline for rewind', async () => {
+  it.each(['yolo', 'auto'] as const)('%s snapshots every bash and replays the first turn baseline for rewind', async (mode) => {
     const ws = tempWorkspace(); ws.file('a.txt', 'baseline');
     const events: Parameters<CheckpointManager['restoreFromEvents']>[0][number][] = [];
-    const checkpoints = new CheckpointManager(new ShadowGit(ws.dir), () => 'yolo');
+    const checkpoints = new CheckpointManager(new ShadowGit(ws.dir), () => mode);
     checkpoints.attach((body) => events.push({ ...body, seq: events.length + 1, agentId: 'main' }));
     const bash = createDefaultToolRegistry().get('bash');
     const ctx = { cwd: ws.dir, services: new MapToolServices(), signal: new AbortController().signal, turn: 1 };

@@ -121,6 +121,8 @@ export type SessionEventBody =
   | { type: 'session/resume'; at: string; pid: number }
   /** v1：用户"始终允许"授权（resume 时恢复会话级授权） */
   | { type: 'permission/grant'; at: string; rule: string; scope: 'session' | 'project' }
+  /** v1：帮我审批模式下用户明确拒绝的操作（resume 时恢复，之后完全相同的操作自动拒绝） */
+  | { type: 'permission/deny'; at: string; key: string }
   /** v1：上下文变换决策（折叠 / 取消折叠 tool-result） */
   | { type: 'context/transform'; at: string; ops: ElideOp[] }
   /** v1：上下文压缩决策：messages[0, upTo) 由 summary 替代（摘要原文入日志，回放不重算） */
@@ -137,8 +139,8 @@ export type SessionEventBody =
   | { type: 'checkpoint'; at: string; turn: number; hash: string }
   /** v1：回退到 toTurn 开始前（对话由 history reducer 回退；文件已按 checkpoint 恢复） */
   | { type: 'rewind'; at: string; toTurn: number; checkpoint?: string; backup?: string; deleted?: string[] }
-  /** v1：权限模式切换（default / acceptEdits / plan / yolo） */
-  | { type: 'mode/change'; at: string; mode: 'default' | 'acceptEdits' | 'plan' | 'yolo' }
+  /** v1：权限模式切换（default / acceptEdits / auto / plan / yolo） */
+  | { type: 'mode/change'; at: string; mode: 'default' | 'acceptEdits' | 'auto' | 'plan' | 'yolo' }
   | {
       type: 'model/change';
       at: string;
@@ -172,6 +174,7 @@ export const KNOWN_EVENT_TYPES: readonly SessionEventType[] = [
   'history/import',
   'session/resume',
   'permission/grant',
+  'permission/deny',
   'mode/change',
   'model/change',
   'checkpoint',

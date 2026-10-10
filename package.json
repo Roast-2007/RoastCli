@@ -1,6 +1,6 @@
 {
   "name": "roastcli",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "A terminal coding agent with multiple providers, context recall and collaborative agents",
   "license": "MIT",
   "author": "Roast-2007",

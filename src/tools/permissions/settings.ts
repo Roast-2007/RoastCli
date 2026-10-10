@@ -5,7 +5,7 @@
  * - 仓库内：.roast/config.json / roastcli.config.json 的 permissions —— deny/ask 始终生效；
  *   allow 仅在项目被信任（roast trust）后生效，防止不可信仓库自带 "bash" 之类的放行规则
  * - ROASTCLI_CONFIG 指定的文件：用户显式提供，可信
- * 会话级授权与模式切换落日志（permission/grant、mode/change），resume 时折叠恢复。
+ * 会话级授权、帮我审批的拒绝记录与模式切换落日志（permission/grant、permission/deny、mode/change），resume 时折叠恢复。
  */
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
@@ -92,13 +92,15 @@ export function addProjectGrant(cwd: string, rule: string): void {
   writeFileSync(file, JSON.stringify(next, null, 2) + '\n', 'utf8');
 }
 
-/** 从日志折叠出会话授权与最终模式（resume 用） */
-export function foldPermissionEvents(events: readonly SessionEvent[]): { grants: string[]; mode?: PermissionMode } {
+/** 从日志折叠出会话授权、帮我审批的拒绝记录与最终模式（resume 用） */
+export function foldPermissionEvents(events: readonly SessionEvent[]): { grants: string[]; denials: string[]; mode?: PermissionMode } {
   const grants: string[] = [];
+  const denials: string[] = [];
   let mode: PermissionMode | undefined;
   for (const ev of events) {
     if (ev.type === 'permission/grant') grants.push(ev.rule);
+    else if (ev.type === 'permission/deny') denials.push(ev.key);
     else if (ev.type === 'mode/change') mode = ev.mode;
   }
-  return { grants: uniq(grants), ...(mode ? { mode } : {}) };
+  return { grants: uniq(grants), denials: uniq(denials), ...(mode ? { mode } : {}) };
 }

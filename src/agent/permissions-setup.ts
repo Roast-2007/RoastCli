@@ -1,7 +1,8 @@
 /**
  * 会话的权限与交互装配：PermissionEngine + InteractionBroker + permissionHook。
  * - 规则来自 loadPermissionRules（仓库 allow 需 trust）；resume 时恢复会话授权与模式
- * - 授权 / 模式变化通过 attach(commit) 落日志（permission/grant、mode/change）；项目级授权持久化到用户目录
+ * - 授权 / 帮我审批的拒绝 / 模式变化通过 attach(commit) 落日志（permission/grant、permission/deny、mode/change）；
+ *   项目级授权持久化到用户目录
  */
 import { InteractionBroker } from '../core/interaction.js';
 import { BROKER_KEY, PERMISSIONS_KEY, type ToolServices } from '../tools/index.js';
@@ -30,7 +31,7 @@ export interface PermissionSetupOptions {
   /** 免审批读取的额外根目录（本次运行的蜂群 worktree） */
   readRoots?: string[];
   /** resume 恢复的状态 */
-  restored?: { grants: string[]; mode?: PermissionMode };
+  restored?: { grants: string[]; denials?: string[]; mode?: PermissionMode };
 }
 
 export function setupPermissions(opts: PermissionSetupOptions): PermissionSetup {
@@ -44,6 +45,7 @@ export function setupPermissions(opts: PermissionSetupOptions): PermissionSetup 
     ...(opts.readRoots ? { readRoots: opts.readRoots } : {}),
   });
   for (const g of opts.restored?.grants ?? []) engine.grant(g, 'session');
+  for (const key of opts.restored?.denials ?? []) engine.rememberDenial(key);
   const broker = new InteractionBroker();
   opts.services.set(BROKER_KEY, broker);
   opts.services.set(PERMISSIONS_KEY, engine);
@@ -57,6 +59,7 @@ export function setupPermissions(opts: PermissionSetupOptions): PermissionSetup 
       commit?.({ type: 'permission/grant', at: at(), rule, scope });
       if (scope === 'project') addProjectGrant(opts.cwd, rule);
     },
+    onDeny: (key) => commit?.({ type: 'permission/deny', at: at(), key }),
   });
   return {
     engine,

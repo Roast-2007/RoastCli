@@ -123,17 +123,18 @@
 
 | 文件 | 作用 |
 |---|---|
-| `tools/permissions/bash-parse.ts` | 启发式解析 shell 命令：引号、`;` `&&` `\|\|` `\|` `&`、换行、`$()` 和反引号、写文件的重定向（不含 `2>&1` 和 `/dev/null`）。维护只读命令白名单和高危命令模式 |
+| `tools/permissions/bash-parse.ts` | 启发式解析 shell 命令：引号（双引号内的反斜杠按 bash 规则保留）、`;` `&&` `\|\|` `\|` `&`、换行、`$()` 和反引号、写文件的重定向（不含 `2>&1` 和 `/dev/null`），并标记从管道读取输入的段。维护只读命令白名单和高危命令模式 |
 | `tools/permissions/rules.ts` | 规则 `Tool` 或 `Tool(pattern)`。bash 支持整词前缀 `prefix:*`、精确匹配和 `*`；路径用 picomatch，相对路径相对 cwd；网络用 `domain:`，包含子域名；工具名可以含 `*` |
 | `tools/permissions/engine.ts` | 决策逻辑，见下文 |
-| `tools/permissions/hook.ts` | 接入 preExecute：允许、拒绝或经 broker 询问用户，可以记住授权。没有界面时直接拒绝并说明原因 |
-| `tools/permissions/settings.ts` | 规则来源：用户配置、`~/.roast/projects/<hash>/settings.json`（hash 为规范化 cwd 的 sha1 前 16 位）、仓库配置（allow 需要信任，deny 和 ask 始终生效）。从日志恢复授权 |
-| `core/interaction.ts` | InteractionBroker：处理权限和提问两类请求，维护待处理队列，支持取消。没有订阅者时返回 `unavailable` |
-| `ui/components/InteractionCard.tsx` | 审批和提问卡片 |
+| `tools/permissions/auto-risk.ts` | 帮我审批的离线风险判断入口与拒绝身份 `denialKey`。`auto-bash.ts` 分析 bash（跟踪 cd，展开 `$()`、`bash -c`、`powershell -Command`、`cmd /c`、`find -exec`、`xargs` 和 npx / pnpm exec 等包运行器，去掉 env / nohup / timeout / cross-env 等包装；交给 cmd 和 PowerShell 的内层文本先加倍反斜杠再分词），`auto-commands.ts` 按命令名匹配规则表，`auto-writes.ts` 找出删除、移动、复制、解压和下载的写入目标，`auto-paths.ts` 解析路径并判断工作区外、敏感文件与凭据。除了首次读取一次临时目录的长路径，全部是纯计算，不调用模型 |
+| `tools/permissions/hook.ts` | 接入 preExecute：允许、拒绝或经 broker 询问用户，可以记住授权。帮我审批的询问带倒计时，超时与明确拒绝分别反馈给模型。没有界面时直接拒绝并说明原因 |
+| `tools/permissions/settings.ts` | 规则来源：用户配置、`~/.roast/projects/<hash>/settings.json`（hash 为规范化 cwd 的 sha1 前 16 位）、仓库配置（allow 需要信任，deny 和 ask 始终生效）。从日志恢复授权与帮我审批的拒绝记录 |
+| `core/interaction.ts` | InteractionBroker：处理权限和提问两类请求，维护待处理队列，支持取消。没有订阅者时返回 `unavailable`。带 `countdownMs` 的请求在界面调用 `shown` 后开始计时，到时以 `timedOut` 拒绝，`hold` 暂停 |
+| `ui/components/InteractionCard.tsx` | 审批和提问卡片；挂载时通知 `shown`，卡片上的按键和点击通知 `hold` |
 
 ### 决策顺序
 
-deny → plan 模式（只放行只读和交互类工具）→ 高危强制询问 → 只读角色强制询问 → yolo → allow → ask → 默认策略。
+deny → plan 模式（只放行只读和交互类工具）→ 高危强制询问 → 只读角色强制询问 → yolo → allow → ask → 默认策略。auto 模式用离线风险规则代替默认策略：命中规则询问，其余放行。
 
 以下请求属于强制询问，yolo 模式和 allow 规则都不能跳过：
 
@@ -144,11 +145,19 @@ deny → plan 模式（只放行只读和交互类工具）→ 高危强制询�
 
 默认策略：交互类工具放行；工作区内读取放行，工作区外询问；修改文件询问（acceptEdits 模式下工作区内放行）；只读命令放行，其他命令询问。
 
+### 帮我审批（auto）
+
+- 风险规则只补充默认策略之后的判断，deny、plan、强制询问和 allow / ask 规则的位置不变，所以 allow 规则能豁免扩展清单，但豁免不了强制询问。
+- auto 模式下引擎给所有 ask 结果附上 `denialKey`。bash 用 `commandText` 规范化后的完整命令；edit 和 read 类请求用规范化路径（edit、write、multi_edit 共用同一个身份）；其他请求用工具名加目标，没有目标时用键排序后的参数 JSON。
+- 用户明确拒绝后，hook 调用 `engine.rememberDenial` 并写入 `{type: 'permission/deny', key}`。之后 auto 模式下身份相同的 ask 直接变成 deny，其他模式不受影响。恢复会话时从日志折叠出拒绝记录；rewind 不撤销拒绝记录，与授权的处理一致。
+- 倒计时由 broker 维护，界面不计时，只负责显示。界面显示卡片后才开始计时，所以排队中的请求不会提前超时。卡片在作答前卸载（切换工作面，或 Deck 把另一条审批提到最前）会调用 `hold` 暂停，所以看不见的审批不会被超时拒绝。controller 刷新审批列表时保留界面上的顺序。超时以 `timedOut` 拒绝，不写拒绝记录。
+- 风险规则看不到脚本文件的内容，也看不到 `node -e` / `python -c` 内联代码的含义。auto 模式和 yolo 一样在每条 bash 前打检查点，工作区内的改动可以用 rewind 恢复。
+
 ### 检查点与回退
 
 代码在 `ext/audit/`。
 
-- `checkpoints.ts` 作为 preExecute 钩子，在每个 turn 第一次执行会修改文件的工具前打快照，写入 `{type: 'checkpoint', turn, hash}`。yolo 模式下每条 bash 命令前都会打快照，因为无法可靠判断命令是否会改文件。
+- `checkpoints.ts` 作为 preExecute 钩子，在每个 turn 第一次执行会修改文件的工具前打快照，写入 `{type: 'checkpoint', turn, hash}`。yolo 和 auto 模式下每条 bash 命令前都会打快照，因为无法可靠判断命令是否会改文件。
 - `shadow-git.ts` 使用影子仓库：`git --git-dir <cwd>/.roast/shadow.git --work-tree <cwd>`。初始化时设置 `core.autocrlf=false`、`core.longpaths=true`、`core.quotepath=false`、`commit.gpgsign=false` 和用户信息，`info/exclude` 写入 `.roast/`、`node_modules/`、`.git/`、`logs/`、`*.log`，项目的 `.gitignore` 同样生效。快照是 `add -A` 加 `commit -q --allow-empty --no-verify`。
 - 恢复时先给当前状态打一个回退前快照，删除目标快照之后新增的文件，再执行 `checkout <hash> -- .`（目标树为空时跳过）。
 - `file-snapshots.ts` 在 git 不可用或初始化失败时使用。快照按字节保存为 `.roast/snapshots/<uuid>.json`，保留二进制内容和 CRLF；跳过符号链接和 junction、依赖、日志和 Roast 自身状态；累计超过 128 MiB 时报错。恢复时同样删除快照中没有的文件。

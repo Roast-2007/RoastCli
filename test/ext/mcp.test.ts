@@ -88,6 +88,14 @@ describe('mcp tool wrapping', () => {
     const rw = wrapMcpTool('s', { name: 'write', inputSchema: {} }, async () => ({}), { timeoutMs: 1000, trustAnnotations: true });
     expect(toolSchemaOf(rw).parameters).toEqual({ type: 'object', properties: {} });
     expect(rw).toMatchObject({ isReadOnly: false, permission: { kind: 'execute' } });
+    expect(rw.permission?.destructive).toBeUndefined();
+  });
+
+  it('destructiveHint 不需要信任注解即标记为破坏性，只读工具不标记', () => {
+    const destructive = { name: 'drop', inputSchema: {}, annotations: { destructiveHint: true } };
+    expect(wrapMcpTool('s', destructive, async () => ({}), { timeoutMs: 1000 }).permission).toEqual({ kind: 'execute', destructive: true });
+    const readOnly = { name: 'list', inputSchema: {}, annotations: { readOnlyHint: true, destructiveHint: true } };
+    expect(wrapMcpTool('s', readOnly, async () => ({}), { timeoutMs: 1000, trustAnnotations: true }).permission).toEqual({ kind: 'read' });
   });
 
   it('converts text, media, resources and structured content', () => {

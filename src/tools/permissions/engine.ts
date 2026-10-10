@@ -7,20 +7,24 @@
  * 3. 高危（bash 高危命令、改 .git 或 shadow 仓库）→ 强制 ask（yolo 与 allow 规则都不能跳过）
  * 4. 只读角色无法确认的执行 → 强制 ask
  * 5. yolo → allow
- * 6. allow 规则（会话授权 + 配置）→ allow；bash 复合命令要求每段都命中 allow 或为只读命令
- * 7. ask 规则 → ask
- * 8. 默认：工作区内读取 / 只读 bash / 交互类 → allow；acceptEdits 下工作区内编辑 → allow；其余 ask
+ * 6. auto（帮我审批）：allow 规则 → allow；ask 规则或离线高风险规则 → ask；其余 allow
+ * 7. allow 规则（会话授权 + 配置）→ allow；bash 复合命令要求每段都命中 allow 或为只读命令
+ * 8. ask 规则 → ask
+ * 9. 默认：工作区内读取 / 只读 bash / 交互类 → allow；acceptEdits 下工作区内编辑 → allow；其余 ask
+ *
+ * auto 模式下所有 ask 都带倒计时；用户明确拒绝的操作记入 denials，之后完全相同的请求直接 deny。
  */
 import path from 'node:path';
 import { isPathInside } from '../../core/paths.js';
+import { autoRiskReason, denialKey } from './auto-risk.js';
 import { dangerReason, isReadOnlyCommand, isReadOnlyRoleCommand, parseCommand } from './bash-parse.js';
 import { commandMatches, matchesRule, parseRule, suggestRules, type PermissionRequest, type Rule } from './rules.js';
 
 export type { PermissionRequest } from './rules.js';
-export type PermissionMode = 'default' | 'acceptEdits' | 'plan' | 'yolo';
+export type PermissionMode = 'default' | 'acceptEdits' | 'auto' | 'plan' | 'yolo';
 export type Behavior = 'allow' | 'ask' | 'deny';
 
-export const MODE_CYCLE: readonly PermissionMode[] = ['default', 'acceptEdits', 'plan', 'yolo'];
+export const MODE_CYCLE: readonly PermissionMode[] = ['default', 'acceptEdits', 'auto', 'plan', 'yolo'];
 
 /** plan 模式下仍可用的非只读工具 */
 const PLAN_ALLOWED = new Set(['exit_plan_mode', 'todo_write', 'ask_user']);
@@ -32,6 +36,8 @@ export interface Evaluation {
   forced?: boolean;
   suggestedRule?: string;
   suggestedRules?: string[];
+  /** 帮我审批：倒计时询问，用户明确拒绝后按此身份记住 */
+  denialKey?: string;
 }
 
 export interface PermissionSettings {
@@ -50,7 +56,9 @@ function isInside(dir: string, target: string): boolean {
 
 function protectedPath(req: PermissionRequest): string | null {
   if (req.kind !== 'edit' || !req.target) return null;
-  const rel = path.relative(req.cwd, req.target).split(path.sep).join('/');
+  const relative = path.relative(req.cwd, req.target).split(path.sep).join('/');
+  // Windows 与 macOS 的文件系统不区分大小写，.GIT/hooks 同样指向 .git/hooks
+  const rel = process.platform === 'linux' ? relative : relative.toLowerCase();
   if (rel === '.git' || rel.startsWith('.git/') || rel.includes('/.git/')) return '修改 .git 内部文件';
   if (rel.startsWith('.roast/shadow.git')) return '修改检查点仓库';
   return null;
@@ -101,11 +109,28 @@ export class PermissionEngine {
     this.sessionAllow.push(parseRule(rule));
   }
 
+  private readonly denials = new Set<string>();
+
+  /** 帮我审批：记住用户明确拒绝的操作（会话级，由调用方落日志） */
+  rememberDenial(key: string): void {
+    this.denials.add(key);
+  }
+
   evaluate(req: PermissionRequest): Evaluation {
-    const verdict = this.decide(req);
-    return verdict.behavior === 'ask' && req.kind === 'execute' && req.executionRoot
-      ? { ...verdict, reason: `${verdict.reason}；在 worktree ${req.executionRoot} 中执行命令` }
-      : verdict;
+    const decided = this.decide(req);
+    const verdict =
+      decided.behavior === 'ask' && req.kind === 'execute' && req.executionRoot
+        ? { ...decided, reason: `${decided.reason}；在 worktree ${req.executionRoot} 中执行命令` }
+        : decided;
+    if (this.mode_ !== 'auto' || verdict.behavior !== 'ask') return verdict;
+    const key = denialKey(req);
+    if (this.denials.has(key)) {
+      return {
+        behavior: 'deny',
+        reason: '帮我审批：用户在本会话中已拒绝过完全相同的操作，已自动拒绝。请换一种做法，或向用户说明为什么需要它',
+      };
+    }
+    return { ...verdict, denialKey: key };
   }
 
   private decide(req: PermissionRequest): Evaluation {
@@ -127,7 +152,9 @@ export class PermissionEngine {
     const suggestedRules = suggestRules(req, (segment) => this.allowedByRules({ ...req, target: segment }));
     const verdict = this.ask.some((r) => this.matches(r, req))
       ? { behavior: 'ask' as const, reason: '命中 ask 规则' }
-      : this.defaultDecision(req);
+      : this.mode_ === 'auto'
+        ? this.autoDecision(req)
+        : this.defaultDecision(req);
     if (verdict.behavior !== 'ask') return verdict;
     return {
       ...verdict,
@@ -166,6 +193,12 @@ export class PermissionEngine {
     const segmentAllowed = (seg: string) =>
       bashPatterns.some((p) => commandMatches(p, seg)) || (!parseCommand(seg).writesFiles && isReadOnlyCommand(seg));
     return parsed.segments.length > 0 && parsed.segments.every(segmentAllowed) && bashPatterns.length > 0;
+  }
+
+  /** 帮我审批：离线规则判定的高风险操作询问，其余放行 */
+  private autoDecision(req: PermissionRequest): Evaluation {
+    const risk = autoRiskReason(req);
+    return risk ? { behavior: 'ask', reason: `高风险操作：${risk}` } : { behavior: 'allow', reason: '帮我审批：低风险操作' };
   }
 
   private defaultDecision(req: PermissionRequest): Evaluation {

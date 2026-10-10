@@ -171,8 +171,51 @@ describe('PermissionEngine 决策表', () => {
   it('模式切换与轮换顺序', () => {
     const e = engine();
     expect(e.cycleMode()).toBe('acceptEdits');
+    expect(e.cycleMode()).toBe('auto');
     expect(e.cycleMode()).toBe('plan');
     expect(e.cycleMode()).toBe('yolo');
     expect(e.cycleMode()).toBe('default');
+  });
+});
+
+describe('PermissionEngine 帮我审批（auto）', () => {
+  const engine = (opts: Partial<ConstructorParameters<typeof PermissionEngine>[0]> = {}) =>
+    new PermissionEngine({ allow: [], ask: [], deny: [], mode: 'auto', ...opts });
+
+  it('低风险自动放行，高风险询问并带拒绝记忆身份与可记住的规则', () => {
+    const e = engine();
+    expect(e.evaluate(bash('pnpm test && rm -rf dist')).behavior).toBe('allow');
+    expect(e.evaluate(edit(at('src/a.ts'))).behavior).toBe('allow');
+    expect(e.evaluate(read(path.resolve('/usr/share/doc/a.txt'))).behavior).toBe('allow');
+    expect(e.evaluate({ tool: 'web_fetch', kind: 'network', target: 'https://example.com', cwd }).behavior).toBe('allow');
+    const push = e.evaluate(bash('git push origin main'));
+    expect(push).toMatchObject({ behavior: 'ask', reason: '高风险操作：推送到远端仓库', suggestedRule: 'bash(git push:*)' });
+    expect(push.denialKey).toBeDefined();
+    expect(push.forced).toBeUndefined();
+    expect(e.evaluate(edit(at('.github/workflows/ci.yml')))).toMatchObject({ behavior: 'ask', reason: '高风险操作：修改 CI 配置' });
+  });
+
+  it('强制高危仍然只能单次批准；allow 规则只豁免扩展清单，ask / deny 规则照常生效', () => {
+    const e = engine({ allow: ['bash(git push:*)', 'bash(git reset:*)'], ask: ['bash(pnpm test:*)'], deny: ['bash(npm publish:*)'] });
+    expect(e.evaluate(bash('git push origin main')).behavior).toBe('allow');
+    expect(e.evaluate(bash('git reset --hard'))).toMatchObject({ behavior: 'ask', forced: true });
+    expect(e.evaluate(bash('git reset --hard')).denialKey).toBeDefined();
+    expect(e.evaluate(bash('pnpm test'))).toMatchObject({ behavior: 'ask', reason: '命中 ask 规则' });
+    expect(e.evaluate(bash('npm publish')).behavior).toBe('deny');
+    e.setMode('plan');
+    expect(e.evaluate(bash('pnpm build')).behavior).toBe('deny');
+  });
+
+  it('用户拒绝后只自动拒绝完全相同的操作，且只在 auto 模式生效', () => {
+    const e = engine();
+    const first = e.evaluate(bash('git push origin main'));
+    e.rememberDenial(first.denialKey!);
+    expect(e.evaluate(bash('CI=1 git  push origin main'))).toMatchObject({ behavior: 'deny', reason: expect.stringContaining('已拒绝过') });
+    expect(e.evaluate(bash('git push origin dev')).behavior).toBe('ask');
+    expect(e.evaluate(bash('pnpm test')).behavior).toBe('allow');
+    e.setMode('default');
+    const manual = e.evaluate(bash('git push origin main'));
+    expect(manual.behavior).toBe('ask');
+    expect(manual.denialKey).toBeUndefined();
   });
 });

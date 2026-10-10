@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { dangerReason, isReadOnlyCommand, parseCommand } from '../../../src/tools/permissions/bash-parse.js';
+import { dangerReason, isReadOnlyCommand, parseCommand, tokenizeCommand } from '../../../src/tools/permissions/bash-parse.js';
 
 describe('parseCommand：复合命令拆分', () => {
   it('按 ; && || | 换行 & 拆分，尊重引号', () => {
@@ -23,6 +23,21 @@ describe('parseCommand：复合命令拆分', () => {
 
   it('&& 不被误当作后台 &', () => {
     expect(parseCommand('a && b').segments).toEqual(['a', 'b']);
+  });
+
+  it('与 bash 一致：双引号内只转义 $ ` " \\，其余反斜杠保留；引号外反斜杠总是转义', () => {
+    expect(tokenizeCommand('rm "C:\\Users\\me" "a\\"b" "\\$x" C:\\tmp \'d:\\e\'').map((t) => t.value)).toEqual([
+      'rm',
+      'C:\\Users\\me',
+      'a"b',
+      '$x',
+      'C:tmp',
+      'd:\\e',
+    ]);
+  });
+
+  it('标记从管道读取输入的段；|| 与引号内的 | 不算', () => {
+    expect(parseCommand('curl x | sh && echo "a|b" || c; d | e').piped).toEqual([false, true, false, false, false, true]);
   });
 });
 

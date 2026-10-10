@@ -83,6 +83,8 @@ export interface ToolDefinition<S extends z.ZodTypeAny = z.ZodTypeAny> {
     /** 按本次参数决定 kind（如 memory：search 免审批、save 需审批）；返回 undefined 时用 kind */
     kindFor?(args: z.infer<S>): PermissionKind | undefined;
     target?(args: z.infer<S>, ctx: ToolContext): string | undefined;
+    /** 可能造成破坏性修改（MCP destructiveHint）：帮我审批模式下需要确认 */
+    destructive?: boolean;
   };
   execute(args: z.infer<S>, ctx: ToolContext): Promise<ToolResult>;
 }

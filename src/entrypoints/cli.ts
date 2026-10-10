@@ -343,7 +343,7 @@ async function main(): Promise<void> {
     .option('-m, --model <provider:model>', '覆盖 config.default 的模型引用')
     .option('-c, --continue', '继续当前目录最近一次会话')
     .option('-r, --resume [runId]', '恢复指定会话（不带 id 时列出本目录最近会话）')
-    .option('--permission-mode <mode>', '权限模式：default / acceptEdits / plan / yolo')
+    .option('--permission-mode <mode>', '权限模式：default / acceptEdits / auto（帮我审批）/ plan / yolo')
     .option('--output-format <format>', '管道模式输出格式：text（默认）/ json / stream-json')
     .action(async (opts: ChatOptions) => {
       const model = opts.model ?? (program.opts()['model'] as string | undefined);
@@ -384,7 +384,7 @@ async function main(): Promise<void> {
       (value: string, previous: string[]) => [...previous, value],
       [],
     )
-    .option('--permission-mode <mode>', '权限模式：default / acceptEdits / plan / yolo')
+    .option('--permission-mode <mode>', '权限模式：default / acceptEdits / auto（帮我审批）/ plan / yolo')
     .action(async (goal: string[], opts: SwarmOptions) => {
       if (opts.listAgents) {
         const loaded = loadProfiles(process.cwd(), roastHome(), { trusted: isProjectTrusted(process.cwd()) });

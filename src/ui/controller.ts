@@ -25,6 +25,10 @@ export interface UiController {
   ctrlC(draft: string): InterruptAction;
   notify(text: string, tone?: 'info' | 'warn'): void;
   respond(req: InteractionRequest, response: InteractionResponse): void;
+  /** 审批卡已显示：帮我审批的倒计时从此开始 */
+  showInteraction(id: string): void;
+  /** 用户在审批卡上操作：暂停倒计时 */
+  holdInteraction(id: string): void;
   cycleMode(): void;
   /** 执行一条斜杠命令（不写入输入历史），如 Esc Esc 打开回退列表 */
   runCommand(text: string): void;
@@ -113,7 +117,14 @@ export function createUiController(
         store.setMeta({ swarm: mergedSwarm(), messages: hive().messages, contextPercent: session.contextStats().percent });
       }),
     );
-  const refreshInteractions = () => store.setMeta({ interactions: session.broker.pending() });
+  // 保留界面上的顺序（Deck 点击信号会把某条审批提到最前），只更新内容、移除已完成的并追加新的
+  const refreshInteractions = () =>
+    store.setMeta((m) => {
+      const pending = session.broker.pending();
+      const live = new Map(pending.map((r) => [r.id, r]));
+      const kept = m.interactions.flatMap((r) => (live.has(r.id) ? [live.get(r.id)!] : []));
+      return { interactions: [...kept, ...pending.filter((r) => !m.interactions.some((x) => x.id === r.id))] };
+    });
   offs.push(session.broker.onRequest(refreshInteractions));
   offs.push(session.broker.onChange(refreshInteractions));
   offs.push(
@@ -380,6 +391,12 @@ export function createUiController(
     notify,
     respond(req, response) {
       if (session.broker.respond(req.id, response)) toast('已提交回答', 'success');
+    },
+    showInteraction(id) {
+      session.broker.shown(id);
+    },
+    holdInteraction(id) {
+      session.broker.hold(id);
     },
     cycleMode() {
       session.permissions.cycleMode();

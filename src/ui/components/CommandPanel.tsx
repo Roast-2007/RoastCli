@@ -91,7 +91,7 @@ export function CommandPanel({
         onClose={close}
         entries={MODE_CYCLE.map((mode) => ({
           id: mode,
-          label: `${mode} · ${{ default: '标准审批', acceptEdits: '自动批准工作区编辑', plan: '仅规划与读取', yolo: '自动批准常规操作' }[mode]}`,
+          label: `${mode} · ${{ default: '标准审批', acceptEdits: '自动批准工作区编辑', auto: '帮我审批：高风险操作 10 秒内确认，其余自动批准', plan: '仅规划与读取', yolo: '自动批准常规操作' }[mode]}`,
         }))}
         onSelect={(entry) => {
           session.permissions.setMode(entry.id as PermissionMode);

@@ -366,6 +366,8 @@ function Workspace({
                 maxHeight={layout.input}
                 onInterrupt={() => controller.ctrlC('')}
                 onRespond={(response) => controller.respond(card, response)}
+                onShown={() => controller.showInteraction(card.id)}
+                onHold={() => controller.holdInteraction(card.id)}
               />
             ) : (
               <InputBox

@@ -3,6 +3,7 @@
  * - 名称 mcp__<server>__<tool>（只保留 [A-Za-z0-9_-]，超过 64 字符截断并加 hash 后缀，满足各家 API 限制）
  * - schema 原样交给模型（rawJsonSchema），参数校验由 MCP 服务器完成
  * - 默认按 execute 询问（可用规则 `mcp__server__tool` 放行）；服务器配置 trustAnnotations 时，readOnlyHint 的工具按只读处理（可并发、免审批）
+ * - 声明 destructiveHint 的工具在帮我审批模式下需要用户确认
  * - 结果：文本原样、支持的图片保留像素；音频及不支持/超限的二进制资源显示占位说明。
  */
 import { createHash } from 'node:crypto';
@@ -20,7 +21,7 @@ export interface McpToolInfo {
   name: string;
   description?: string;
   inputSchema: Record<string, unknown>;
-  annotations?: { readOnlyHint?: boolean; title?: string };
+  annotations?: { readOnlyHint?: boolean; destructiveHint?: boolean; title?: string };
 }
 
 export interface McpCallResult {
@@ -95,7 +96,8 @@ export function wrapMcpTool(server: string, info: McpToolInfo, call: McpCall, op
     isReadOnly: readOnly,
     isConcurrencySafe: readOnly,
     timeoutMs: opts.timeoutMs,
-    permission: { kind: readOnly ? 'read' : 'execute' },
+    // destructiveHint 只会让审批更严格，不要求 trustAnnotations
+    permission: { kind: readOnly ? 'read' : 'execute', ...(!readOnly && info.annotations?.destructiveHint === true ? { destructive: true } : {}) },
     async execute(args, ctx) {
       return mcpResultToToolResult(await call(info.name, args, ctx.signal));
     },

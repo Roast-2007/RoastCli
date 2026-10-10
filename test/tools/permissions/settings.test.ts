@@ -52,14 +52,20 @@ describe('loadPermissionRules', () => {
 });
 
 describe('foldPermissionEvents', () => {
-  it('从日志恢复会话授权与当前模式', () => {
+  it('从日志恢复会话授权、帮我审批的拒绝记录与当前模式', () => {
     const at = 't';
     const events = [
       { type: 'permission/grant', at, rule: 'bash(npm run:*)', scope: 'session' },
       { type: 'mode/change', at, mode: 'plan' },
+      { type: 'permission/deny', at, key: 'bash:git push origin main' },
       { type: 'permission/grant', at, rule: 'edit(src/**)', scope: 'project' },
-      { type: 'mode/change', at, mode: 'acceptEdits' },
+      { type: 'permission/deny', at, key: 'bash:git push origin main' },
+      { type: 'mode/change', at, mode: 'auto' },
     ] as SessionEvent[];
-    expect(foldPermissionEvents(events)).toEqual({ grants: ['bash(npm run:*)', 'edit(src/**)'], mode: 'acceptEdits' });
+    expect(foldPermissionEvents(events)).toEqual({
+      grants: ['bash(npm run:*)', 'edit(src/**)'],
+      denials: ['bash:git push origin main'],
+      mode: 'auto',
+    });
   });
 });

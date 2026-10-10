@@ -36,7 +36,7 @@ describe('direct shell lifecycle', () => {
     try {
       controller.cycleMode(); expect(store.getState().meta.toast?.text).toContain('acceptEdits');
       await vi.advanceTimersByTimeAsync(2000); controller.cycleMode();
-      await vi.advanceTimersByTimeAsync(1000); expect(store.getState().meta.toast?.text).toContain('plan');
+      await vi.advanceTimersByTimeAsync(1000); expect(store.getState().meta.toast?.text).toContain('auto');
       await vi.advanceTimersByTimeAsync(2000); expect(store.getState().meta.toast).toBeNull();
       controller.cycleMode(); controller.dispose(); await vi.advanceTimersByTimeAsync(100); expect(vi.getTimerCount()).toBe(0);
     } finally { vi.useRealTimers(); controller.dispose(); await session.shutdown(); }

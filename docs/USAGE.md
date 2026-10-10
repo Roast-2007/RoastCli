@@ -199,7 +199,7 @@ tools: read, grep, glob, bash
 
 - worktree 位于 `~/.roast/worktrees/<runId>/<agentId>`，基于父 agent 工作区的当前状态创建，包括未提交的改动。整个过程不会动你的分支、索引和 HEAD。
 - 顶层的 `node_modules` 会复制一份到 worktree（文件系统支持时使用写时复制），这会增加启动时间和磁盘占用。副本中可识别的 pnpm JSON 布局路径会同步到 worktree，避免因原仓库的绝对路径而要求重装。
-- worktree 中的命令与普通命令遵循同样的权限模式和规则，yolo 下直接执行；高危命令和只读角色限制仍然生效。普通审批可保存会话或项目授权，并显示 worktree 路径。worktree 只隔离文件改动，不是沙箱，shell 等外部命令仍能访问其他目录。成员读取主工作区文件无需额外审批。
+- worktree 中的命令与普通命令遵循同样的权限模式和规则，yolo 下直接执行，帮我审批模式下只询问高风险命令；高危命令和只读角色限制仍然生效。普通审批可保存会话或项目授权，并显示 worktree 路径。worktree 只隔离文件改动，不是沙箱，shell 等外部命令仍能访问其他目录。成员读取主工作区文件无需额外审批。
 - 会话结束时，没有改动的 worktree 会被删除，有未合并改动的会保留，并在 stderr 列出路径。`roast worktrees list` 查看保留的 worktree，`roast worktrees prune` 删除已结束且没有改动的。正在使用、有未合并改动或缺少基线记录的不会被删除。
 
 ### 只读角色
@@ -313,7 +313,7 @@ echo "$API_KEY" | roast init --provider deepseek --api-key-stdin   # 或者从�
 | `roast -c` | 继续当前目录最近的会话 |
 | `roast -r [runId]` | 恢复指定会话；不带 ID 时列出当前目录最近 20 个会话 |
 | `roast -m provider:model` | 本次使用指定的模型 |
-| `roast --permission-mode <模式>` | 以指定权限模式启动：`default`、`acceptEdits`、`plan`、`yolo` |
+| `roast --permission-mode <模式>` | 以指定权限模式启动：`default`、`acceptEdits`、`auto`（帮我审批）、`plan`、`yolo` |
 | `roast --max-steps <n>` | 本次主会话每个 turn 的步数上限，1–1000 |
 | `roast --allowed-tools <规则>` / `--disallowed-tools <规则>` | 本次运行额外放行 / 禁止的工具，见[临时工具规则](#临时工具规则) |
 | `roast hive [目标]`（`roast swarm`） | 打开 Deck 或立即发起任务，见 [Hive](#hive) |
@@ -403,7 +403,7 @@ Chat 是单 agent 对话工作面，用 `--chat`、`/chat` 或 `Ctrl+G` 进入�
 | `Shift+Enter`、`Alt+Enter`、`Ctrl+J`，或在行尾输入 `\` | 换行 |
 | `Esc` | 运行中：中断。空闲时在 600 毫秒内按两次：打开回退菜单 |
 | `Ctrl+C` | 运行中中断；空闲清草稿；无草稿时提示，两秒内再按一次退出 |
-| `Shift+Tab` | 切换权限模式：default → acceptEdits → plan → yolo |
+| `Shift+Tab` | 切换权限模式：default → acceptEdits → auto → plan → yolo |
 | `Ctrl+O` | 阅读时查看视口内最后一个工具，否则查看最近工具；再按一次或 Esc 返回 |
 | 双击工具行 | 查看该工具的参数、完整 diff 与结果 |
 | `←→`、`[` / `]`（工具详情） | 切换工具，切换后回到顶部 |
@@ -526,12 +526,45 @@ Chat 和 Deck 都可以把截图、设计稿或报错图片直接发给模型，
 |---|---|
 | `default` | 读取工作区内的文件和执行只读命令不询问，修改文件、执行其他命令时询问 |
 | `acceptEdits` | 在 default 的基础上，自动允许修改工作区内的文件 |
+| `auto`（帮我审批） | 按离线规则判断风险：常规操作自动允许，高风险操作询问，10 秒内不回复就自动拒绝，见[帮我审批](#帮我审批) |
 | `plan` | 只允许只读操作。模型用 `exit_plan_mode` 提交计划，你批准后才能修改 |
 | `yolo` | 除了高危命令，全部自动允许 |
 
 文件 edit / multi_edit / write 审批卡片会在读权限允许且文件状态有效时预览 diff，最多 12 行，超出部分用 `Ctrl+O` 查看完整详情。新文件可以直接预览；越界、UNC、未读取或过大的现有文件不自动预览。merge_worktree 审批显示 diffstat；bash 显示完整命令、worktree 执行路径和高危或只读角色触发强制询问的原因。预览和 `Ctrl+O` 不会批准操作。
 
 审批时，`1` 或 `y` 允许一次，`2` 本会话内始终允许，`3` 本项目始终允许，`4`、`n` 或 `Esc` 拒绝；也可以用 `↑↓` 选择后按 `Enter`。高危操作只能选允许一次或拒绝。本会话的授权写在会话日志里，恢复会话后仍然有效。本项目的授权保存在 `~/.roast/projects/<hash>/settings.json`，不会进入仓库。
+
+### 帮我审批
+
+`auto` 模式在本地按规则判断风险，不把命令发给模型审核，也不联网。用 `Shift+Tab`、`/mode auto`、`--permission-mode auto` 进入，也可以在用户配置中设 `permissions.defaultMode: "auto"`。状态栏显示「帮我审批」。
+
+以下操作属于高风险，需要你确认：
+
+| 类别 | 例子 |
+|---|---|
+| 删除与丢弃 | 删除工作区外的文件、递归删除整个工作区（含 `find . -delete`）、`git restore`、`git checkout -- 路径`、`git switch --discard-changes`、`git reset --hard`、`git clean -f`、`git stash drop`、`git branch -D`、`git rebase`、`git config --global` |
+| 对外 | `git push`、`npm` / `pnpm` / `cargo` / `twine` 等的发布、`docker push`、`gh release create`、`gh pr merge`、`gh api -X POST`、`kubectl apply`、`terraform apply`、`helm upgrade`、`vercel --prod` 等部署命令、`aws` / `gcloud` / `az` 的部署与变更 |
+| 安装 | 全局安装、`brew` / `apt` / `winget` / `choco` 等系统软件、新增依赖（`pnpm add`、`npm i 包名`、`pip install 包名`、`uv add`）、`pnpm dlx`、`npx -y`、`uvx`、`pipx run` |
+| 系统 | `sudo` / `runas`、`Start-Process -Verb RunAs`、`chmod -R`、`chmod 777`、`chown`、注册表、`setx`、系统服务（含 `net stop`）、系统账户、计划任务、`kill -9`、`pkill`、`taskkill /f`、防火墙、Defender 设置、磁盘 |
+| 凭据与外传 | 读取或修改 `~/.ssh`、`~/.aws`、`.env`、`.npmrc`、`~/.roast/credentials.json` 等凭据文件，用 grep 在整个用户目录中搜索；`curl -d / -F / -T / -X POST`、`scp`、远端 `rsync`、`ssh`、`nc`（发往 localhost 的请求除外） |
+| 混淆 | `eval`、`Invoke-Expression`、`powershell -EncodedCommand`、把管道内容交给 `sh` / `bash` / `cmd` / `python` / `node` 执行（如 `curl … \| sh`）、执行子命令生成的内容（如 `bash <(curl …)`）、用 `git -c alias.…` 或 `core.hooksPath` 等配置执行命令 |
+| 敏感文件 | 写入或移动到工作区外（重定向、`cp`、`mv`、`tee`、`sed -i`、`curl -o`、`wget -O`、`tar -C`、`unzip -d`、PowerShell 的 `-Destination` / `-OutFile` 和编辑工具都算）；修改 `.github/workflows`、`.gitlab-ci.yml`、`.roast/`、`roastcli.config.json`、`.claude/`、`.husky/`、`.git/` 和 `.env*`（不区分大小写） |
+| 其他 | MCP 工具声明了 `destructiveHint`；命中你的 `permissions.ask` 规则；原有的高危命令 |
+
+其余操作自动允许，包括工作区内的读写和删除、构建、测试、lint、`git add` / `commit` / `switch`、按锁文件安装依赖、网页抓取和搜索，以及读取工作区外的普通文件。系统临时目录中的读写也不询问。`ls .env`、`test -f .env`、`git check-ignore .env` 这类只看文件是否存在的命令，以及 grep 的搜索模式里出现 `.env`，都不算读取凭据。
+
+分析会展开 `bash -c`、`powershell -Command`、`cmd /c`、交给 shell 的 heredoc、`$(…)`、`find -exec`、`xargs`、`env` / `cross-env` 等包装命令，以及 `npx`、`pnpm exec`、`yarn <命令>` 实际运行的命令，并跟踪命令中的 `cd`。以未知变量开头的路径、经 `xargs` 从标准输入传入的删除和移动目标，都按位置未知处理。
+
+确认时：
+
+- 审批卡显示出来后开始 10 秒倒计时，排队中的审批不提前计时。在卡片上按任意键、滚动或点击会暂停倒计时，等你明确选择。审批卡没作答就被移走（切换 Chat / Deck，或在信号栏点开另一条审批）时也会暂停。
+- 10 秒内没有回复，这次操作被拒绝，agent 会收到「用户没有响应、不代表反对，可以稍后再试」的说明。agent 再次发起同样的操作时，会重新询问。
+- 你选择拒绝（`4`、`n` 或 `Esc`）后，本会话中完全相同的操作会自动拒绝，不再询问，agent 会收到说明。命令按完整文本匹配，忽略多余空格和开头的环境变量赋值，参数不同就会重新询问。文件操作按路径匹配，edit、write、multi_edit 视为同一操作。拒绝记录写在会话日志里，`roast -c` 恢复后仍然有效，Hive 中所有成员共用，`/rewind` 不会撤销。
+- 拒绝记录只在帮我审批模式下生效。切换到 default 模式会弹出普通审批卡，可以手动批准。
+- 原有的高危命令仍然只能允许一次。其他高风险操作可以选本会话或本项目始终允许，`permissions.allow` 规则也能为这些操作免除询问。
+- 管道模式（`-p`）没有界面，高风险操作直接拒绝。
+
+和 yolo 一样，每条 bash 命令执行前都会打检查点，工作区内的误操作可以用 `/rewind` 恢复。离线规则无法检查脚本文件和 `node -e`、`python -c` 等内联代码在做什么，重要的仓库建议配合 `permissions.deny` 使用。
 
 ### 规则
 
@@ -553,7 +586,7 @@ Chat 和 Deck 都可以把截图、设计稿或报错图片直接发给模型，
 - 包含 `&&`、`|`、`;` 的复合命令会拆开判断，allow 要求每一段已获授权或只读，并且不能含子 shell；deny 也逐段检查。
 - 单独的 `cd` / `cd <路径>` 视为只读，后续命令段仍独立判断。匹配前忽略连续环境变量赋值，例如 `CI=true pnpm.cmd vitest run` 按 `pnpm.cmd vitest run` 匹配，引号内的空格不会拆开路径。
 - 审批按未放行的命令段生成去重规则，如 `bash(pnpm.cmd vitest:*)`、`bash(sed:*)`；保存授权时逐条写入会话日志或项目设置，恢复后全部有效。含子 shell 时不建议可记住的规则。
-- 判断顺序是 deny → plan 模式 → 高危强制询问 → 只读角色强制询问 → yolo → allow → ask → 默认。高危命令和直接修改 `.git/` 内文件的编辑属于强制询问，在 yolo 模式下或匹配了 allow 规则也会询问。
+- 判断顺序是 deny → plan 模式 → 高危强制询问 → 只读角色强制询问 → yolo → allow → ask → 默认（帮我审批模式用离线风险规则代替默认）。高危命令和直接修改 `.git/` 内文件的编辑属于强制询问，在 yolo 模式下或匹配了 allow 规则也会询问。
 - 仓库配置中的 allow 规则需要信任后才生效。`permissions.defaultMode` 只在用户配置中生效。
 
 ### 检查点与回退
@@ -562,7 +595,7 @@ Chat 和 Deck 都可以把截图、设计稿或报错图片直接发给模型，
 
 - 有 git 时使用影子仓库 `.roast/shadow.git`，不影响项目自己的仓库、索引和分支。
 - 没有 git 时把文件按字节保存到 `.roast/snapshots/`，二进制内容和 CRLF 都原样保留。跳过符号链接、依赖目录和日志，单次最多 128 MiB。
-- yolo 模式下每条 bash 命令执行前都会打快照，因为无法可靠判断一条命令会不会改文件。
+- yolo 和帮我审批模式下每条 bash 命令执行前都会打快照，因为无法可靠判断一条命令会不会改文件。
 
 `/rewind` 或空闲时连按两次 `Esc` 打开回退菜单，选择要回到的 turn，按两次 `Enter` 确认。`/rewind N` 直接回到第 N 个 turn 开始之前。Queen 必须空闲，且所有成员都已结束；queued、running、waiting、paused 成员存在时不能回退。文件和对话会一起回退，Chat / Deck 同步重放，并回滚对应轮次派生的成员、黑板、消息与中断文本。回退前会先备份当前状态，期间新建的文件会被删除。共享工作区成员的写入也使用 Queen 当前轮次的首个检查点，适用于关闭 worktree 的 git 仓库与非 git 目录。未合并 worktree 仍保留，成员 id 不复用。回退不会退还已经消耗的费用。
 

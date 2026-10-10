@@ -8,6 +8,8 @@
 
 export interface ParsedCommand {
   segments: string[];
+  /** 与 segments 对应：该段的标准输入来自管道 `|` */
+  piped: boolean[];
   hasSubshell: boolean;
   writesFiles: boolean;
 }
@@ -36,7 +38,8 @@ export function tokenizeCommand(segment: string): CommandToken[] {
       next = segment[i + 1];
     if (ch === '\\' && quote !== "'" && next !== undefined) {
       raw += ch + next;
-      value += next;
+      // 与 bash 一致：双引号内只有 $ ` " \ 和换行会被转义，其余反斜杠原样保留（如 "C:\Users"）
+      value += quote === '"' && !'$`"\\\n'.includes(next) ? ch + next : next;
       i++;
       continue;
     }
@@ -75,13 +78,19 @@ export function commandText(segment: string): string {
 /** 扫描一遍，按顶层（引号外）分隔符拆分 */
 export function parseCommand(command: string): ParsedCommand {
   const segments: string[] = [];
+  const piped: boolean[] = [];
   let cur = '';
   let quote: '"' | "'" | null = null;
   let hasSubshell = false;
   let writesFiles = false;
+  let pipeNext = false;
   const push = () => {
     const s = cur.trim();
-    if (s) segments.push(s);
+    if (s) {
+      segments.push(s);
+      piped.push(pipeNext);
+      pipeNext = false;
+    }
     cur = '';
   };
   for (let i = 0; i < command.length; i++) {
@@ -121,12 +130,13 @@ export function parseCommand(command: string): ParsedCommand {
     }
     if (ch === '|' || (ch === '&' && command[i - 1] !== '>' && next !== '>')) {
       push();
+      if (ch === '|') pipeNext = true;
       continue;
     }
     cur += ch;
   }
   push();
-  return { segments, hasSubshell, writesFiles };
+  return { segments, piped, hasSubshell, writesFiles };
 }
 
 /** `>` 是否为写文件重定向：排除 2>&1、>&2、>/dev/null */

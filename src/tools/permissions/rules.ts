@@ -16,6 +16,8 @@ export interface PermissionRequest {
   executionRoot?: string;
   /** Host-assigned role: unfamiliar shell commands require a one-time user approval. */
   readOnlyRole?: string;
+  /** 工具声明可能造成破坏性修改（MCP destructiveHint） */
+  destructive?: boolean;
   tool: string;
   kind: PermissionKind;
   /** bash：命令；路径类：绝对路径；web_fetch：URL */

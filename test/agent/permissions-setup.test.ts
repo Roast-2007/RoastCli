@@ -97,6 +97,23 @@ describe('会话权限装配', () => {
     await s2.opened.log.close();
   });
 
+  it('帮我审批：用户拒绝落 permission/deny，resume 后完全相同的命令仍自动拒绝', async () => {
+    const ws = tempWorkspace('roast-ps-auto-');
+    const s1 = await start(ws.dir, [toolCallScript('c1', 'bash', { command: 'git push origin main' }), textScript('done')]);
+    s1.perms.engine.setMode('auto');
+    s1.perms.broker.onRequest((req) => s1.perms.broker.respond(req.id, { kind: 'permission', decision: 'deny' }));
+    await drain(s1.rt, '推送');
+    await s1.opened.log.close();
+    expect(loadRunLog(s1.opened.log.path).events.filter((e) => e.type === 'permission/deny')).toHaveLength(1);
+
+    const s2 = await start(ws.dir, [], s1.opened.log.path);
+    const evaluate = (target: string) => s2.perms.engine.evaluate({ tool: 'bash', kind: 'execute', target, cwd: ws.dir }).behavior;
+    expect(s2.perms.engine.mode).toBe('auto');
+    expect(evaluate('git push origin main')).toBe('deny');
+    expect(evaluate('git push origin dev')).toBe('ask');
+    await s2.opened.log.close();
+  });
+
   it('无界面时需要询问的操作被拒绝，模型收到可读的拒绝原因', async () => {
     const ws = tempWorkspace('roast-ps2-');
     const s = await start(ws.dir, [toolCallScript('c1', 'bash', { command: 'npm install' }), textScript('ok')]);

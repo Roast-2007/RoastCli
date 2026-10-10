@@ -351,6 +351,8 @@ function Shell({
                     maxHeight={layout.interaction}
                     onInterrupt={() => controller.ctrlC('')}
                     onRespond={(r) => controller.respond(card, r)}
+                    onShown={() => controller.showInteraction(card.id)}
+                    onHold={() => controller.holdInteraction(card.id)}
                   />
                 ) : layout.input > 0 ? (
                   <Box height={layout.input} flexDirection="column" overflow="hidden">

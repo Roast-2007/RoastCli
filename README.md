@@ -8,7 +8,7 @@
 - 旧的工具输出会折叠成占位符而不是直接删除，模型需要时可以用 `recall` 取回原文。上下文压缩尽量不破坏供应商的前缀缓存，`/cost` 可以按 turn、agent 和模型查看费用。
 - Hive：Queen 按 auto、fanout、best-of-n、critique 或 research 策略组织任务，把工作分给 Lead、Worker 和只读专家。在 git 仓库里，写代码的 agent 各用独立的 worktree，报告后由上级审阅合并。
 - 每个 turn 第一次改文件前自动打快照，`/rewind` 可以同时回退文件和对话。`roast -c` 继续上次的会话。
-- 四种权限模式，可以按规则放行或拒绝命令。高危命令即使在 yolo 模式下也要你确认。
+- 五种权限模式，可以按规则放行或拒绝命令。「帮我审批」在本地离线判断风险：常规操作自动放行，`git push`、删除工作区外文件这类高风险操作 10 秒内等你确认，没回复就拒绝。高危命令即使在 yolo 模式下也要你确认。
 - 支持 skills、MCP、hooks、长期记忆、代码检索、网页搜索和读取图片，内置 TS/JS 的引用查找和跨文件重命名。
 - 可以把截图直接贴进输入框发给模型；`git diff | roast -p "评审"` 这样从管道传入材料，`--output-format json` 和费用上限方便在脚本和 CI 中使用。
 - 在 `.roast/agents/` 中用 Markdown 定义自己的成员角色，指定职责、模型和可用工具，也能读取项目里 Claude Code 的 `.claude/agents/`。

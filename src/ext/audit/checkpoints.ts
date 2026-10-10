@@ -60,7 +60,8 @@ export class CheckpointManager {
     return (tool, args, ctx) => {
       const next = this.chain.then(async () => {
         const turn = ctx.turn;
-        const everyBash = !baselineOnly && this.mode?.() === 'yolo' && tool.name === 'bash';
+        // yolo 与帮我审批会自动放行命令，无法判断命令是否改文件：每条 bash 前都打快照
+        const everyBash = !baselineOnly && (this.mode?.() === 'yolo' || this.mode?.() === 'auto') && tool.name === 'bash';
         if (turn === undefined || (!everyBash && (this.byTurn.has(turn) || !isMutating(tool, args)))) return { action: 'allow' as const };
         const hash = await this.shadow.snapshot(`turn ${turn}${ctx.callId ? ` · ${ctx.callId}` : ''}`);
         if (hash) {

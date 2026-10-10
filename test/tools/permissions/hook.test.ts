@@ -1,8 +1,8 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import { InteractionBroker } from '../../../src/core/interaction.js';
 import { executeTool } from '../../../src/tools/executor.js';
-import { PermissionEngine } from '../../../src/tools/permissions/engine.js';
+import { PermissionEngine, type PermissionMode } from '../../../src/tools/permissions/engine.js';
 import { EXECUTION_ROOT_KEY, READ_ONLY_ROLE_KEY, permissionHook } from '../../../src/tools/permissions/hook.js';
 import { defineTool, textResult } from '../../../src/tools/tool.js';
 import { makeCtx, textOf } from '../helpers.js';
@@ -17,12 +17,16 @@ const runTool = defineTool({
   execute: async (args) => textResult(`ran ${args.command}`),
 });
 
-function setup(mode: 'default' | 'yolo' = 'default') {
+function setup(mode: PermissionMode = 'default') {
   const engine = new PermissionEngine({ allow: [], ask: [], deny: ['bash(npm publish:*)'], mode });
   const broker = new InteractionBroker();
   const grants: string[] = [];
-  const hooks = { preExecute: [permissionHook({ engine, broker, onGrant: (rule) => grants.push(rule) })], postExecute: [] };
-  return { engine, broker, hooks, grants };
+  const denials: string[] = [];
+  const hooks = {
+    preExecute: [permissionHook({ engine, broker, onGrant: (rule) => grants.push(rule), onDeny: (key) => denials.push(key) })],
+    postExecute: [],
+  };
+  return { engine, broker, hooks, grants, denials };
 }
 
 describe('permissionHook', () => {
@@ -125,6 +129,124 @@ describe('permissionHook', () => {
     setTimeout(() => ctx.controller.abort(), 20);
     await expect(executeTool(runTool, { command: 'npm install' }, ctx, hooks)).rejects.toMatchObject({ code: 'ABORTED' });
     expect(broker.pending()).toEqual([]);
+  });
+});
+
+describe('permissionHook：帮我审批', () => {
+  it('高风险操作带 10 秒倒计时；超时拒绝不记住，再次调用会重新询问', async () => {
+    const { hooks, broker, denials } = setup('auto');
+    const asked: (number | undefined)[] = [];
+    broker.onRequest((req) => {
+      if (req.kind !== 'permission') throw new Error('Expected permission');
+      asked.push(req.countdownMs);
+      broker.respond(
+        req.id,
+        asked.length === 1 ? { kind: 'permission', decision: 'deny', timedOut: true } : { kind: 'permission', decision: 'allow' },
+      );
+    });
+    const ctx = makeCtx('/project');
+    const timedOut = await executeTool(runTool, { command: 'git push origin main' }, ctx, hooks);
+    expect(timedOut.isError).toBe(true);
+    expect(textOf(timedOut)).toContain('10 秒内没有响应');
+    expect(textOf(timedOut)).toContain('再次发起同样的调用');
+    expect(textOf(await executeTool(runTool, { command: 'git push origin main' }, ctx, hooks))).toContain('ran git push');
+    expect(asked).toEqual([10_000, 10_000]);
+    expect(denials).toEqual([]);
+    expect(textOf(await executeTool(runTool, { command: 'pnpm test' }, ctx, hooks))).toContain('ran pnpm test');
+    expect(asked).toHaveLength(2);
+  });
+
+  it('用户明确拒绝后记住并回调，完全相同的操作不再询问而直接拒绝', async () => {
+    const { hooks, broker, denials } = setup('auto');
+    let asked = 0;
+    broker.onRequest((req) => {
+      asked++;
+      broker.respond(req.id, { kind: 'permission', decision: 'deny' });
+    });
+    const ctx = makeCtx('/project');
+    const denied = await executeTool(runTool, { command: 'git push origin main' }, ctx, hooks);
+    expect(textOf(denied)).toContain('本会话会自动拒绝完全相同的操作');
+    expect(denials).toHaveLength(1);
+    const again = await executeTool(runTool, { command: 'git push  origin main' }, ctx, hooks);
+    expect(again.isError).toBe(true);
+    expect(textOf(again)).toContain('已拒绝过完全相同的操作');
+    expect(asked).toBe(1);
+    await executeTool(runTool, { command: 'git push origin dev' }, ctx, hooks);
+    expect(asked).toBe(2);
+  });
+
+  it('其他模式的拒绝不记住，也不带倒计时', async () => {
+    const { hooks, broker, denials } = setup('default');
+    const countdowns: (number | undefined)[] = [];
+    broker.onRequest((req) => {
+      if (req.kind === 'permission') countdowns.push(req.countdownMs);
+      broker.respond(req.id, { kind: 'permission', decision: 'deny' });
+    });
+    await executeTool(runTool, { command: 'git push origin main' }, makeCtx('/project'), hooks);
+    expect(countdowns).toEqual([undefined]);
+    expect(denials).toEqual([]);
+  });
+});
+
+describe('InteractionBroker：帮我审批倒计时', () => {
+  afterEach(() => vi.useRealTimers());
+  const ask = (broker: InteractionBroker, signal = new AbortController().signal) =>
+    broker.request(
+      { kind: 'permission', agentId: 'main', tool: 'bash', title: 'bash: git push', reason: 'r', countdownMs: 10_000 },
+      signal,
+    );
+
+  it('显示后才开始计时，到时以 timedOut 拒绝；重复显示不重置', async () => {
+    vi.useFakeTimers();
+    const broker = new InteractionBroker();
+    broker.onRequest(() => {});
+    const result = ask(broker);
+    const id = broker.pending()[0]!.id;
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(broker.pending()).toHaveLength(1);
+    broker.shown(id);
+    const deadline = broker.pending()[0]!.deadline;
+    expect(deadline).toBeTypeOf('number');
+    await vi.advanceTimersByTimeAsync(6_000);
+    broker.shown(id);
+    expect(broker.pending()[0]!.deadline).toBe(deadline);
+    await vi.advanceTimersByTimeAsync(4_000);
+    expect(await result).toEqual({ kind: 'permission', decision: 'deny', timedOut: true });
+    expect(broker.pending()).toEqual([]);
+  });
+
+  it('用户操作后暂停倒计时并等待明确作答；中断时清理计时器', async () => {
+    vi.useFakeTimers();
+    const broker = new InteractionBroker();
+    broker.onRequest(() => {});
+    const held = ask(broker);
+    const id = broker.pending()[0]!.id;
+    broker.shown(id);
+    broker.hold(id);
+    expect(broker.pending()[0]!.paused).toBe(true);
+    broker.shown(id);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(broker.pending()).toHaveLength(1);
+    broker.respond(id, { kind: 'permission', decision: 'allow' });
+    expect(await held).toEqual({ kind: 'permission', decision: 'allow' });
+
+    const controller = new AbortController();
+    const aborted = ask(broker, controller.signal);
+    broker.shown(broker.pending()[0]!.id);
+    controller.abort();
+    await expect(aborted).rejects.toMatchObject({ code: 'ABORTED' });
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('没有倒计时的请求忽略 shown / hold', () => {
+    const broker = new InteractionBroker();
+    broker.onRequest(() => {});
+    void broker.request({ kind: 'question', agentId: 'main', question: 'q' }, new AbortController().signal);
+    const id = broker.pending()[0]!.id;
+    broker.shown(id);
+    broker.hold(id);
+    expect(broker.pending()[0]).not.toHaveProperty('deadline');
+    expect(broker.pending()[0]).not.toHaveProperty('paused');
   });
 });
 

@@ -57,6 +57,42 @@ describe('InteractionCard：权限', () => {
     await tick();
     expect(onRespond).not.toHaveBeenCalled();
   });
+
+  it('帮我审批：显示时通知开始倒计时，标题显示剩余秒数，按键暂停而不作答', async () => {
+    const onRespond = vi.fn(), onShown = vi.fn(), onHold = vi.fn();
+    const request = permission({ countdownMs: 10_000, deadline: Date.now() + 8_000, reason: '高风险操作：推送到远端仓库' });
+    const screen = render(<InteractionCard request={request} onRespond={onRespond} onShown={onShown} onHold={onHold} />);
+    try {
+      await tick();
+      expect(onShown).toHaveBeenCalledOnce();
+      expect(screen.lastFrame()).toContain('帮我审批：8 秒后自动拒绝');
+      expect(screen.lastFrame()).toContain('任意键暂停');
+      screen.stdin.write('\u001B[B');
+      await tick();
+      expect(onHold).toHaveBeenCalled();
+      expect(onRespond).not.toHaveBeenCalled();
+      screen.rerender(<InteractionCard request={{ ...request, paused: true }} onRespond={onRespond} onShown={onShown} onHold={onHold} />);
+      await tick();
+      expect(screen.lastFrame()).toContain('倒计时已暂停');
+      expect(screen.lastFrame()).not.toContain('任意键暂停');
+      expect(onShown).toHaveBeenCalledOnce();
+      screen.stdin.write('1');
+      await tick();
+      expect(onRespond).toHaveBeenCalledWith({ kind: 'permission', decision: 'allow' });
+    } finally { screen.unmount(); }
+  });
+
+  it('普通审批不显示倒计时，按键也不触发暂停', async () => {
+    const onHold = vi.fn();
+    const screen = render(<InteractionCard request={permission()} onRespond={vi.fn()} onHold={onHold} />);
+    try {
+      await tick();
+      expect(screen.lastFrame()).not.toContain('帮我审批');
+      screen.stdin.write('\u001B[B');
+      await tick();
+      expect(onHold).not.toHaveBeenCalled();
+    } finally { screen.unmount(); }
+  });
 });
 
 describe('InteractionCard：提问', () => {

@@ -250,7 +250,7 @@ export const COMMANDS: SlashCommand[] = [
   {
     name: 'mode',
     description: '交互式选择权限模式',
-    args: '[default|acceptEdits|plan|yolo]',
+    args: '[default|acceptEdits|auto|plan|yolo]',
     run: (ctx, args) => {
       if (!args && ctx.openOverlay) return ctx.openOverlay('mode');
       if (args && !(MODE_CYCLE as readonly string[]).includes(args)) return say(ctx, `未知模式：${args}`, 'warn');

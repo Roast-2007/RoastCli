@@ -45,6 +45,8 @@ export interface ResumeState {
 
 export interface PermissionState {
   grants: string[];
+  /** 帮我审批模式下用户明确拒绝过的操作 */
+  denials: string[];
   mode?: PermissionMode;
 }
 

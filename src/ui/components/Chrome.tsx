@@ -32,6 +32,7 @@ export function Banner({ model, cwd }: { model: string; cwd: string; resumed?: s
 const MODE: Record<PermissionMode, { text: string; key: keyof ReturnType<typeof useTheme> }> = {
   default: { text: '默认', key: 'muted' },
   acceptEdits: { text: '自动编辑', key: 'success' },
+  auto: { text: '帮我审批', key: 'warn' },
   plan: { text: '计划', key: 'info' },
   yolo: { text: 'YOLO', key: 'danger' },
 };
